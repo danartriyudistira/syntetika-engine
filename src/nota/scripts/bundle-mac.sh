@@ -93,11 +93,22 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <key>CFBundleLocalizations</key>   <array><string>en</string><string>fr</string></array>
   <key>LSMinimumSystemVersion</key>  <string>12.0</string>
   <key>NSHighResolutionCapable</key> <true/>
+  <key>NSCameraUsageDescription</key>
+  <string>Syntetika Visual plays cameras as live visuals.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>NotAopenVJ records audio from your selected input device.</string>
 </dict>
 </plist>
 PLIST
+
+# The visual helper links Syphon; ship the framework next to it so the bundle works on
+# another Mac (the build tree's absolute rpath is only a local fallback).
+SYPHON="$(ls -d ../openvj/target/release/build/syphon-core/*/out/frameworks/Syphon.framework 2>/dev/null | head -1)"
+if [ -n "${SYPHON}" ]; then
+  mkdir -p "${CONTENTS}/Frameworks"
+  rm -rf "${CONTENTS}/Frameworks/Syphon.framework"
+  cp -R "${SYPHON}" "${CONTENTS}/Frameworks/"
+fi
 
 echo "==> Ad-hoc signing…"
 codesign --force --deep --sign - "${APP}" >/dev/null 2>&1 || \

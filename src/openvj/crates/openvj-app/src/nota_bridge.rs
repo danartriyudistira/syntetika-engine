@@ -54,11 +54,11 @@ pub enum Command {
     VizSet { layer: usize, col: usize, group: String, key: String, value: f32 },
     VizPlayback { layer: usize, col: usize, speed: Option<f32>, sync: Option<Option<f32>>, play_mode: Option<String>, trigger: Option<String> },
     VizFx { layer: usize, col: usize, op: String, a: usize, b: usize, id: String, value: f32 },
-    VizAssign { layer: usize, col: usize, kind: String, id: String },
+    VizAssign { layer: usize, col: usize, kind: String, id: String, path: String, app: String, server: String },
     VizClear { layer: usize, col: usize },
     VizCatalog { kind: String, query: String, seq: u64 },
-    VizSave { path: String, uids: Vec<String> },
-    VizLoad { path: String },
+    VizSave { path: String, uids: Vec<String>, media_dirs: Vec<String> },
+    VizLoad { path: String, media_dir: String },
     VizLayer { layer: usize, opacity: Option<f32>, blend: Option<String>, bypass: Option<bool> },
 }
 
@@ -267,7 +267,10 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
             let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_owned();
             let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_owned();
-            let _ = tx.send(Command::VizAssign { layer, col, kind, id });
+            let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_owned();
+            let app = v.get("app").and_then(|x| x.as_str()).unwrap_or("").to_owned();
+            let server = v.get("server").and_then(|x| x.as_str()).unwrap_or("").to_owned();
+            let _ = tx.send(Command::VizAssign { layer, col, kind, id, path, app, server });
         }
         Some("vizClear") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
@@ -281,11 +284,17 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
                 .and_then(|x| x.as_array())
                 .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_owned)).collect())
                 .unwrap_or_default();
-            let _ = tx.send(Command::VizSave { path, uids });
+            let media_dirs = v
+                .get("mediaDirs")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            let _ = tx.send(Command::VizSave { path, uids, media_dirs });
         }
         Some("vizLoad") => {
             let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_owned();
-            let _ = tx.send(Command::VizLoad { path });
+            let media_dir = v.get("mediaDir").and_then(|x| x.as_str()).unwrap_or("").to_owned();
+            let _ = tx.send(Command::VizLoad { path, media_dir });
         }
         Some("vizLayer") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;

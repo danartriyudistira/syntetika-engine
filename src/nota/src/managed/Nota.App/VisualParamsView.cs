@@ -18,6 +18,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Nota.Application.Localization;
 using Nota.Infrastructure.Visuals;
@@ -36,6 +37,7 @@ public sealed class VisualParamsView : UserControl
     private readonly List<(string Kind, string Id, string Name)> _catalogAll = new();
     private readonly List<(string Kind, string Id, string Name)> _catalogShown = new();
     private TextBox? _catalogSearch;
+    private string _catalogKind = "generators";
     private Window? _catalog;
     private Action<JsonElement>? _catalogPick;
     private ListBox? _catalogList;
@@ -171,6 +173,7 @@ public sealed class VisualParamsView : UserControl
         var source = v.TryGetProperty("source", out var s) ? s : default;
         string kind = source.ValueKind == JsonValueKind.Object && source.TryGetProperty("kind", out var sk) ? sk.GetString() ?? "" : "";
         string name = source.ValueKind == JsonValueKind.Object && source.TryGetProperty("name", out var sn) ? sn.GetString() ?? "" : "";
+        string note = source.ValueKind == JsonValueKind.Object && source.TryGetProperty("note", out var nn) ? nn.GetString() ?? "" : "";
 
         // ---- header: what this visual is, and the two whole-clip actions
         var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -524,6 +527,7 @@ public sealed class VisualParamsView : UserControl
             return;
         }
         _catalogPick = onPick;
+        _catalogKind = kind;
         _catalogAll.Clear();
         _catalogShown.Clear();
         _catalogItems.Clear();
@@ -531,6 +535,26 @@ public sealed class VisualParamsView : UserControl
         var search = new TextBox { Watermark = Loc.T("visual.search"), Margin = new Thickness(0, 0, 0, 8) };
         _catalogSearch = search;
         search.TextChanged += (_, _) => ApplyCatalogFilter(search.Text ?? "");
+        var kindRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 0, 8) };
+        if (kind == "generators")
+        {
+            Button KindButton(string text, string value)
+            {
+                var b = new Button { Content = text };
+                b.Click += (_, _) =>
+                {
+                    _catalogKind = value;
+                    if (value == "media") { PickMediaFile(); return; }
+                    Bridge?.VizCatalog(value, "", DateTime.UtcNow.Ticks);
+                };
+                return b;
+            }
+            kindRow.Children.Add(KindButton(Loc.T("visual.generators"), "generators"));
+            kindRow.Children.Add(KindButton(Loc.T("visual.media_file"), "media"));
+            kindRow.Children.Add(KindButton(Loc.T("visual.camera"), "cameras"));
+            kindRow.Children.Add(KindButton(Loc.T("visual.syphon"), "syphon"));
+        }
+
         var ok = new Button { Content = Loc.T("visual.add"), IsDefault = true };
         var cancel = new Button { Content = Loc.T("common.cancel"), IsCancel = true };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
@@ -547,7 +571,7 @@ public sealed class VisualParamsView : UserControl
             {
                 Margin = new Thickness(14),
                 Spacing = 6,
-                Children = { search, _catalogList, buttons },
+                Children = { kindRow, search, _catalogList, buttons },
             },
         };
         _catalog.Opened += (_, _) => Bridge?.VizCatalog(kind, "", DateTime.UtcNow.Ticks);
@@ -604,8 +628,56 @@ public sealed class VisualParamsView : UserControl
         int i = _catalogList?.SelectedIndex ?? -1;
         if (i < 0 || i >= _catalogItems.Count) return;
         var (kind, id, _) = _catalogItems[i];
-        var item = JsonDocument.Parse(JsonSerializer.Serialize(new { kind, id })).RootElement;
-        _catalogPick?.Invoke(item);
+        if (_catalogKind == "cameras")
+        {
+            Bridge?.VizAssignLive(_layer, _col, "camera", id, "", "");
+        }
+        else if (_catalogKind == "syphon")
+        {
+            var parts = id.Split('|', 2);
+            Bridge?.VizAssignLive(_layer, _col, "syphon", "", parts[0], parts.Length > 1 ? parts[1] : "");
+        }
+        else
+        {
+            var item = JsonDocument.Parse(JsonSerializer.Serialize(new { kind, id })).RootElement;
+            _catalogPick?.Invoke(item);
+        }
         _catalog?.Close();
+    }
+
+    /// <summary>Copies a picked video/image into the project (or staging) and assigns it.</summary>
+    private async void PickMediaFile()
+    {
+        TopLevel? top = TopLevel.GetTopLevel(_catalog) ?? TopLevel.GetTopLevel(this);
+        if (top is null || Bridge is null) return;
+        try
+        {
+            var files = await top.PickFilesAsync(new FilePickerOpenOptions
+            {
+                Title = Loc.T("visual.media_file"),
+                AllowMultiple = false,
+                FileTypeFilter = new[]
+                {
+                    new FilePickerFileType("Media")
+                    {
+                        Patterns = new[]
+                        {
+                            "*.mp4", "*.m4v", "*.mov", "*.mkv", "*.webm", "*.avi", "*.mxf", "*.mpg", "*.mpeg",
+                            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",
+                        },
+                    },
+                },
+            });
+            if (files.Count == 0) return;
+            string? source = files[0].TryGetLocalPath();
+            if (source is null || !MediaFiles.IsMedia(source)) return;
+            string target = MediaFiles.Prepare(source, Bridge.ProjectDir);
+            Bridge.VizAssignMedia(_layer, _col, MediaFiles.KindOf(source), target);
+            _catalog?.Close();
+        }
+        catch (Exception ex)
+        {
+            _catalogList?.ItemsSource = new[] { "Could not add the media: " + ex.Message };
+        }
     }
 }

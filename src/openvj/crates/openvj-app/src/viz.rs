@@ -5,9 +5,10 @@
 //! built here from the same `EffectType`/`InputDef` metadata the openVJ UI uses, so labels,
 //! ranges and units can never drift apart.
 
-use openvj_core::{library, EffectType};
+use openvj_core::{library, ClipId, EffectType};
 use openvj_core::{Clip, ClipSource, Composition, Effect, GeneratorKind};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 /// A short name for the clip's source, for the tab's header line.
 fn source_name(clip: &Clip) -> (String, String) {
@@ -108,6 +109,11 @@ pub fn state(comp: &Composition, layer: usize, col: usize) -> Value {
         return json!({ "has_visual": false, "layer": layer, "col": col });
     };
     let (kind, name) = source_name(clip);
+    let note = if matches!(clip.source, ClipSource::Video { .. }) && !openvj_media::ffmpeg_available() {
+        "Video needs FFmpeg: install it, or put ffmpeg and ffprobe next to the visual engine."
+    } else {
+        ""
+    };
     let source_params = match &clip.source {
         ClipSource::Generator { kind } => generator_params(clip, *kind),
         ClipSource::Isf { generator } => {
@@ -132,7 +138,7 @@ pub fn state(comp: &Composition, layer: usize, col: usize) -> Value {
         "has_visual": true,
         "layer": layer,
         "col": col,
-        "source": { "kind": kind, "name": name },
+        "source": { "kind": kind, "name": name, "note": note },
         "groups": {
             "source": source_params,
             "transform": effect_json("transform", "Transform", &clip.transform),
@@ -284,6 +290,78 @@ pub fn assign(comp: &mut Composition, layer: usize, col: usize, kind: &str, id: 
     comp.set_clip(layer, col, source).is_some()
 }
 
+/// Assigns a video or image file (the path is absolute for this session; `vizSave` rewrites
+/// it to `media/<name>` relative to the project bundle).
+pub fn assign_media(comp: &mut Composition, layer: usize, col: usize, kind: &str, path: &str) -> Option<ClipId> {
+    if layer >= comp.layers.len() || col >= comp.columns.len() {
+        return None;
+    }
+    let source = match kind {
+        "video" => ClipSource::Video { path: PathBuf::from(path) },
+        "image" => ClipSource::Image { path: PathBuf::from(path) },
+        _ => return None,
+    };
+    comp.set_clip(layer, col, source)
+}
+
+/// Assigns a camera or Syphon source by the name/id openVJ uses.
+pub fn assign_live(comp: &mut Composition, layer: usize, col: usize, kind: &str, id: &str, app: &str, server: &str) -> Option<ClipId> {
+    if layer >= comp.layers.len() || col >= comp.columns.len() {
+        return None;
+    }
+    let source = match kind {
+        "camera" => ClipSource::Camera { device: id.to_owned(), device_id: String::new() },
+        "syphon" => ClipSource::Syphon { app: app.to_owned(), server: server.to_owned() },
+        _ => return None,
+    };
+    comp.set_clip(layer, col, source)
+}
+
+/// Turns absolute media paths under the given folders into `media/<file>` before saving.
+pub fn paths_relative(value: &mut Value, media_dirs: &[String]) {
+    walk_paths(value, &mut |p| {
+        for dir in media_dirs {
+            let prefix = format!("{}/", dir.trim_end_matches('/'));
+            if let Some(rest) = p.strip_prefix(&prefix) {
+                *p = format!("media/{rest}");
+                return;
+            }
+        }
+    });
+}
+
+/// Turns `media/<file>` back into an absolute path under the project's media folder.
+pub fn paths_absolute(value: &mut Value, media_dir: &str) {
+    let base = media_dir.trim_end_matches('/').to_owned();
+    walk_paths(value, &mut |p| {
+        if let Some(rest) = p.strip_prefix("media/") {
+            *p = format!("{base}/{rest}");
+        }
+    });
+}
+
+fn walk_paths(value: &mut Value, f: &mut impl FnMut(&mut String)) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "path" {
+                    if let Value::String(s) = child {
+                        f(s);
+                    }
+                } else {
+                    walk_paths(child, f);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                walk_paths(child, f);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn clear(comp: &mut Composition, layer: usize, col: usize) {
     if layer < comp.layers.len() && col < comp.columns.len() {
         comp.remove_clip(layer, col);
@@ -306,6 +384,17 @@ pub fn catalog(kind: &str, query: &str) -> Value {
                 if q.is_empty() || name.to_lowercase().contains(&q) || t.def.id.to_lowercase().contains(&q) {
                     items.push(json!({ "kind": "isf", "id": t.def.id, "name": name }));
                 }
+            }
+        }
+        "cameras" => {
+            for d in openvj_media::live::list_cameras() {
+                items.push(json!({ "kind": "camera", "id": d.id, "name": d.name }));
+            }
+        }
+        "syphon" => {
+            for s in openvj_media::live::list_syphon_servers() {
+                let name = if s.server.is_empty() { s.app.clone() } else { format!("{} · {}", s.app, s.server) };
+                items.push(json!({ "kind": "syphon", "id": format!("{}|{}", s.app, s.server), "name": name, "app": s.app, "server": s.server }));
             }
         }
         _ => {

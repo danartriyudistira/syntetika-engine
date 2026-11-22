@@ -165,13 +165,16 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 
 ## 7. Rencana pengembangan
 
-### P1 — Sumber media (prioritas berikutnya, ±4–6 hari)
+### P1 — Sumber media (SELESAI sebagian)
 
-- Picker: video/gambar dari Files, kamera, Syphon.
-- Media disalin ke `visuals/media/<hash>.<ext>`; path relatif + relink saat open.
-- Thumbnail media di katalog.
-- Kriteria: assign video dari tab, tampil di Preview/Output, tersimpan dan pulih setelah
-  reopen, path portabel antar mesin.
+- [x] Picker video/gambar (dialog file), kamera, Syphon.
+- [x] Media disalin content-addressed ke `visuals/media/<hash>.<ext>`; staging sebelum save.
+- [x] `composition.json` menyimpan `media/<file>` (portabel); load me-resolve ke bundle.
+- [x] Syphon.framework ikut di bundle + izin kamera di Info.plist.
+- [ ] Thumbnail media di katalog.
+- [ ] **FFmpeg bundled** (video saat ini butuh `ffmpeg`/`ffprobe` di PATH atau di samping
+  helper); gambar tidak butuh FFmpeg.
+- Kriteria video belum bisa diuji di mesin ini karena FFmpeg belum tersedia.
 
 ### P2 — Sinkronisasi A/V & reaktivitas audio (±5–7 hari)
 

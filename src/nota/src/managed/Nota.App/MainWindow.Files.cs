@@ -288,7 +288,7 @@ public partial class MainWindow
             _panLawLegacy = result.Transport.PanLawLegacy;
             _projectPath = dir;
             VisualBridge.Current?.SetProjectDir(dir);
-            VisualBridge.Current?.VizLoad(System.IO.Path.Combine(dir, "visuals", "composition.json"));
+            VisualBridge.Current?.VizLoad(dir);
             _learn?.LoadMappings(dir);   // MIDI-learn mappings ride in the bundle sidecar
             _devicePages?.LoadProject(dir);   // the project's copy of edited controller pages (specs/051)
             _controllers?.Overrides?.LoadProject(dir, _controllers.TrackIdAt);   // its controller rebinds (Story 7)
@@ -371,7 +371,7 @@ public partial class MainWindow
             // version is recorded, since the History tab refreshes against it (#317).
             _projectPath = dir;
             VisualBridge.Current?.SetProjectDir(dir);
-            VisualBridge.Current?.VizSave(System.IO.Path.Combine(dir, "visuals", "composition.json"));
+            VisualBridge.Current?.VizSave(dir);
             string? historyNote = RecordVersion(dir, previousPath, note);   // after every sidecar is written
             RecordRecentProject(dir);    // surface it on the welcome screen next launch
             UpdateWindowTitle();

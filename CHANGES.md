@@ -30,6 +30,11 @@ diffs are in `patches/`.
 - **Visual engine lifecycle**: the app starts the bundled `syntetika-visual` process (pointing
   it at the bridge), restarts it up to three times after a crash, and stops it on quit. The
   engine also exits by itself when NotA disappears, so no invisible orphan is left behind.
+- **Media sources**: the assign dialog offers video/image files, cameras and Syphon servers.
+  Picked files are copied content-addressed into `visuals/media/<sha256>.<ext>` (staged in the
+  data folder until the project is saved), and `composition.json` stores `media/<file>` so a
+  bundle stays portable. Videos need FFmpeg on the machine; images do not. The bundle now ships
+  `Syphon.framework` and declares camera usage.
 - **Performance**: static grid thumbnails (no GPU readback during a show), pipeline prewarm,
   PLL clock smoothing, stopped-transport freeze.
 

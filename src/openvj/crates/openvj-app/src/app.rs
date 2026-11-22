@@ -664,8 +664,20 @@ impl App {
                     crate::viz::fx_op(&mut self.comp, layer, col, &op, a, b, &id, value);
                     self.send_viz_state(layer, col, 0);
                 }
-                NotaCommand::VizAssign { layer, col, kind, id } => {
-                    if crate::viz::assign(&mut self.comp, layer, col, &kind, &id) {
+                NotaCommand::VizAssign { layer, col, kind, id, path, app, server } => {
+                    let created = if kind == "video" || kind == "image" {
+                        let clip = crate::viz::assign_media(&mut self.comp, layer, col, &kind, &path);
+                        if let Some(id) = clip {
+                            eprintln!("openVJ: media assigned {kind} {path} as clip {id:?}");
+                            self.start_load(id, std::path::PathBuf::from(&path), kind == "video");
+                        }
+                        clip.is_some()
+                    } else if kind == "camera" || kind == "syphon" {
+                        crate::viz::assign_live(&mut self.comp, layer, col, &kind, &id, &app, &server).is_some()
+                    } else {
+                        crate::viz::assign(&mut self.comp, layer, col, &kind, &id)
+                    };
+                    if created {
                         self.selected = Some((layer, col));
                         self.selected_layer = layer;
                     }
@@ -675,8 +687,8 @@ impl App {
                     crate::viz::clear(&mut self.comp, layer, col);
                     self.send_viz_state(layer, col, 0);
                 }
-                NotaCommand::VizSave { path, uids } => self.viz_save(&path, uids),
-                NotaCommand::VizLoad { path } => self.viz_load(&path),
+                NotaCommand::VizSave { path, uids, media_dirs } => self.viz_save(&path, uids, &media_dirs),
+                NotaCommand::VizLoad { path, media_dir } => self.viz_load(&path, &media_dir),
                 NotaCommand::VizLayer { layer, opacity, blend, bypass } => {
                     if let Some(l) = self.comp.layers.get_mut(layer) {
                         if let Some(o) = opacity { l.opacity = o.clamp(0.0, 1.0); }
@@ -902,14 +914,24 @@ impl App {
     }
 
     /// Writes the composition + its track identity map into the project bundle.
-    fn viz_save(&mut self, path: &str, uids: Vec<String>) {
+    fn viz_save(&mut self, path: &str, uids: Vec<String>, media_dirs: &[String]) {
         if path.is_empty() {
             return;
         }
+        let mut comp = match serde_json::to_value(&self.comp) {
+            Ok(v) => v,
+            Err(e) => { eprintln!("openVJ: viz save failed: {e}"); return; }
+        };
+        crate::viz::paths_relative(&mut comp, media_dirs);
+        eprintln!(
+            "openVJ: viz save {} clips, {} layers",
+            self.comp.all_clips().count(),
+            self.comp.layers.len()
+        );
         let doc = serde_json::json!({
             "version": 1,
             "layout_uids": uids,
-            "composition": self.comp,
+            "composition": comp,
         });
         let text = match serde_json::to_string_pretty(&doc) {
             Ok(t) => t,
@@ -924,14 +946,19 @@ impl App {
         }
         let tmp = target.with_extension("json.tmp");
         match std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, target)) {
-            Ok(()) => eprintln!("openVJ: viz saved to {path}"),
+            Ok(()) => {
+                eprintln!("openVJ: viz saved to {path}");
+                if let Some(bridge) = &self.nota {
+                    bridge.send(&serde_json::json!({ "t": "vizSaved", "path": path }).to_string());
+                }
+            }
             Err(e) => eprintln!("openVJ: viz save failed: {e}"),
         }
     }
 
     /// Restores a project's visual composition. Layers are re-attached to NotA tracks by uid,
     /// so the layout reconcile keeps their clips instead of rebuilding empty layers.
-    fn viz_load(&mut self, path: &str) {
+    fn viz_load(&mut self, path: &str, media_dir: &str) {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
             Err(_) => { eprintln!("openVJ: no saved visuals at {path}"); return; }
@@ -940,7 +967,10 @@ impl App {
             eprintln!("openVJ: viz file is not valid JSON");
             return;
         };
-        let Some(comp) = doc.get("composition").cloned() else { return };
+        let Some(mut comp) = doc.get("composition").cloned() else { return };
+        if !media_dir.is_empty() {
+            crate::viz::paths_absolute(&mut comp, media_dir);
+        }
         match serde_json::from_value::<Composition>(comp) {
             Ok(comp) => {
                 let (w, h) = (comp.width, comp.height);

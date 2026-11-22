@@ -109,6 +109,8 @@ public sealed class VisualBridge : IDisposable
                 new Thread(LayoutTestLoop) { IsBackground = true, Name = "visual-layout-test" }.Start();
             if (Environment.GetEnvironmentVariable("NOTA_VIZ_TEST") is { Length: > 0 })
                 new Thread(VizTestLoop) { IsBackground = true, Name = "visual-viz-test" }.Start();
+            if (Environment.GetEnvironmentVariable("NOTA_MEDIA_TEST") is { Length: > 0 })
+                new Thread(MediaTestLoop) { IsBackground = true, Name = "visual-media-test" }.Start();
         }
     }
 
@@ -137,6 +139,9 @@ public sealed class VisualBridge : IDisposable
     public void Dispose() => Stop();
 
     // ---- layout (UI thread, ~4 Hz) ------------------------------------------
+
+    /// <summary>The open project bundle, or null.</summary>
+    public string? ProjectDir => _projectDir;
 
     /// <summary>The open project bundle, or null. The layout sidecar lives in `visuals/`.</summary>
     public void SetProjectDir(string? dir)
@@ -276,6 +281,34 @@ public sealed class VisualBridge : IDisposable
         catch (Exception ex) { AppLog("test loop failed: " + ex.Message); }
     }
 
+    private void MediaTestLoop()
+    {
+        try
+        {
+            Thread.Sleep(6000);
+            string image = MediaFiles.Prepare("/Volumes/Macintosh HD/Syntetika Engine/assets/syntetika-icon.svg.png", null);
+            AppLog($"media test: assign image at {image}");
+            VizAssignMedia(0, 0, "image", image);
+            Thread.Sleep(1500);
+            VizGet(0, 0);
+            Thread.Sleep(800);
+            string bundle = "/tmp/syntetika-media-test";
+            AppLog("media test: save through the project path");
+            SetProjectDir(bundle);
+            SaveProject();
+            Thread.Sleep(1500);
+            AppLog("media test: clear then load the bundle");
+            VizClear(0, 0);
+            Thread.Sleep(600);
+            VizLoad(bundle);
+            Thread.Sleep(1200);
+            VizGet(0, 0);
+            Thread.Sleep(800);
+            AppLog("media test: done");
+        }
+        catch (Exception ex) { AppLog("media test failed: " + ex.Message); }
+    }
+
     private void VizTestLoop()
     {
         try
@@ -317,6 +350,27 @@ public sealed class VisualBridge : IDisposable
             Thread.Sleep(1200);
             VizGet(0, 0);
             Thread.Sleep(1200);
+
+            AppLog("viz test: assign an image (staged)");
+            string image = MediaFiles.Prepare("/Volumes/Macintosh HD/Syntetika Engine/assets/syntetika-icon.svg.png", null);
+            VizAssignMedia(0, 0, "image", image);
+            Thread.Sleep(900);
+
+            AppLog("viz test: camera catalog");
+            VizCatalog("cameras", "", DateTime.UtcNow.Ticks);
+            Thread.Sleep(700);
+            AppLog("viz test: syphon catalog");
+            VizCatalog("syphon", "", DateTime.UtcNow.Ticks);
+            Thread.Sleep(700);
+
+            AppLog("viz test: save media project to /tmp/syntetika-bundle-test");
+            string bundle = "/tmp/syntetika-bundle-test";
+            Directory.CreateDirectory(Path.Combine(bundle, "visuals", "media"));
+            foreach (string f in Directory.GetFiles(NotaPaths.SubDir("media-staging")))
+                File.Copy(f, Path.Combine(bundle, "visuals", "media", Path.GetFileName(f)), overwrite: true);
+            VizSave(bundle);
+            Thread.Sleep(1500);
+
             AppLog("viz test: done");
         }
         catch (Exception ex) { AppLog("viz test failed: " + ex.Message); }
@@ -482,6 +536,14 @@ public sealed class VisualBridge : IDisposable
     public void VizAssign(int layer, int scene, string kind, string id)
         => Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{scene},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":{JsonSerializer.Serialize(id)}}}");
 
+    /// <summary>Assigns a video/image already prepared by <see cref="MediaFiles"/>.</summary>
+    public void VizAssignMedia(int layer, int scene, string kind, string path)
+        => Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{scene},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":\"\",\"path\":{JsonSerializer.Serialize(path)}}}");
+
+    /// <summary>Assigns a camera or Syphon server by its openVJ name/id.</summary>
+    public void VizAssignLive(int layer, int scene, string kind, string id, string app, string server)
+        => Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{scene},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":{JsonSerializer.Serialize(id)},\"app\":{JsonSerializer.Serialize(app)},\"server\":{JsonSerializer.Serialize(server)}}}");
+
     public void VizLayer(int layer, double? opacity, string? blend, bool? bypass)
     {
         var sb = new StringBuilder();
@@ -508,20 +570,48 @@ public sealed class VisualBridge : IDisposable
         return uids;
     }
 
-    public void VizSave(string path) => Send(JsonSerializer.Serialize(new
+    /// <summary>Saves the composition into a bundle; media paths become `media/<file>`.</summary>
+    public void VizSave(string bundleDir)
     {
-        t = "vizSave",
-        path,
-        uids = CurrentLayoutUids(),
-    }));
+        string staging = NotaPaths.SubDir("media-staging");
+        string bundleMedia = Path.Combine(bundleDir, "visuals", "media");
+        // Staged media becomes part of the bundle: the saved composition refers to
+        // `media/<file>` and must find the file there.
+        try
+        {
+            Directory.CreateDirectory(bundleMedia);
+            foreach (string file in Directory.GetFiles(staging))
+            {
+                string target = Path.Combine(bundleMedia, Path.GetFileName(file));
+                if (!File.Exists(target)) File.Copy(file, target);
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
 
-    public void VizLoad(string path) => Send(JsonSerializer.Serialize(new { t = "vizLoad", path }));
+        var dirs = new List<string> { staging };
+        dirs.Add(bundleMedia);
+        Send(JsonSerializer.Serialize(new
+        {
+            t = "vizSave",
+            path = Path.Combine(bundleDir, "visuals", "composition.json"),
+            uids = CurrentLayoutUids(),
+            mediaDirs = dirs,
+        }));
+    }
+
+    /// <summary>Loads a bundle's composition; `media/<file>` resolves inside the bundle.</summary>
+    public void VizLoad(string bundleDir) => Send(JsonSerializer.Serialize(new
+    {
+        t = "vizLoad",
+        path = Path.Combine(bundleDir, "visuals", "composition.json"),
+        mediaDir = Path.Combine(bundleDir, "visuals", "media"),
+    }));
 
     /// <summary>Saves the current bundle's visuals (called on Save and on quit).</summary>
     public void SaveProject()
     {
-        if (_projectDir is { Length: > 0 } dir)
-            VizSave(Path.Combine(dir, "visuals", "composition.json"));
+        if (_projectDir is { Length: > 0 } dir) VizSave(dir);
     }
 
     public void VizClear(int layer, int scene)
