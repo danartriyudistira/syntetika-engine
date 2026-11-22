@@ -1,0 +1,673 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Engine contract data: the blittable value types the audio-engine port exchanges
+// with callers. They mirror the native structs 1:1 and carry [StructLayout] so the
+// Infrastructure P/Invoke layer can marshal them without a copy. Kept in the
+// Application layer (not Infrastructure) so IAudioEngine — and the ViewModels that
+// depend on it — never reach across into Infrastructure.
+
+using System.Runtime.InteropServices;
+
+namespace Nota.Application;
+
+/// <summary>What <see cref="IAudioEngine.RetryTake"/> did (specs/078).</summary>
+public enum RetryTakeResult
+{
+    /// <summary>Recording could not start again after the take was discarded (see RecordStartStatus).</summary>
+    Failed = -1,
+    /// <summary>Nothing was recording: nothing changed.</summary>
+    None = 0,
+    /// <summary>An Arrangement take was discarded and records again.</summary>
+    Arrangement = 1,
+    /// <summary>A Session slot take was discarded and records again from the next launch quantum.</summary>
+    Session = 2,
+}
+
+/// <summary>A MIDI note, blittable and laid out to match the native NotaNoteData
+/// struct. Times are in beats, relative to the containing clip's start.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaNote(int pitch, double startBeat, double lengthBeats, float velocity)
+{
+    public int Pitch = pitch;
+    public double StartBeat = startBeat;
+    public double LengthBeats = lengthBeats;
+    public float Velocity = velocity;
+    /// <summary>The note's recorded MPE in the engine's expression store (0 = none). Copy the
+    /// note (don't rebuild it from its fields) and the expression travels with it.</summary>
+    public int ExprId;
+    /// <summary>The note's articulation: a stable id in its track's articulation map (0 = none /
+    /// the map's default). Copy the note (don't rebuild it from its fields) and it travels with it.</summary>
+    public int ArticulationId;
+
+    /// <summary>Every field equal. Use this to tell whether an edit changed a note: a comparison
+    /// that lists fields by hand misses the next one added (an articulation-only edit was once
+    /// never sent to the engine for that reason). The smoke test checks it covers every field.</summary>
+    public static bool Same(in NotaNote a, in NotaNote b) =>
+        a.Pitch == b.Pitch && a.StartBeat == b.StartBeat && a.LengthBeats == b.LengthBeats
+        && a.Velocity == b.Velocity && a.ExprId == b.ExprId && a.ArticulationId == b.ArticulationId;
+}
+
+/// <summary>One articulation of a compiled articulation map (specs/085). Matches native
+/// NotaArticulationEntry: ids &gt; 0 and strictly ascending; actions are [ActionStart, ActionStart + ActionCount).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaArticulationEntry
+{
+    public int Id;
+    /// <summary>0 latching, 1 momentary.</summary>
+    public int TriggerMode;
+    public double OffsetMs;
+    public double LeadMs;
+    public int ActionStart;
+    public int ActionCount;
+}
+
+/// <summary>One MIDI action of a compiled articulation map. Matches native NotaArticulationAction.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaArticulationAction
+{
+    /// <summary>0 keyswitch, 1 control change, 2 program change, 3 bank select MSB, 4 bank select LSB.</summary>
+    public int Kind;
+    /// <summary>0 = the note's own channel, 1..16 explicit.</summary>
+    public int Channel;
+    public int Data1;
+    public int Data2;
+}
+
+/// <summary>One breakpoint of a note's recorded expression (MPE). Matches native NotaExprPoint:
+/// Beat is the offset from the note's start; Value is semitones for Bend, 0..1 otherwise.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaExprPoint(NoteExpressionDim dim, float beat, float value)
+{
+    public NoteExpressionDim Dim = dim;
+    public float Beat = beat;
+    public float Value = value;
+}
+
+/// <summary>A note held into the in-progress MIDI take (live-recording preview). Matches native
+/// NotaRecordHeldNote. StartBeat is an absolute timeline beat for an arrangement take (it may
+/// precede the take's clip and be negative — played on the count-in), slot-local for Session.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaRecordHeldNote
+{
+    public int Pitch;
+    public int Source;      // 0 live input, 1 routed MIDI ("MIDI In")
+    public double StartBeat;
+    public float Velocity;
+}
+
+/// <summary>Track summary for the Arrangement View. Matches native NotaTrackInfo.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaTrackInfo
+{
+    public int Id;
+    public int Type;        // 0 = audio, 1 = instrument, 2 = return bus (M6-1), 3 = group
+    public int ClipCount;
+    public int Muted;
+    public int Soloed;
+    public int Armed;
+    public float Volume;
+    public float Pan;
+    public int GroupId;     // parent group track id, or -1 (top-level)
+
+    public readonly bool IsInstrument => Type == 1;
+    public readonly bool IsReturn => Type == 2;
+    public readonly bool IsGroup => Type == 3;
+}
+
+/// <summary>Clip geometry on the timeline. Matches native NotaClipInfo.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaClipInfo
+{
+    public double StartBeat;
+    public double LengthBeats;
+    public int Kind;         // 0 = audio, 1 = midi
+    public int Active;       // 1 = plays, 0 = deactivated (key 0): stays on the timeline but silent
+
+    public readonly bool IsMidi => Kind == 1;
+    public readonly bool IsActive => Active != 0;
+}
+
+/// <summary>Full audio-clip geometry for project save. Matches native NotaAudioClipInfo (M7-6b).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaAudioClipInfo
+{
+    public double StartBeat;
+    public double SourceOffsetFrames;
+    public long LengthFrames;   // 0 = to end of sample
+    public float Gain;
+    public long SampleId;       // 0 = none
+    public float PitchSemitones; // varispeed transpose (M-audio-editor)
+    public int WarpEnabled;      // 0/1
+    public int WarpMode;         // 0 Beats,1 Tones,2 Texture,3 Complex,4 ComplexPro,5 RePitch
+    public double WarpBeats;     // full warped material length in beats (0 when unwarped)
+    public double WarpPlayStart; // trimmed play window start (beats within the warp)
+    public double WarpPlayEnd;   // trimmed play window end (0 = to WarpBeats)
+    public int Reversed;         // 0/1: plays back-to-front (non-destructive)
+}
+
+/// <summary>One take of an audio loop recording (specs/067). Matches native NotaTakeInfo. Every
+/// take of a recording has a loop-length buffer whose frame 0 sits at <see cref="OriginBeat"/>;
+/// the pass recorded <see cref="StartBeat"/> .. + <see cref="LengthBeats"/> of it.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaTakeInfo
+{
+    public int Id;          // comp clips carry it (IAudioEngine.ClipTakeId)
+    public int Number;      // "Take N" on its track
+    public int Group;       // the loop recording it came from
+    public int Reserved;
+    public double OriginBeat;
+    public double StartBeat;
+    public double LengthBeats;
+    public double SourceOffsetFrames;
+    public long LengthFrames;
+    public long SampleId;
+}
+
+/// <summary>Audio-clip ADSR amplitude shape in played time (clip-local beats). Matches native
+/// NotaClipAdsr. Attack ramps 0→1 from the clip start when a decay follows, and straight to
+/// <see cref="Sustain"/> when decay is 0, so a split that cleared the decay does not click.
+/// Decay falls to <see cref="Sustain"/>, release fades to 0 over the clip's last
+/// <see cref="ReleaseBeats"/>. <see cref="Identity"/> (the default for every clip) plays the
+/// sample at its full length and level.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct ClipAdsr
+{
+    public double AttackBeats;
+    public double DecayBeats;
+    public double ReleaseBeats;
+    public float Sustain;   // 0..1 linear gain
+    public int Reserved;
+
+    public static ClipAdsr Identity => new() { Sustain = 1f };
+
+    public readonly bool IsIdentity => AttackBeats <= 0 && DecayBeats <= 0 && ReleaseBeats <= 0 && Sustain >= 1f;
+
+    /// <summary>Gain at clip-local beat <paramref name="t"/> of a clip <paramref name="len"/> beats
+    /// long — the same shape the engine renders (see Track.h ClipAdsr::gainAt).</summary>
+    public readonly double GainAt(double t, double len)
+    {
+        double g = DecayBeats <= 0
+            ? AttackBeats > 0 && t < AttackBeats ? Sustain * (t / AttackBeats) : Sustain
+            : t < AttackBeats ? (AttackBeats > 0 ? t / AttackBeats : 0)
+            : t < AttackBeats + DecayBeats ? 1 - (1 - Sustain) * ((t - AttackBeats) / DecayBeats)
+            : Sustain;
+        if (ReleaseBeats > 0 && t > len - ReleaseBeats) g *= Math.Max(0, (len - t) / ReleaseBeats);
+        return Math.Clamp(g, 0, 1);
+    }
+
+    /// <summary>Fits the stages into a clip <paramref name="len"/> beats long: attack+decay and
+    /// release each stay within the clip and never cross each other.</summary>
+    public readonly ClipAdsr Fit(double len)
+    {
+        var a = this;
+        len = Math.Max(0, len);
+        a.Sustain = Math.Clamp(a.Sustain, 0f, 1f);
+        a.AttackBeats = Math.Clamp(a.AttackBeats, 0, len);
+        a.DecayBeats = Math.Clamp(a.DecayBeats, 0, len - a.AttackBeats);
+        a.ReleaseBeats = Math.Clamp(a.ReleaseBeats, 0, len - a.AttackBeats - a.DecayBeats);
+        return a;
+    }
+}
+
+/// <summary>Decoded-sample metadata. Matches native NotaSampleInfo (M7-6b).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaSampleInfo
+{
+    public int Channels;
+    public long Frames;
+    public double SampleRate;
+}
+
+/// <summary>Built-in Sampler settings. Matches native NotaSamplerInfo (M7-6b).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaSamplerInfo
+{
+    public long SampleId;
+    public int RootNote;
+    public int Loop;            // 0/1
+}
+
+/// <summary>Nota Mosaic's loading state. Matches native NotaMosaicStatus. State: 0 empty ·
+/// 1 loading · 2 ready; Disk* are the files' bytes on disk (progress), RamBytes the decoded
+/// samples' size; Missing = files that didn't decode.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaMosaicStatus
+{
+    public int State;
+    public int FilesDone;
+    public int FilesTotal;
+    public int Missing;
+    public int Zones;
+    public int Serial;          // changes whenever another program is set
+    public long DiskDone;
+    public long DiskTotal;
+    public long RamBytes;
+}
+
+/// <summary>A Nota Aurora custom wavetable, as the engine reports it (specs/053): its frame
+/// count (0 = the slot is empty), how the file was read (0 wavetable file, 1 single cycle,
+/// 2 recording), whether it was cut to 60 s or 256 frames, and, for a track's slot, the source
+/// flag and whether a project could not restore it (then <see cref="Name"/> is the name it had).
+/// <see cref="Serial"/> changes whenever the slot's table does; <see cref="Hash"/> is the
+/// engine's 128-bit content hash of the frames, as hex.</summary>
+public readonly record struct AuroraTableInfo(int Frames, int Origin, bool TruncatedLength, bool TruncatedFrames,
+    bool UseCustom, bool Missing, uint Serial, string Hash, string Name)
+{
+    public bool HasTable => Frames > 0;
+}
+
+/// <summary>Results of the Aurora table builders (native NOTA_AURORA_*).</summary>
+public static class AuroraTableResult
+{
+    public const int Ok = 0, ErrDecode = -1, ErrFormat = -2, ErrSilent = -3, ErrEmpty = -4, ErrArgs = -5;
+}
+
+/// <summary>Captured session audio take. Matches native NotaSessionAudioSlot (M7-6b).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaSessionAudioSlot
+{
+    public long SampleId;
+    public double LengthBeats;
+    public double SourceOffsetFrames;
+    public long LengthFrames;
+    public float Gain;
+}
+
+/// <summary>Session audio slots edit through the audio-clip API: a slot's take is the clip at
+/// index <c>-(scene + 2)</c> on its track (arrangement clips are &gt;= 0). Matches the engine's
+/// kSessionClipBase addressing.</summary>
+public static class SessionClip
+{
+    public const int Base = -2;
+    public static int Index(int scene) => Base - scene;
+    /// <summary>The scene a clip index addresses, or -1 for an arrangement clip.</summary>
+    public static int SceneOf(int clipIndex) => clipIndex <= Base ? Base - clipIndex : -1;
+}
+
+/// <summary>How a session clip reacts to its launch button (Session P0).</summary>
+public enum SessionLaunchMode { Trigger = 0, Gate = 1, Toggle = 2, Repeat = 3 }
+
+/// <summary>What a session clip does once it has played its follow time (Session P0).</summary>
+public enum SessionFollowAction { None = 0, Stop, Again, Previous, Next, First, Last, Any, Other, Jump }
+
+/// <summary>Session clip (slot) properties. Matches native NotaSessionClipProps (Session P0).
+/// Color is a track-palette index (-1 = the track's colour); QuantBeats &lt; 0 = global;
+/// ChanceA/B are relative weights 0..100; FollowBeats 0 = one pass. FollowBypass 1 holds
+/// the clip's follow actions without changing them (#499).</summary>
+/// <summary>One Session clip the running take has heard so far (#971): what the Arrangement draws
+/// while recording, before the clips are written at stop. Matches native NotaPassSpan.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaPassSpan
+{
+    public int TrackId;
+    public int Slot;
+    public double StartBeat;
+    public double EndBeat;
+    public double SlotPos;
+    public int Open;
+    public int Warped;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaSessionClipProps
+{
+    public int Color;
+    public int LaunchMode;
+    public double QuantBeats;
+    public int Legato;
+    public int Loop;
+    public float VelocityAmount;
+    public int FollowA;
+    public int FollowB;
+    public int ChanceA;
+    public int ChanceB;
+    public double FollowBeats;
+    public int JumpScene;
+    public int FollowBypass;
+}
+
+/// <summary>How long a fresh take into a Session slot runs (#503): Global follows the session
+/// record length, Open records until stopped, Fixed records bars + beats of the meter.</summary>
+public enum SlotTakeMode { Global = 0, Open = 1, Fixed = 2 }
+
+/// <summary>A Session slot's next-take length (#503). Matches native NotaSlotTakeLength.
+/// Bars 0..64 and Beats 0..beats-per-bar-1 apply to Fixed only (1 beat .. 64 bars).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaSlotTakeLength
+{
+    public int Mode;
+    public int Bars;
+    public int Beats;
+
+    public NotaSlotTakeLength(SlotTakeMode mode, int bars = 0, int beats = 0) { Mode = (int)mode; Bars = bars; Beats = beats; }
+    public readonly SlotTakeMode TakeMode => (SlotTakeMode)Mode;
+    public const int MaxBars = 64;
+}
+
+/// <summary>Scene row properties. Matches native NotaSceneProps (Session P0). Color is a
+/// track-palette index (-1 = neutral); Tempo / SigNum+SigDen &gt; 0 apply on launch.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaSceneProps
+{
+    public int Color;
+    public double Tempo;
+    public int SigNum;
+    public int SigDen;
+    public int Follow;
+    public double FollowBeats;
+}
+
+/// <summary>Post-fader level meter (linear 0..1). Matches native NotaMeter (M6-2).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct NotaMeter
+{
+    public float PeakL;
+    public float PeakR;
+    public float RmsL;
+    public float RmsR;
+
+    public readonly float Peak => PeakL > PeakR ? PeakL : PeakR;
+    public readonly float Rms => RmsL > RmsR ? RmsL : RmsR;
+}
+
+/// <summary>What a parameter-automation lane drives (M9). Matches native AutomationTarget.
+/// <see cref="Send"/> (specs/072) is a track's send level into the return bus held in the
+/// lane's device index (0..3), values 0..1.</summary>
+/// <summary>Tempo (specs/099) is valid only on the master track; its values are BPM (20–300).</summary>
+public enum AutomationTarget { Volume = 0, Pan = 1, DeviceParam = 2, PluginParam = 3, MidiDeviceParam = 4, Send = 5, Tempo = 6 }
+
+/// <summary>What a device transfer (specs/043) moves: an audio effect, a MIDI effect or the
+/// track's instrument. Matches nota_track_transfer_device's family.</summary>
+public enum DeviceFamily { Audio = 0, Midi = 1, Instrument = 2 }
+
+/// <summary>What a device transfer did besides moving the device (nota_track_transfer_device's out_flags).</summary>
+[Flags]
+public enum TransferFlags { None = 0, SidechainCleared = 1, LinksDropped = 2, SourceTrackRemoved = 4 }
+
+/// <summary>Where a CV link's source and target sit when they reach into a rack (specs/044):
+/// chain index and slot, -1 at track level.</summary>
+public readonly record struct CvLinkPath(int SourceChain, int SourceSlot, int TargetChain, int TargetSlot);
+
+/// <summary>A rack chain MIDI effect's CC target (specs/044): a device on the track, or the
+/// child (Chain, Slot) of the rack at Device; Chain -1 = track level.</summary>
+public readonly record struct NestedCcDest(int Device, int Chain, int Slot, int Param, float Depth);
+
+/// <summary>A rack chain child's sidechain key (specs/044); SourceTrack -1 = none.</summary>
+public readonly record struct NestedSidechain(int SourceTrack, bool TapPre, float GainDb, float Mix);
+
+/// <summary>A sidechain key (specs/050): the source track (-1 = none) and the part of its
+/// instrument — a Drum Rack pad, an Instrument Rack chain or a Rhythm voice — as its current
+/// index; -1 = the whole track, -2 = the keyed part is gone (the key is silent).</summary>
+public readonly record struct SidechainKey(int Source, int Part)
+{
+    public const int WholeTrack = -1, Missing = -2;
+    public static readonly SidechainKey None = new(-1, WholeTrack);
+}
+
+/// <summary>Why nota_track_group_devices refused a run (specs/044).</summary>
+public enum GroupRefusal
+{
+    BadRun = -2, NotContiguous = -3, RackInRun = -4, CantHost = -5, InstrumentCantNest = -6, NotInstrumentTrack = -7,
+}
+
+/// <summary>Why nota_track_ungroup_rack refused (specs/044).</summary>
+public enum UngroupRefusal { NotARack = -2, SeveralChains = -3, DrumRack = -4, NoInstrument = -5 }
+
+/// <summary>What an ungroup left behind (nota_track_ungroup_rack's out_dropped).</summary>
+[Flags]
+public enum UngroupDropped { None = 0, MacroMappings = 1, ChainMix = 2 }
+
+/// <summary>Project pan law (specs/006). Matches NOTA_PAN_LAW_*: Balance drops the far
+/// channel as a track pans, Stereo folds it into the near side.</summary>
+public enum PanLaw { Balance = 0, Stereo = 1 }
+
+/// <summary>Which hardware input channels an audio track records and monitors (#340): both as a
+/// stereo pair (1/2), or input 1 / input 2 alone — a mono source, placed in the middle.</summary>
+public enum InputChannels { Stereo = 0, Mono1 = 1, Mono2 = 2 }
+
+/// <summary>Why an armed track didn't record (specs/086); matches nota_engine_record_skipped.</summary>
+public enum RecordSkipReason { InputUnavailable = 1, TooMany = 2, SwitchedOff = 3, MixedSources = 4 }
+
+/// <summary>An instrument track's MIDI input (specs/086): the device's uid (null = All inputs)
+/// and channel (0 = all, 1–16); <see cref="Connected"/> is false while that device is away.</summary>
+public readonly record struct TrackMidiInput(string? Uid, int Channel, bool Connected)
+{
+    public static TrackMidiInput All => new(null, 0, true);
+}
+
+/// <summary>An audio track's hardware input (specs/086): device channel <see cref="First"/>
+/// (0-based) alone — a mono source, heard and recorded in the middle — or the stereo pair
+/// First/First+1 (First even).</summary>
+public readonly record struct InputPick(int First, int Width)
+{
+    public const int MaxChannels = 64;
+    public static readonly InputPick Stereo12 = new(0, 2);
+    public static InputPick Mono(int first) => new(first, 1);
+    public static InputPick Pair(int first) => new(first, 2);
+    public bool IsStereo => Width == 2;
+    public bool IsValid => First >= 0 && (Width == 1 || Width == 2) && First + Width <= MaxChannels && (Width == 1 || First % 2 == 0);
+    /// <summary>The old three-value pick, when this is one of them.</summary>
+    public InputChannels? AsChannels => this == Stereo12 ? InputChannels.Stereo
+        : this == Mono(0) ? InputChannels.Mono1 : this == Mono(1) ? InputChannels.Mono2 : null;
+    public static InputPick From(InputChannels c) => c switch
+    {
+        InputChannels.Mono1 => Mono(0),
+        InputChannels.Mono2 => Mono(1),
+        _ => Stereo12,
+    };
+}
+
+/// <summary>One Stereo Map row (specs/008), laid out like native NotaStereoMeasure: what a
+/// track / return / the master sends to the master, averaged over ~300 ms. Balance is on the
+/// pan scale (a mono source panned to p reads p); width = 1 − correlation, clamped 0..1.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct StereoMeasure
+{
+    public int TrackId;
+    public float LevelDb;
+    public float Balance;
+    public float Width;
+    public float Correlation;
+    /// <summary>Below −60 dBFS: no cloud is drawn.</summary>
+    public readonly bool Silent => LevelDb < -60f;
+}
+
+/// <summary>What a value gesture targets (specs/009 volume / pan, specs/016 device
+/// parameters). Matches NOTA_MIX_*.</summary>
+public enum MixKind { TrackVolume = 0, TrackPan = 1, MasterVolume = 2, DeviceParam = 3, MidiDeviceParam = 4, PluginParam = 5, PresetTag = 6, TrackSend = 8 }
+
+/// <summary>One value a gesture records for undo; laid out like native NotaMixTarget.
+/// <see cref="TrackId"/> is ignored for the master volume; <see cref="DeviceIndex"/> /
+/// <see cref="ParamIndex"/> address a device parameter (−1 otherwise; a plugin parameter's
+/// device −1 is the track's instrument).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct MixTarget(MixKind Kind, int TrackId, int DeviceIndex = -1, int ParamIndex = -1)
+{
+    public static MixTarget Volume(int trackId) => new(MixKind.TrackVolume, trackId);
+    public static MixTarget Pan(int trackId) => new(MixKind.TrackPan, trackId);
+    /// <summary>A track's send level into return bus <paramref name="bus"/> (specs/072).</summary>
+    public static MixTarget Send(int trackId, int bus) => new(MixKind.TrackSend, trackId, bus);
+    public static MixTarget Master => new(MixKind.MasterVolume, -1);
+    /// <summary>A built-in audio effect's parameter (its own min..max range).</summary>
+    public static MixTarget DeviceParam(int trackId, int deviceIndex, int paramIndex) => new(MixKind.DeviceParam, trackId, deviceIndex, paramIndex);
+    /// <summary>A MIDI effect's parameter.</summary>
+    public static MixTarget MidiDeviceParam(int trackId, int index, int paramIndex) => new(MixKind.MidiDeviceParam, trackId, index, paramIndex);
+    /// <summary>A normalized plugin / built-in instrument parameter (device −1 = the instrument).</summary>
+    public static MixTarget PluginParam(int trackId, int deviceIndex, int paramIndex) => new(MixKind.PluginParam, trackId, deviceIndex, paramIndex);
+    /// <summary>A device's preset tag (specs/048), so a preset applied in the gesture undoes with its name.</summary>
+    public static MixTarget PresetTag(int trackId, PresetSurface surface, int index) => new(MixKind.PresetTag, trackId, index, (int)surface);
+}
+
+/// <summary>Which of a track's devices a preset tag is on (specs/048).</summary>
+public enum PresetSurface { Effect = 0, Instrument = 1, MidiEffect = 2 }
+
+/// <summary>The preset a device was loaded from: its id ("" = a user preset by path), name
+/// and the parameter values right after it applied (specs/048).</summary>
+public sealed record PresetTag(string Id, string Name, float[] Loaded);
+
+/// <summary>A named span of arrangement time — Intro / Verse / Drop (specs/016). Project
+/// data held by the engine: undoable, saved with the project.</summary>
+public readonly record struct SectionInfo(double StartBeat, double LengthBeats, string Name);
+
+
+/// <summary>MIDI clip envelope target (M9 follow-up). Velocity scales note velocities;
+/// Volume scales the instrument output during the clip.</summary>
+public enum MidiClipEnvelope { Velocity = 0, Volume = 1 }
+
+/// <summary>Instrument-wide MIDI controllers (specs/020), one id space matching native
+/// NOTA_CTL_*: 0..127 the CC, <see cref="PitchWheel"/>, <see cref="ChannelPressure"/>. Values
+/// are normalised: a CC 0..1 (data / 127; CC64–69 are switches, on at ≥ 0.5), the wheel −1..+1,
+/// pressure 0..1.</summary>
+public static class MidiController
+{
+    public const int PitchWheel = 128;
+    public const int ChannelPressure = 129;
+    public const int Count = 130;
+    public const int ModWheel = 1;
+    public const int Sustain = 64;
+
+    /// <summary>Data entry / RPN / NRPN and the channel mode messages: never recorded,
+    /// drawn or automated.</summary>
+    public static bool IsReserved(int ctl) =>
+        ctl < 0 || ctl >= Count || ctl == 6 || ctl == 38 || (ctl >= 96 && ctl <= 101) || (ctl >= 120 && ctl <= 127);
+
+    /// <summary>CC64–69 (sustain, portamento, sostenuto, soft, legato, hold 2): on/off.</summary>
+    public static bool IsSwitch(int ctl) => ctl >= 64 && ctl <= 69;
+
+    public static (float Min, float Max) Range(int ctl) => ctl == PitchWheel ? (-1f, 1f) : (0f, 1f);
+
+    private static readonly Dictionary<int, string> Names = new()
+    {
+        [0] = "Bank select", [1] = "Mod wheel", [2] = "Breath", [4] = "Foot", [5] = "Portamento time",
+        [7] = "Volume", [8] = "Balance", [10] = "Pan", [11] = "Expression", [12] = "Effect 1", [13] = "Effect 2",
+        [64] = "Sustain", [65] = "Portamento", [66] = "Sostenuto", [67] = "Soft pedal", [68] = "Legato", [69] = "Hold 2",
+        [71] = "Resonance", [72] = "Release", [73] = "Attack", [74] = "Brightness", [75] = "Decay",
+        [76] = "Vibrato rate", [77] = "Vibrato depth", [78] = "Vibrato delay",
+        [84] = "Portamento control", [91] = "Reverb", [92] = "Tremolo", [93] = "Chorus", [94] = "Detune", [95] = "Phaser",
+        [PitchWheel] = "Pitch wheel", [ChannelPressure] = "Channel pressure",
+    };
+
+    /// <summary>The controller's standard name ("Mod wheel", "Sustain"), or "CC 3" when it has none.</summary>
+    public static string Name(int ctl) => Names.TryGetValue(ctl, out var n) ? n : $"CC {ctl}";
+
+    /// <summary>A short label for a lane tab: "Sustain", "Mod wheel", "Pressure", "CC 74".</summary>
+    public static string ShortName(int ctl) => ctl switch
+    {
+        ChannelPressure => "Pressure",
+        PitchWheel or ModWheel or Sustain or 2 or 11 => Name(ctl),
+        _ => $"CC {ctl}",
+    };
+}
+
+/// <summary>A per-note expression dimension (MPE). Matches native ExprDim: Bend in semitones
+/// (the whole-instrument wheel −1..+1), Pressure 0..1, Slide (CC74 timbre) 0..1 with 0.5 neutral.</summary>
+/// <remarks>Sustain (the CC64 pedal, 0/1) is instrument-wide only — send it with pitch −1.</remarks>
+public enum NoteExpressionDim { Bend = 0, Pressure = 1, Slide = 2, Sustain = 3 }
+
+/// <summary>An automation breakpoint, blittable and laid out to match native
+/// NotaAutomationPoint (M9). Value is in the target's native units; Curve (M9-D)
+/// shapes the segment to the next point (0 linear, [-1,1]).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct AutomationPoint(double beat, float value, float curve = 0f)
+{
+    public double Beat = beat;
+    public float Value = value;
+    public float Curve = curve;
+}
+
+/// <summary>An automation lane's binding + point count (M9).</summary>
+public readonly record struct AutomationLaneInfo(AutomationTarget Target, int DeviceIndex, int ParamIndex, int PointCount);
+
+/// <summary>An audio device: a stable UID (persistence key) and a display name (M7-1).</summary>
+public readonly record struct AudioDevice(string Uid, string Name);
+
+/// <summary>The audio system on Windows (specs/049). Elsewhere always <see cref="Wasapi"/>, meaning
+/// the platform's native backend.</summary>
+public enum AudioSystem { Wasapi = 0, Asio = 1 }
+
+/// <summary>What the audio driver asked for since the last poll (NotaAudioDeviceEvent).</summary>
+public enum AudioDeviceEvent { None = 0, ResetRequested = 1, DriverFailed = 2 }
+
+/// <summary>A MIDI input source: a stable UID (persistence key) and a display name (M7-2).</summary>
+public readonly record struct MidiDevice(string Uid, string Name);
+
+/// <summary>A connected MIDI input as the engine's MIDI thread numbers it (specs/051): the
+/// source index its events carry, a stable uid, the display name, and the output of the same
+/// device ("" when it has none). Test ports have uids "test:&lt;name&gt;".</summary>
+public readonly record struct MidiPortInfo(string Uid, string Name, int Source, string OutputUid);
+
+/// <summary>One claimed message (specs/051), blittable and matching NotaMidiClaim. A claimed
+/// message goes to the surface queue instead of the instruments. Status 0x80 note (on and
+/// off), 0xB0 CC, 0xD0 channel pressure, 0xE0 pitch bend; WholePort = 1 claims every channel
+/// message of the source.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct MidiClaim(int Source, int WholePort, int Status, int Channel, int Data1)
+{
+    public static MidiClaim Whole(int source) => new(source, 1, 0, 0, 0);
+    public static MidiClaim Cc(int source, int channel, int cc) => new(source, 0, 0xB0, channel, cc);
+    public static MidiClaim Note(int source, int channel, int note) => new(source, 0, 0x80, channel, note);
+    public static MidiClaim PitchBend(int source, int channel) => new(source, 0, 0xE0, channel, 0);
+}
+
+/// <summary>A game controller usable as a live note source (macOS v1). The UID is
+/// the stable IORegistryEntryID stringified; the name is the HID product string.</summary>
+public readonly record struct GamepadDevice(string Uid, string Name);
+
+/// <summary>One gamepad button edge, blittable and matching NotaGamepadButtonEvent
+/// in the native C ABI. Pad is the slot for the pad that pressed it (a session-
+/// local index; pads are matched back to <see cref="GamepadDevice"/> by it).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct GamepadButtonEvent
+{
+    public int Pressed;   // 1 = down, 0 = up
+    public int ButtonId;  // 1..N = HID usage; GamepadButton.Dpad* for the d-pad
+    public int Pad;       // pad slot at the time of the event
+}
+
+/// <summary>Stable ids for the gamepad d-pad (resolved from a hatswitch). All other
+/// buttons carry their raw HID usage (1..N); the label a user sees is cosmetic and
+/// lives in the mapping UI.</summary>
+public enum GamepadButton
+{
+    DpadUp = -1000,
+    DpadDown = -1001,
+    DpadLeft = -1002,
+    DpadRight = -1003,
+}
+
+/// <summary>The pad's continuous controls, in the order
+/// <see cref="IAudioEngine.GamepadAxisValues"/> writes them. Values are 0..127: a stick
+/// axis is bipolar and rests at 64, trigger travel is unipolar and rests at 0. The
+/// triggers also fire L2/R2 button edges — the edge plays a note, the travel drives a
+/// mapped parameter.</summary>
+public enum GamepadAxis
+{
+    LeftX = 0, LeftY = 1, RightX = 2, RightY = 3, LeftTrigger = 4, RightTrigger = 5,
+    Count = 6,
+}
+
+/// <summary>An Instrument Rack macro mapping: macro <paramref name="Macro"/> drives the target
+/// param over [<paramref name="RangeMin"/>, <paramref name="RangeMax"/>] in the target's own units.
+/// <paramref name="DeviceIndex"/> -1 targets the chain's instrument (plugin-param index), -2
+/// (<see cref="PadControls"/>) the chain's own strip — a Drum Rack pad's Volume / Pan / Tune /
+/// Decay; otherwise the device at that chain position (generic-param index).</summary>
+public readonly record struct RackMacroMapping(
+    int Macro, int Chain, int DeviceIndex, int ParamIndex, float RangeMin, float RangeMax)
+{
+    /// <summary>DeviceIndex of a mapping onto the chain's own controls (RackCore::kPadControls).</summary>
+    public const int PadControls = -2;
+    /// <summary>DeviceIndex of a mapping onto a rack-level control (NOTA_RACK_CONTROL); ParamIndex 0 = the selector.</summary>
+    public const int RackControl = -3;
+    /// <summary>DeviceIndex of a chain's MIDI effect j is MidiDeviceBase − j (NOTA_RACK_MIDI_DEVICE_BASE).</summary>
+    public const int MidiDeviceBase = -1000;
+    /// <summary>The rack address (RackDev* deviceIndex) of the Drum Rack in chain c of a track's
+    /// Instrument Rack is NestedRackBase − c (NOTA_RACK_NESTED_BASE, specs/041).</summary>
+    public const int NestedRackBase = -100000;
+    /// <summary>The pad controls a mapping can drive, by ParamIndex, with their ranges (gain is linear,
+    /// pan −1..1, tune in semitones, decay 0..1 with 1 = hold).</summary>
+    public static readonly string[] PadParamNames = { "Volume", "Pan", "Tune", "Decay" };
+    public static readonly float[] PadParamMin = { 0f, -1f, -48f, 0f };
+    public static readonly float[] PadParamMax = { 2f, 1f, 48f, 1f };
+    public const int PadVolume = 0, PadPan = 1, PadTune = 2, PadDecay = 3;
+}

@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Cross-device mouse-wheel normalization. Avalonia hands us a wheel Delta that a mouse
+// reports as roughly ±1 per notch, while a macOS trackpad reports many events per gesture
+// with much larger (pixel-scale) deltas plus a momentum tail. Our custom scroll/zoom
+// handlers used a fixed step per event (e.g. "±2 beats", "×1.25 zoom"), so on a trackpad
+// every flick summed to a huge jump and flew straight to the extremes. This maps any delta
+// to a consistent on-screen pixel amount and caps it per event, so mouse and trackpad both
+// feel proportional and can't teleport.
+
+using System;
+using Avalonia.Input;
+
+namespace Nota.App;
+
+internal static class WheelInput
+{
+    // A mouse notch (|delta| ≈ 1) should move about this many pixels.
+    private const double NotchPixels = 50.0;
+    // At/above this magnitude the delta is already pixel-scale (a trackpad), so it's used
+    // as-is rather than multiplied up like a discrete notch.
+    private const double NotchThreshold = 4.0;
+    // Ceiling per event so a single fast/momentum event can't leap across the whole view.
+    private const double MaxPixelsPerEvent = 90.0;
+    // Scrolling feels a touch better slightly faster than 1:1 finger travel; zoom keeps 1:1.
+    private const double ScrollGain = 1.5;
+
+    // Device-normalized, capped base pixels for one wheel-delta component.
+    private static double BasePixels(double delta)
+    {
+        double px = Math.Abs(delta) >= NotchThreshold ? delta : delta * NotchPixels;
+        return Math.Clamp(px, -MaxPixelsPerEvent, MaxPixelsPerEvent);
+    }
+
+    /// <summary>On-screen pixels to scroll for one wheel-delta component (device-normalized).</summary>
+    public static double Pixels(double delta) => BasePixels(delta) * ScrollGain;
+
+    /// <summary>Normalized notch count for stepping zoom (mouse notch ≈ 1, capped for trackpad).</summary>
+    public static double Notches(double delta) => BasePixels(delta) / NotchPixels;
+
+    /// <summary>Per-event zoom multiplier: <paramref name="perNotch"/> applied ^notches, so a
+    /// mouse notch gives exactly <paramref name="perNotch"/> and a trackpad scales smoothly.</summary>
+    public static double ZoomFactor(double delta, double perNotch)
+        => Math.Pow(perNotch, Notches(delta));
+
+    /// <summary>The wheel is mostly vertical — a control may take it as an adjustment. A sideways
+    /// (or mostly sideways) swipe is someone scrolling the view the control sits in: leave it
+    /// unhandled so it reaches that view's scroller (#262).</summary>
+    public static bool IsVertical(PointerWheelEventArgs e) => Math.Abs(e.Delta.Y) > Math.Abs(e.Delta.X);
+
+    private static double _stepAcc;
+    private static ulong _stepAt;
+    private static readonly WeakReference<object?> _stepTarget = new(null); // weak: a removed card isn't kept alive
+    private static int _stepPart;
+
+    /// <summary>One step of a stepper under the wheel: +1 up, −1 down, 0 for a trackpad event
+    /// that hasn't travelled a full notch yet; null when the wheel is mostly sideways (leave the
+    /// event unhandled). A mouse notch is one step; a trackpad steps once per notch of travel
+    /// instead of once per event, which ran a box to its end on a single swipe. <paramref name="target"/>
+    /// (with <paramref name="part"/>, for a control holding several) names the value being stepped:
+    /// travel left over on one value never carries into the next.</summary>
+    public static int? Step(PointerWheelEventArgs e, object target, int part = 0)
+    {
+        if (!IsVertical(e)) return null;
+        double n = Notches(e.Delta.Y);
+        bool same = _stepTarget.TryGetTarget(out var last) && ReferenceEquals(last, target) && part == _stepPart;
+        if (e.Timestamp - _stepAt > 300 || Math.Sign(n) != Math.Sign(_stepAcc) || !same) _stepAcc = 0;
+        _stepAt = e.Timestamp;
+        _stepTarget.SetTarget(target);
+        _stepPart = part;
+        _stepAcc += n;
+        if (Math.Abs(_stepAcc) < 0.999) return 0;
+        int s = Math.Sign(_stepAcc);
+        _stepAcc -= s;
+        return s;
+    }
+}

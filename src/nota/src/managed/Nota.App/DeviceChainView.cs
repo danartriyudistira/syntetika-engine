@@ -1,0 +1,427 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices (mockup 1d): the selected track's device chain as horizontal
+// cards, signal order left→right. Each card has a 26px header (power dot =
+// bypass, name, type tag, reorder ◀▶, remove ✕, drag handle ⠿) over a body:
+// built-in EQ → interactive response curve, Compressor → param bars + GR meter,
+// other built-ins → param bars, hosted plugins → editor stub + latency. Then a
+// Sends card (M6-1) and a dashed "+ Add device" target. Reads over the engine's
+// device API; edits go straight to the engine.
+
+using System;
+using System.Globalization;
+using Avalonia;
+using Avalonia.Collections;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Shapes;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application;
+using Nota.Application.Controllers;
+using Nota.Presentation;
+using static Nota.App.DeviceCardKit;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public sealed partial class DeviceChainView : UserControl
+{
+    // Built-in instrument editor (Synth / Physical): graphs + faders re-read live so
+    // automation moves show (RefreshSynthLive). _instLiveViz updates the active card's graphs.
+    private Action? _instLiveViz;
+    private readonly System.Collections.Generic.List<(int idx, Knob fader, TextBlock val, System.Func<float, string>? fmt)> _instFaders = new();
+    // Live device visuals (compressor gain-reduction meter) refreshed on the UI tick.
+    private readonly System.Collections.Generic.List<Action> _deviceLiveRefreshers = new();
+    // Rack chain param faders that follow their mapped macro (and automation); cleared each Rebuild.
+    private readonly System.Collections.Generic.List<Action> _rackParamRefreshers = new();
+    private int _rackSelChain;   // which rack/drum chain's device area is shown (persists across Rebuild)
+
+    /// <summary>Raised to save a rack chain's instrument as a preset; arg is the chain index.</summary>
+    public event Action<int>? RackPresetSaveRequested;
+
+    private readonly IAudioEngine _engine;
+    private readonly IFactoryPresets _factory;
+    private readonly IPluginCatalog? _catalog;   // maps a copied plugin's id → catalog index for paste
+    private readonly IDrumKits? _kits;           // the Drum Rack card's preset list
+    private readonly IMosaicPacks? _mosaic;      // Nota Mosaic's pack presets, beside its factory ones
+    private readonly DeviceCardFactory _cardFactory = new();
+    private readonly InstrumentCardFactory _instrumentFactory = new();
+    private readonly MidiDeviceCardFactory _midiFactory = new();
+    // The chain sits close to the panel edges: a 6px inset all round and 6px between cards —
+    // just room for the selected card's focus ring (3px gap + 1.5px ring) — so the cards fill
+    // the Devices panel instead of floating in it.
+    internal const double ChainInset = 6;
+    private readonly StackPanel _row = new() { Orientation = Orientation.Horizontal, Spacing = ChainInset, Margin = new Thickness(ChainInset) };
+    private int _trackId = -1;
+    private readonly Grid _layout;
+    private readonly ScrollViewer _outer;
+
+    /// <summary>Raised after a change that affects track headers (remove/reorder).</summary>
+    public event Action? Changed;
+
+    /// <summary>Raised when this view reorders / removes effects (midi=false) or MIDI effects
+    /// (midi=true) on a track: map is old chain index → new index, or -1 when the device is gone.
+    /// Lets index-addressed state elsewhere (the arrangement's automation target) follow it.</summary>
+    public event Action<int, bool, Func<int, int>>? DevicesRemapped;
+
+    /// <summary>Raised to save a device/instrument as a preset (M7-4c); arg is the
+    /// device index, or -1 for the track's instrument. MainWindow does the prompt+save.</summary>
+    public event Action<int>? PresetSaveRequested;
+
+    /// <summary>Raised when a browser item is dropped on the device panel; MainWindow
+    /// routes it (effect → the shown track at the target slot; instrument → replaces the
+    /// track's instrument, or a rack chain / drum pad).</summary>
+    public event Action<BrowserItem, DeviceDropTarget>? ItemDropped;
+
+    /// <summary>A one-line message for the status bar (e.g. a kit that loaded incompletely).</summary>
+    public event Action<string>? StatusMessage;
+    /// <summary>The instrument's Delete / Cut / Remove (specs/043): the host deletes the track
+    /// (trackId), asking first when it has clips. <c>cut</c>: the instrument was copied first.</summary>
+    // The instrument's Delete / Cut take its track (specs/043): (track, cut, how many devices were
+    // selected — more than one means the host asks every time, specs/044).
+    public event Action<int, bool, int>? TrackDeleteRequested;
+    // Move to track ▸ for several selected devices (specs/044), in chain order.
+    public event Action<System.Collections.Generic.IReadOnlyList<DeviceMoveRequest>>? MovesRequested;
+    /// <summary>Replace… in the instrument's menu: the host swaps the shown track's instrument
+    /// for this one (racks included), one undo step.</summary>
+    public event Action<BrowserItem>? InstrumentReplaceRequested;
+    /// <summary>Move to track ▸ (and a card dragged onto a track header): the host moves the
+    /// device, one undo step, asking first when an instrument's move takes a track with clips.</summary>
+    public event Action<DeviceMoveRequest>? MoveRequested;
+
+    /// <summary>The "+" at the end of the chain was clicked: MainWindow opens the browser on
+    /// Audio effects with the keyboard in its search.</summary>
+    public event Action? AddDeviceRequested;
+
+    // Accent overlay shown while a browser item is dragged over the panel.
+    private readonly Border _dropGlow = new()
+    {
+        IsVisible = false, IsHitTestVisible = false,
+        BorderThickness = new Thickness(2), CornerRadius = NotaRadius.Card,
+        BorderBrush = NotaPalette.AccentBright,
+        Background = NotaPalette.Wash(NotaPalette.AccentBright, 0x14),
+        Margin = new Thickness(2),
+    };
+
+    public DeviceChainView(IAudioEngine engine, IFactoryPresets factory, IPluginCatalog? catalog = null, IDrumKits? kits = null, IMosaicPacks? mosaic = null)
+    {
+        _engine = engine;
+        _factory = factory;
+        _catalog = catalog;
+        _kits = kits;
+        _mosaic = mosaic;
+        Focusable = true;   // so Ctrl+C/X/V + Delete on a selected device reach OnKeyDown
+        var scroller = new ScrollViewer
+        {
+            Content = _row,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        // The chain only scrolls sideways, and the scroller ignores a plain (vertical) mouse wheel,
+        // so a wheel no card control took moves the chain instead of doing nothing (#262).
+        scroller.PointerWheelChanged += (_, e) =>
+        {
+            if (e.Handled || !WheelInput.IsVertical(e)) return;
+            double max = Math.Max(0, scroller.Extent.Width - scroller.Viewport.Width);
+            double x = Math.Clamp(scroller.Offset.X - WheelInput.Pixels(e.Delta.Y), 0, max);
+            if (Math.Abs(x - scroller.Offset.X) < 0.01) return;
+            scroller.Offset = scroller.Offset.WithX(x);
+            e.Handled = true;
+        };
+        // A click on the chain's empty space clears the selection (specs/044).
+        scroller.Background = Brushes.Transparent;
+        scroller.PointerPressed += (_, e) =>
+        {
+            if (!HasDeviceSelection || !e.GetCurrentPoint(scroller).Properties.IsLeftButtonPressed) return;
+            if (e.Source is ScrollViewer or Avalonia.Controls.Presenters.ScrollContentPresenter || ReferenceEquals(e.Source, _row))
+            { ClearDeviceSelection(); Rebuild(); }
+        };
+        // The XL panel (specs/085) sits over the chain; without one the chain fills the view.
+        var chain = new Panel { Children = { scroller, _dropGlow, _dropLayer } };
+        Grid.SetRow(chain, 1);
+        _layout = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), Children = { _xlHost, chain } };
+        // In a window too short for the panel's minimum and the chain, the view scrolls instead of
+        // clipping the chain: the grid is at least that tall, and otherwise exactly the viewport.
+        _outer = new ScrollViewer
+        {
+            Content = _layout, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        _outer.SizeChanged += (_, _) => FitLayoutHeight();
+        Content = _outer;
+        HookBrowserDrop();
+    }
+
+    public void Show(int trackId) { _trackId = trackId; _rackSelChain = 0; ClearDeviceSelection(); _rackSel = null; _rackCmds = null; Rebuild(); }
+
+    /// <summary>Forgets every card's remembered preset label + A/B slots (a project was
+    /// opened / created, so track ids no longer mean the same tracks).</summary>
+    public void ForgetCardState() { _cardExtra.Clear(); CloseDeviceWindows(); }
+
+    /// <summary>Forgets the instrument card's remembered preset label + A/B slots on a
+    /// track (its instrument was just swapped in place, possibly for one of the same kind).</summary>
+    public void ForgetInstrumentState(int trackId)
+    { if (_cardExtra.TryGetValue(trackId, out var d)) d.Remove(ExtraKey(ChainKind.Instrument, -1)); }
+
+    /// <summary>Records a preset applied outside the card (from the browser) so its card shows
+    /// the name and ‹ › continue from it. <paramref name="presetId"/> is the factory id, or ""
+    /// for a user preset. The card's A/B slots start fresh for the new device.</summary>
+    internal void RememberPreset(int trackId, ChainKind kind, int deviceIndex, string name, string presetId)
+    {
+        if (trackId <= 0) return;
+        TrackExtras(trackId).Remove(ExtraKey(kind, deviceIndex));   // a new device: drop any stale entry
+        var e = ExtraFor(trackId, kind, deviceIndex);
+        e.Preset = name; e.PresetId = presetId;
+    }
+    public void Refresh() { if (_trackId > 0) Rebuild(); }
+    public int TrackId => _trackId;
+
+    private bool IsInstrumentTrack(int trackId)
+    {
+        int n = _engine.TrackCount;
+        for (int i = 0; i < n; i++)
+            if (_engine.TryGetTrackInfo(i, out var ti) && ti.Id == trackId) return ti.IsInstrument;
+        return false;
+    }
+
+    private bool IsReturnTrack(int trackId) => _engine.TrackReturnIndex(trackId) >= 0;
+
+    private bool IsGroupTrack(int trackId)
+    {
+        int n = _engine.TrackCount;
+        for (int i = 0; i < n; i++)
+            if (_engine.TryGetTrackInfo(i, out var ti) && ti.Id == trackId) return ti.IsGroup;
+        return false;
+    }
+
+    // Clearing the row takes cards out of the tree, and a card losing pointer capture can
+    // ask for a rebuild from inside this one; the nested call then filled the row and this
+    // one appended a second set of cards after it (#202). Run it once more afterwards instead.
+    private bool _rebuilding, _rebuildAgain;
+
+    private void Rebuild()
+    {
+        if (_rebuilding) { _rebuildAgain = true; return; }
+        _rebuilding = true;
+        try
+        {
+            do { _rebuildAgain = false; RebuildRow(); } while (_rebuildAgain);
+        }
+        finally { _rebuilding = false; }
+        RaiseControllerFocus();
+    }
+
+    private void RebuildRow()
+    {
+        _row.Children.Clear();
+        _selRings.Clear();
+        _instrumentCard = null;
+        _instrumentRackView = null;
+        _instLiveViz = null; _instFaders.Clear();   // rebuilt only when a built-in instrument card is shown
+        _deviceLiveRefreshers.Clear();               // compressor GR meter/curve
+        _rackParamRefreshers.Clear();                // rack chain param faders (macro live-follow)
+        int devCount = _trackId > 0 ? _engine.TrackDeviceCount(_trackId) : 0;
+        _xlIndex = ResolveXl();
+        BuildXl(devCount);
+        if (_trackId <= 0) { _row.Children.Add(Hint(Loc.T("device_chain.select_a_track"))); return; }
+
+        // MIDI effects sit before the instrument (they shape the note stream).
+        int midiCount = _engine.TrackMidiEffectCount(_trackId);
+        _sel.Prune(midiCount, IsInstrumentTrack(_trackId), _engine.TrackDeviceCount(_trackId));   // an edit elsewhere shrank the chain
+        for (int i = 0; i < midiCount; i++) _row.Children.Add(Card(MidiDeviceCard(i, midiCount), FocusSection.Midi, i));
+
+        if (IsInstrumentTrack(_trackId)) _row.Children.Add(Card(_instrumentCard = InstrumentCard(), FocusSection.Instrument, -1));
+
+        int count = _engine.TrackDeviceCount(_trackId);
+        for (int i = 0; i < count; i++) _row.Children.Add(Card(DeviceCard(i, count), FocusSection.Audio, i));
+
+        int returns = _engine.ReturnTrackCount;
+        if (returns > 0 && !IsReturnTrack(_trackId) && !IsGroupTrack(_trackId)) _row.Children.Add(SendsCard());
+
+        _row.Children.Add(AddDeviceCard());
+    }
+
+    // Which top-level device a card is: the controller overlay marks the focused one (specs/107).
+    private Control Card(Control card, FocusSection section, int index)
+    {
+        Controllers.ControllerFocusOverlay.SetCardAddress(card, new DeviceAddress(_trackId, section, index));
+        return card;
+    }
+
+    // ---- device card ------------------------------------------------------
+
+    private Control DeviceCard(int index, int count)
+    {
+        int kind = _engine.TrackDeviceBuiltinKind(_trackId, index);
+        bool bypassed = _engine.DeviceBypassed(_trackId, index);
+        string name = _engine.DeviceName(_trackId, index);
+        if (_engine.DeviceFolded(_trackId, index)) return FoldedStrip(ChainKind.Effect, index, name, bypassable: true, bypassed);   // built-in or plug-in
+        if (index == _xlIndex) return XlPlaceholder(index, count, kind, name, bypassed);   // its editor is in the XL panel (specs/085)
+        if (kind >= 0 && InWindow(index)) return WindowPlaceholder(index, count, kind, name, bypassed);   // ... or in its own window
+
+        Control body;
+        double width;
+        bool fullBleed = false;
+        Control? headerExtra = null;
+        string tag = kind >= 0 ? "BUILT-IN" : "PLUGIN";
+        if (kind == -1) return PluginCardFor(ChainKind.Effect, index, count);   // hosted VST3 / AU
+        if (kind == 5)   // Audio Effect Rack — full-bleed body (fills the shell; no body inset
+        {                // that would overflow its fixed width and skew hit-testing).
+            body = new RackCardView(NewCardContext()).BuildEffectRackBody(index); width = 700; fullBleed = true;
+            int chains = _engine.RackDevChainCount(_trackId, index);
+            tag = Loc.Plural("device_chain.rack_chains", chains);
+        }
+        else
+        {
+            var strategy = _cardFactory.Resolve(kind);
+            var bodyCtx = NewCardContext();
+            body = strategy.Build(bodyCtx, index);
+            width = strategy.AutoWidth ? double.NaN : strategy.WidthFor(_engine, _trackId, index);   // NaN → card sizes to content
+            headerExtra = strategy.HeaderAccessory(bodyCtx, index);
+            // A device that opens in XL also opens in its own window: the pop-out key after the size.
+            if (strategy.SupportsXl) headerExtra = HeaderKeys(headerExtra, PopOutKey(index));
+            fullBleed = strategy.FullBleed;
+            if (strategy.Subtitle is { } sub) tag = sub;
+        }
+        // Effects share the same shell as instruments. Non-full-bleed bodies get the
+        // almanac body inset (6).
+        var spec = new ShellSpec(
+            Name: name, Subtitle: tag, DeviceIndex: index, Count: count, Bypassed: bypassed, Bypassable: true,
+            CanMove: true, CanDelete: true, PresetKind: kind, IsInstrument: false, Width: width, Kind: ChainKind.Effect,
+            HeaderExtra: headerExtra, Compact: width < 300);
+        return BuildCardShell(spec, fullBleed ? body : new Border { Padding = new Thickness(NotaSpace.DeviceInset), Child = body });
+    }
+
+    // A fresh seam over this view's engine/track + live-refresh registry + orchestration
+    // callbacks, handed to a card strategy. Cheap; only built while (re)building the row.
+    private DeviceCardContext NewCardContext()
+        => new(_engine, _trackId, _deviceLiveRefreshers.Add, () => Changed?.Invoke(),
+               (i, k, v, f) => _instFaders.Add((i, k, v, f)),
+               viz => _instLiveViz = viz,
+               i => PresetSaveRequested?.Invoke(i),
+               () => _rackSelChain, v => _rackSelChain = v,
+               _rackParamRefreshers.Add,
+               () => { foreach (var r in _rackParamRefreshers) r(); },
+               Rebuild,
+               c => RackPresetSaveRequested?.Invoke(c),
+               ClearDropHints,
+               _factory,
+               s => StatusMessage?.Invoke(s),
+               () => _rackSel,
+               SelectRackDevice,
+               RackCopied,
+               canXl: true);
+
+    // ---- instrument / sends / add ----------------------------------------
+
+    // The Sends card: one column per return track (its colour and letter, the knob, the
+    // amount, the return's name), in one pressed-in section. The card sizes to its columns,
+    // so it is narrow with one return and grows by a column for each return added.
+    internal const double SendColumnW = 60, SendColumnGap = 4;
+
+    private Control SendsCard()
+    {
+        var columns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = SendColumnGap, VerticalAlignment = VerticalAlignment.Center };
+        int shown = 0;
+        for (int i = 0; i < _engine.TrackCount; i++)
+        {
+            if (!_engine.TryGetTrackInfo(i, out var ti) || !ti.IsReturn) continue;
+            int bus = _engine.TrackReturnIndex(ti.Id);
+            if (bus < 0) continue;
+            char letter = (char)('A' + bus);
+            string returnName = TrackNames.Of(_engine, ti);
+
+            var value = new TextBlock { Text = Pct(_engine.GetTrackSend(_trackId, bus)), Foreground = TextPrimary };
+            value.BindResource(TextBlock.FontFamilyProperty, "Font.Measure");
+            var knob = new Knob(_engine.GetTrackSend(_trackId, bus), 1.0) { Accent = true, Default = 0, Format = v => Pct((float)v) };
+            int b = bus;
+            SendControl.Attach(knob, _engine, _trackId, b, v => value.Text = Pct((float)v));   // undoable, writes automation (specs/072)
+            // Follow the Session / Mixer send faders and automation (#138).
+            _deviceLiveRefreshers.Add(() =>
+            {
+                if (knob.Dragging) return;
+                float v = _engine.GetTrackSend(_trackId, b);
+                if (Math.Abs(v - knob.Value) > 1e-3) { knob.Value = v; value.Text = Pct(v); }
+            });
+
+            // The return's colour and letter over the knob, so the column reads as that bus.
+            int colorIdx = ArrangementView.EffectiveColorIndex(_engine, ti.Id);
+            var swatch = new Border
+            {
+                Width = 8, Height = 8, CornerRadius = NotaRadius.Fine, VerticalAlignment = VerticalAlignment.Center,
+                Background = ArrangementView.TrackBrush(colorIdx),
+            };
+            var tag = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 5, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 8),
+                Children =
+                {
+                    swatch,
+                    new TextBlock { Text = letter.ToString(), FontSize = NotaType.Caption, FontWeight = FontWeight.SemiBold, Foreground = TextSecondary, VerticalAlignment = VerticalAlignment.Center },
+                },
+            };
+            var cell = (Panel)KnobCell(returnName, knob, value, SendColumnW);
+            var nameLbl = (TextBlock)cell.Children[2];   // knob · value · name
+            var column = new StackPanel { Width = SendColumnW, Children = { tag, cell } };
+            ToolTip.SetTip(column, Loc.F("session.mixer.send_n", letter, returnName));
+            // Follow a rename or recolour of the return made elsewhere (Session, the arrangement),
+            // checked every half second or so rather than on every tick.
+            int retId = ti.Id, tick = 0;
+            string shownName = returnName;
+            _deviceLiveRefreshers.Add(() =>
+            {
+                if (++tick % 15 != 0) return;
+                int c = ArrangementView.EffectiveColorIndex(_engine, retId);
+                if (c != colorIdx) { colorIdx = c; swatch.Background = ArrangementView.TrackBrush(c); }
+                string n = _engine.GetTrackName(retId);
+                if (n.Length > 0 && n != shownName) { shownName = n; nameLbl.Text = NotaText.Label(n); ToolTip.SetTip(column, Loc.F("session.mixer.send_n", letter, n)); }
+            });
+            columns.Children.Add(column);
+            shown++;
+        }
+        Control body = shown > 0
+            ? Section(new Border { Padding = new Thickness(SectionPad - 1, 0), Child = columns })
+            : new TextBlock { Text = Loc.T("device_chain.no_return_tracks"), FontSize = NotaType.Caption, Foreground = TextTertiary, VerticalAlignment = VerticalAlignment.Center };
+        var spec = new ShellSpec(
+            Name: Loc.T("common.sends"), Subtitle: "", DeviceIndex: -2, Count: 0, Bypassed: false, Bypassable: false,
+            CanMove: false, CanDelete: false, PresetKind: -1, IsInstrument: false, Width: double.NaN,
+            Kind: ChainKind.Effect, Compact: true, Utility: true);
+        return BuildCardShell(spec, new Border { Padding = new Thickness(CardPad, 0, CardPad, CardPad), Child = body });
+    }
+
+    // The end of the chain: a slim "+" key. Its dashed outline shows only while a browser
+    // drag is over the chain, so an empty dock stays quiet (spec 012).
+    private Rectangle? _addDash;
+
+    private Control AddDeviceCard()
+    {
+        // Avalonia Border can't dash its own stroke; overlay a dashed rectangle.
+        _addDash = new Rectangle
+        {
+            Stroke = BorderStrong, StrokeThickness = 1, IsVisible = false,
+            StrokeDashArray = new AvaloniaList<double>(4, 3), RadiusX = NotaRadius.FieldValue, RadiusY = NotaRadius.FieldValue,
+        };
+        var plus = new Glyph(GlyphKind.Plus, 12) { Foreground = TextTertiary };
+        var host = new Grid { Children = { _addDash, plus } };
+        var card = new Border
+        {
+            Width = 28, Height = CardH, Background = Brushes.Transparent, Child = host,
+            CornerRadius = NotaRadius.Field, Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        // A real button (#97): a click opens the browser on Audio effects, typing into its search.
+        card.PointerEntered += (_, _) => { card.BindResource(Border.BackgroundProperty, "Brush.SurfaceHover"); plus.BindResource(Glyph.ForegroundProperty, "Brush.TextSecondary"); };
+        card.PointerExited += (_, _) => { card.Background = Brushes.Transparent; plus.Foreground = TextTertiary; };
+        card.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Left) return;
+            AddDeviceRequested?.Invoke();
+            e.Handled = true;
+        };
+        ToolTip.SetTip(card, Loc.T("device_chain.add_an_audio_effect_search"));
+        return card;
+    }
+
+}

@@ -1,0 +1,38 @@
+//! The openVJ composition model.
+//!
+//! Pure data and playback logic with no GPU, UI or decoding dependencies,
+//! so it can be unit-tested headless and reused by any front end.
+
+mod composition;
+pub mod discover;
+mod effect;
+pub mod effect_folders;
+mod generator;
+pub mod isf;
+pub mod library;
+mod macros;
+mod midi;
+mod midi_clock;
+pub mod milkdrop;
+mod modulation;
+mod output;
+mod overlay;
+mod playback;
+mod playlist;
+pub mod shadertoy;
+mod song;
+mod tempo;
+
+pub use composition::*;
+pub use effect::*;
+pub use generator::*;
+pub use macros::*;
+pub use midi::*;
+pub use midi_clock::*;
+pub use modulation::*;
+pub use output::*;
+pub use overlay::*;
+pub use playback::*;
+pub use playlist::*;
+pub use song::*;
+pub use tempo::*;

@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+namespace Nota.Application;
+
+/// <summary>Transport values the App owns, passed across the persistence boundary
+/// so the on-disk model stays UI-framework-free. <paramref name="Key"/> is the project key
+/// as a <see cref="Samples.MusicalKey.Code"/> (−1 = none set). <paramref name="PanLawLegacy"/> marks a
+/// project made before the pan law (specs/006); it only drives the Mixer's OLDER PROJECT badge.</summary>
+public readonly record struct TransportState(double Bpm, double MasterVolume, bool MetronomeOn, bool LoopOn,
+    int TimeSigNumerator = 4, int TimeSigDenominator = 4, int Key = -1, bool PanLawLegacy = false);
+
+/// <summary>Outcome of loading a project: the transport to restore + any items that
+/// were downgraded/skipped (referential-integrity warnings).</summary>
+public readonly record struct ProjectLoadResult(TransportState Transport, IReadOnlyList<string> Warnings)
+{
+    /// <summary>Hosted-plugin identifiers the project uses that aren't installed (distinct).</summary>
+    public IReadOnlyList<string> MissingPlugins { get; init; } = [];
+    /// <summary>A #568 tempo map in the file went outside 20–300 BPM and was limited on open
+    /// (specs/099): the app says so once. Saving drops the flag.</summary>
+    public bool TempoClamped { get; init; }
+}
+
+/// <summary>Save/load of the <c>.nota</c> project bundle. Hides the on-disk document
+/// model and the engine-capture/apply mechanics behind a use-case surface.</summary>
+public interface IProjectStore
+{
+    /// <summary>Captures the engine + transport into <paramref name="dir"/>. Returns
+    /// warnings for anything unsupported/skipped.</summary>
+    IReadOnlyList<string> Save(IAudioEngine engine, TransportState transport, string dir);
+
+    /// <summary>Loads a bundle and applies it to a reset engine. Returns the transport
+    /// to restore + downgrade warnings.</summary>
+    ProjectLoadResult Load(IAudioEngine engine, string dir);
+
+    /// <summary>A comparable snapshot of the project's current state (the serialized
+    /// manifest, nothing written to disk). Two equal fingerprints mean no change —
+    /// used to detect unsaved edits.</summary>
+    string Fingerprint(IAudioEngine engine, TransportState transport);
+}

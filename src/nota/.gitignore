@@ -1,0 +1,41 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+build/
+build-*/
+.cpm-cache/
+out/
+*.user
+
+# .NET
+project.lock.json
+*.nupkg
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# macOS
+.DS_Store
+
+# IDEs
+.idea/
+.vs/
+.vscode/
+*.swp
+*.DotSettings.user
+
+# Nota project bundles created during testing
+*.nota/
+dist/
+
+# Devenv
+.devenv/
+.devenv.*
+
+# Nota Remote phone page: Vite output of src/web/remote, rebuilt by the Nota.Remote build
+src/managed/Nota.Remote/wwwroot/
+
+.netcoredbg_hist
+

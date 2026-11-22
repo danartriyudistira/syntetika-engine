@@ -1,0 +1,1130 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Session view — the grid: the scene rail, column headers, and the custom-drawn cells
+// (clip slot, group slot, scene). Cells paint straight from engine state at the UI clock;
+// only previews (notes / peaks), names and colours are cached per Refresh.
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public sealed partial class SessionView
+{
+    private const double TopRowH = 24;      // launch triangle + name + length
+    private const double StopRowH = 24;
+    private const double SpacerH = 22;
+
+    private readonly HashSet<int> _armed = new();
+    private int _recTrack, _recScene = -1;
+    /// <summary>The recording MIDI take's held notes and appear animation (#56).</summary>
+    internal RecordPreview? RecordPreview { get; init; }
+    private double _recElapsed;
+
+    // Clip drag between slots: the cell the pointer is over while a clip is dragged.
+    private (int TrackId, int Scene)? _dragTarget;
+
+    private void ReadRecordTarget()
+    {
+        if (_engine.TryGetSessionRecordTarget(out int t, out int s, out double el)) { _recTrack = t; _recScene = s; _recElapsed = el; }
+        else { _recTrack = 0; _recScene = -1; _recElapsed = 0; }
+    }
+
+    // ---- scene rail ---------------------------------------------------------------
+
+    private void AddSceneRail()
+    {
+        _headerRow.Children.Add(new Border
+        {
+            Width = SceneRailW, Height = HeaderH, Padding = new Thickness(10, 0),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    Text(Loc.T("session.grid.scenes"), 10, NotaPalette.TextMuted, FontWeight.SemiBold),
+                    Mono(_sceneCount.ToString(CultureInfo.CurrentCulture), 9, NotaPalette.TextDisabled),
+                },
+            },
+        });
+
+        // The scenes: the rail down the left (Scenes down) or a row of column heads (Scenes across).
+        var mid = LaneStack(_across ? HeaderH : SceneRailW);
+        for (int s = 0; s < _sceneCount; s++)
+        {
+            var cell = new SceneCell(this, s);
+            _sceneCells.Add(cell);
+            mid.Children.Add(cell);
+        }
+        _cellsRow.Children.Add(mid);
+
+        var addScene = new Button { Content = Loc.T("session.grid.scene"), Classes = { "ghost" }, FontSize = 9, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(0) };
+        ToolTip.SetTip(addScene, Loc.T("session.grid.add_a_scene_at_the"));
+        addScene.Click += (_, _) => { int s = _engine.InsertScene(_engine.SceneCount); Refresh(); if (s >= 0) Select(new Selection(SelKind.Scene, 0, s)); };
+
+        var stopAll = new Button { HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(0) };
+        ToolTip.SetTip(stopAll, Loc.T("session.stop_every_session_clip"));
+        stopAll.Click += (_, _) => StopAll();
+
+        if (_across)
+        {
+            // "+ Scene" closes the row of scenes; Stop All heads the Stop strip at the right,
+            // followed by the mixer sections' titles.
+            addScene.Width = TrackColW; addScene.Height = HeaderH;
+            mid.Children.Add(addScene);
+            stopAll.Width = StopColW; stopAll.Height = HeaderH;
+            stopAll.Content = new StackPanel
+            {
+                Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center,
+                Children = { new Glyph(GlyphKind.Stop, 7) { HorizontalAlignment = HorizontalAlignment.Center }, new TextBlock { Text = Loc.T("session.grid.all"), FontSize = 9, FontWeight = FontWeight.SemiBold } },
+            };
+            var head = LaneStack(HeaderH);
+            head.Children.Add(stopAll);
+            head.Children.Add(MixerRailLabels());
+            _footerRow.Children.Add(head);
+            return;
+        }
+
+        addScene.Height = SpacerH; addScene.HorizontalAlignment = HorizontalAlignment.Stretch;
+        stopAll.Height = StopRowH; stopAll.HorizontalAlignment = HorizontalAlignment.Stretch;
+        stopAll.Content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 7,
+            Children = { new Glyph(GlyphKind.Stop, 7), new TextBlock { Text = Loc.T("session.grid.stop_all_clips"), FontSize = 9, FontWeight = FontWeight.SemiBold } },
+        };
+        var foot = new StackPanel { Width = SceneRailW, Spacing = Gap, Children = { addScene, stopAll } };
+        foot.Children.Add(MixerRailLabels());
+        _footerRow.Children.Add(foot);
+    }
+
+    // ---- columns ------------------------------------------------------------------
+
+    // A track, group, Return or Master: a column (Scenes down) or a lane (Scenes across).
+    private void AddColumn(Column c)
+    {
+        c.Header = new ColumnHeader(this, c);
+        _headerRow.Children.Add(c.Header);
+
+        var mid = LaneStack(_across ? _laneH : c.Width);
+        for (int s = 0; s < _sceneCount; s++)
+        {
+            Control cell = c.Kind switch
+            {
+                ColKind.Track => new SlotCell(this, c, s),
+                ColKind.Group => new GroupCell(this, c, s),
+                _ => new BlankCell(SlotW(c), SlotH),
+            };
+            c.Cells.Add(cell);
+            mid.Children.Add(cell);
+        }
+        _cellsRow.Children.Add(mid);
+
+        var foot = LaneStack(_across ? _laneH : c.Width);
+        if (!_across) foot.Children.Add(new Border { Height = SpacerH });
+        double stopW = _across ? StopColW : double.NaN, stopH = _across ? _laneH : StopRowH;
+        if (c.Kind is ColKind.Track or ColKind.Group)
+        {
+            var stop = new Button { Width = stopW, Height = stopH, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(0), Content = new Glyph(GlyphKind.Stop, 7) };
+            ToolTip.SetTip(stop, c.Kind == ColKind.Group ? Loc.T("session.grid.stop_every_track_in_this") : Loc.T("session.grid.stop_this_track"));
+            stop.Click += (_, _) => { StopColumn(c); UpdateStates(); };
+            foot.Children.Add(stop);
+        }
+        else foot.Children.Add(new Border { Width = stopW, Height = stopH });
+        c.Mixer = BuildMixer(c);
+        foot.Children.Add(c.Mixer.Root);
+        _footerRow.Children.Add(foot);
+    }
+
+    // ---- small builders -----------------------------------------------------------
+
+    private static TextBlock Text(string text, double size, IBrush ink, FontWeight? weight = null)
+        => new() { Text = text, FontSize = size, Foreground = ink, FontWeight = weight ?? FontWeight.Normal, VerticalAlignment = VerticalAlignment.Center };
+
+    private static TextBlock Mono(string text, double size, IBrush ink)
+    {
+        var t = new TextBlock { Text = text, FontSize = size, Foreground = ink, VerticalAlignment = VerticalAlignment.Center };
+        t.BindResource(TextBlock.FontFamilyProperty, "Font.Measure");
+        return t;
+    }
+
+    private static FormattedText Ft(string text, Typeface face, double size, IBrush ink, double maxWidth = double.PositiveInfinity)
+    {
+        var ft = new NotaFormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, size, ink);
+        if (!double.IsInfinity(maxWidth)) { ft.MaxTextWidth = Math.Max(1, maxWidth); ft.MaxLineCount = 1; ft.Trimming = TextTrimming.CharacterEllipsis; }
+        return ft;
+    }
+
+    private static readonly IPen SelPen = new Pen(NotaPalette.TextPrimary, 1.5);   // style guide: a selected slot is outlined in the text colour, not orange
+    private static readonly IPen PlayheadPen = new Pen(NotaPalette.TextPrimary, 1);
+
+    // The almanac's play triangle, drawn in a w×h box centred on c.
+    private static void DrawTriangle(DrawingContext ctx, Point c, double w, double h, IBrush fill)
+    {
+        var g = new StreamGeometry();
+        using (var gc = g.Open())
+        {
+            gc.BeginFigure(new Point(c.X - w / 2, c.Y - h / 2), true);
+            gc.LineTo(new Point(c.X + w / 2, c.Y));
+            gc.LineTo(new Point(c.X - w / 2, c.Y + h / 2));
+            gc.EndFigure(true);
+        }
+        ctx.DrawGeometry(fill, null, g);
+    }
+
+    // Progress pie: a dim disc with the played fraction filled clockwise from 12 o'clock.
+    private static void DrawPie(DrawingContext ctx, Point c, double r, double frac)
+    {
+        ctx.DrawEllipse(NotaPalette.Wash(NotaPalette.Success, 0x33), null, c, r, r);
+        frac = Math.Clamp(frac, 0, 1);
+        if (frac <= 0.001) return;
+        if (frac >= 0.999) { ctx.DrawEllipse(NotaPalette.Success, null, c, r, r); return; }
+        double a = frac * Math.PI * 2;
+        var end = new Point(c.X + r * Math.Sin(a), c.Y - r * Math.Cos(a));
+        var g = new StreamGeometry();
+        using (var gc = g.Open())
+        {
+            gc.BeginFigure(c, true);
+            gc.LineTo(new Point(c.X, c.Y - r));
+            gc.ArcTo(end, new Size(r, r), 0, frac > 0.5, SweepDirection.Clockwise);
+            gc.EndFigure(true);
+        }
+        ctx.DrawGeometry(NotaPalette.Success, null, g);
+    }
+
+    private static void DrawSelection(DrawingContext ctx, Rect r)
+        => ctx.DrawRectangle(null, SelPen, new Rect(r.X - 1.5, r.Y - 1.5, r.Width + 3, r.Height + 3).Normalize(), NotaRadius.GroupValue - 1, NotaRadius.GroupValue - 1);
+
+    private static void FillCell(DrawingContext ctx, Rect r, IBrush bg, IBrush? border)
+    {
+        ctx.DrawRectangle(bg, border is null ? null : new Pen(border, 1), r.Deflate(0.5), NotaRadius.CellValue, NotaRadius.CellValue);
+    }
+
+    /// <summary>The track slot under a point in this view's coordinates (clip drag target).</summary>
+    private (Column Col, int Scene)? SlotAt(Point p)
+    {
+        foreach (var c in LaunchCols)
+            for (int s = 0; s < c.Cells.Count; s++)
+                if (this.TranslatePoint(p, c.Cells[s]) is { } q && new Rect(c.Cells[s].Bounds.Size).Contains(q)) return (c, s);
+        return null;
+    }
+
+    private void PromptText(Control anchor, string current, Action<string> commit)
+    {
+        var box = new TextBox { Text = current, Width = 180, FontSize = 11, Classes = { "field" } };
+        var flyout = new Flyout { Content = box, Placement = Avalonia.Controls.PlacementMode.Pointer };
+        box.KeyDown += (_, ke) =>
+        {
+            if (ke.Key == Key.Enter) { commit((box.Text ?? "").Trim()); flyout.Hide(); ke.Handled = true; }
+            else if (ke.Key == Key.Escape) { flyout.Hide(); ke.Handled = true; }
+        };
+        flyout.ShowAt(anchor);
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => { box.SelectAll(); box.Focus(); }, Avalonia.Threading.DispatcherPriority.Input);
+    }
+
+    // ---- column header -------------------------------------------------------------
+
+    private sealed class ColumnHeader : Border
+    {
+        private readonly SessionView _o;
+        private readonly Column _c;
+        private readonly Border? _arr;
+
+        public ColumnHeader(SessionView o, Column c)
+        {
+            _o = o; _c = c;
+            Width = o.HeaderW(c); Height = o.HeaderHt;
+            CornerRadius = NotaRadius.Cell;
+            BorderThickness = new Thickness(1);
+            ClipToBounds = true;
+
+            var stripe = new Border { Height = 3, VerticalAlignment = VerticalAlignment.Top, Background = c.Kind == ColKind.Master ? NotaPalette.Master : c.Brush };
+            var name = new TextBlock
+            {
+                Text = c.Name, FontSize = 11, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = c.Kind == ColKind.Return ? NotaPalette.TextSecondary : NotaPalette.TextPrimary, VerticalAlignment = VerticalAlignment.Center,
+            };
+            ToolTip.SetTip(name, c.Name);   // a long name is cut with an ellipsis; the whole of it on hover
+            var top = new DockPanel { LastChildFill = true };
+            if (c.Kind == ColKind.Group)
+            {
+                bool folded = o._collapsed.Contains(c.TrackId);
+                var chevron = new Border
+                {
+                    Width = 14, Height = 14, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
+                    Child = new Glyph(folded ? GlyphKind.ChevronRight : GlyphKind.ChevronDown, 8) { Foreground = NotaPalette.TextSecondary },
+                    Margin = new Thickness(0, 0, 4, 0),
+                };
+                ToolTip.SetTip(chevron, folded ? Loc.T("session.grid.show_the_groups_tracks") : Loc.T("session.grid.fold_the_group_into_one"));
+                chevron.PointerPressed += (_, e) =>
+                {
+                    e.Handled = true;
+                    if (!o._collapsed.Add(c.TrackId)) o._collapsed.Remove(c.TrackId);
+                    o.Refresh();
+                };
+                DockPanel.SetDock(chevron, Dock.Left);
+                top.Children.Add(chevron);
+            }
+            if (c.Kind == ColKind.Track)
+            {
+                var arrText = new TextBlock { Text = Loc.T("session.grid.arr"), FontSize = 8, FontWeight = FontWeight.Medium, Foreground = NotaPalette.Accent };
+                arrText.BindResource(TextBlock.FontFamilyProperty, "Font.Measure");
+                _arr = new Border
+                {
+                    BorderBrush = NotaPalette.AccentDim, BorderThickness = new Thickness(1), CornerRadius = NotaRadius.Field,
+                    Padding = new Thickness(3, 0), Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+                    Cursor = new Cursor(StandardCursorType.Hand), Child = arrText, IsVisible = false,
+                };
+                ToolTip.SetTip(_arr, Loc.T("session.grid.back_to_arrangement_for_this"));
+                _arr.PointerPressed += (_, e) => { e.Handled = true; o._engine.TrackBackToArrangement(c.TrackId); o.UpdateStates(); };
+                DockPanel.SetDock(_arr, Dock.Right);
+                top.Children.Add(_arr);
+            }
+            top.Children.Add(name);
+
+            var kind = new TextBlock { Text = c.KindLabel, FontSize = 8.5, FontWeight = FontWeight.Medium, Foreground = NotaPalette.TextMuted, TextTrimming = TextTrimming.CharacterEllipsis };
+            kind.BindResource(TextBlock.FontFamilyProperty, "Font.Measure");
+            var stack = new StackPanel { Spacing = 4, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 3, 8, 0), Children = { top, kind } };
+            Child = new Panel { Children = { stripe, stack } };
+
+            // A Browser drop on the header (#313): an instrument replaces this track's (or, on an
+            // audio / return column, starts a track after it); effects and presets go on the track.
+            DragDrop.SetAllowDrop(this, true);
+            DragDrop.AddDragOverHandler(this, (_, e) =>
+            {
+                e.DragEffects = o.DragEffectFor(e, c, header: true);
+                BorderBrush = e.DragEffects != DragDropEffects.None ? NotaPalette.Accent : BorderBrush;
+                e.Handled = true;
+            });
+            DragDrop.AddDragLeaveHandler(this, (_, _) => Sync());
+            DragDrop.AddDropHandler(this, (_, e) =>
+            {
+                Sync();
+                if (o.TryDeviceDrop(e, c)) return;
+                var items = BrowserView.DroppedItems(e);
+                if (items.Count > 0 && c.Kind != ColKind.Master) { o.RaiseDrop(items[0], c.TrackId, -1, c.IsInstrument); e.Handled = true; }
+            });
+
+            PointerPressed += (_, e) =>
+            {
+                var pp = e.GetCurrentPoint(this).Properties;
+                if (pp.IsRightButtonPressed) { e.Handled = true; o.ShowHeaderMenu(this, c); return; }
+                if (!pp.IsLeftButtonPressed) return;
+                // A Return / Master column selects that track (Devices follow); it has no slots (#314).
+                if (c.Kind is ColKind.Return or ColKind.Master) { o.Select(new Selection(SelKind.Bus, o.BusId(c), o._sel.Scene)); return; }
+                if (e.ClickCount == 2) { o.PromptRenameTrack(this, c.TrackId); return; }
+                o.Select(new Selection(SelKind.Slot, c.TrackId, o._sel.Scene));
+            };
+            Sync();
+        }
+
+        public void Sync()
+        {
+            bool sel = _c.Kind is ColKind.Track or ColKind.Group
+                ? _o._sel.Kind == SelKind.Slot && _o._sel.TrackId == _c.TrackId
+                : _o._sel.Kind == SelKind.Bus && _o._sel.TrackId == _o.BusId(_c);
+            Background = sel ? NotaPalette.SelHeaderBg : _c.Kind is ColKind.Return or ColKind.Master ? NotaPalette.Panel : NotaPalette.SurfaceCard;
+            BorderBrush = Brushes.Transparent;
+            if (_arr is not null) _arr.IsVisible = _o._engine.SessionPlayingSlot(_c.TrackId) >= 0;
+        }
+    }
+
+    // ---- cells ----------------------------------------------------------------------
+
+    /// <summary>A cell polled at the UI clock: repaints itself only when its look changed.</summary>
+    private interface ILiveCell { void Tick(); }
+
+    private sealed class BlankCell : Control
+    {
+        public BlankCell(double w, double h) { Width = w; Height = h; }
+        public override void Render(DrawingContext ctx) => FillCell(ctx, new Rect(Bounds.Size), NotaPalette.SurfaceDeep, null);
+    }
+
+    /// <summary>A track's clip slot: empty (stop / record affordance), a clip, or a take
+    /// being recorded.</summary>
+    private sealed class SlotCell : Control, ILiveCell
+    {
+        private readonly SessionView _o;
+        private readonly Column _c;
+        private readonly int _scene;
+        private readonly bool _filled;
+        private readonly string _name = "";
+        private readonly string _len = "";
+        private readonly double _lenBeats;
+        private readonly SolidColorBrush _brush;
+        private readonly bool _stopButton;
+        private readonly bool _followHeld;   // follow actions configured but bypassed (#499)
+        private readonly string _prepared = ""; // an empty slot's own next-take length (#503)
+        private readonly List<(double Start, double Len, int Pitch)> _notes = new();
+        private int _minPitch, _maxPitch;
+        private readonly float[]? _peaks;
+        private int _peakCount;
+        private bool _dropHover, _hoverLaunch, _hoverCentre;
+        private Point _pressAt;
+        private bool _pressed, _dragging, _launched;
+
+        public SlotCell(SessionView o, Column c, int scene)
+        {
+            _o = o; _c = c; _scene = scene;
+            Width = o.SlotW(c); Height = o.SlotH;
+            var eng = o._engine;
+            _filled = eng.SessionSlotState(c.TrackId, scene) != 0;
+            _brush = _filled ? o.ClipBrush(c, scene) : c.Brush;
+            _stopButton = eng.GetSessionSlotStopButton(c.TrackId, scene);
+            if (!_filled && eng.TryGetSessionSlotTakeLength(c.TrackId, scene, out var take))
+                _prepared = TakeLengthText(take);
+            if (_filled)
+            {
+                _name = o.ClipName(c, scene);
+                _lenBeats = eng.SessionSlotLength(c.TrackId, scene);
+                _len = FormatLength(_lenBeats);
+                _followHeld = eng.TryGetSessionClipProps(c.TrackId, scene, out var cp) && cp.FollowBypass != 0
+                    && (cp.FollowA != (int)SessionFollowAction.None || cp.FollowB != (int)SessionFollowAction.None);
+                if (c.IsInstrument)
+                {
+                    foreach (var n in eng.GetSessionNotes(c.TrackId, scene))
+                        _notes.Add((n.StartBeat, n.LengthBeats, n.Pitch));
+                    if (_notes.Count > 0) { _minPitch = _notes.Min(n => n.Pitch); _maxPitch = _notes.Max(n => n.Pitch); }
+                }
+                else
+                {
+                    _peaks = new float[44 * 2];
+                    _peakCount = eng.GetSessionSlotPeaks(c.TrackId, scene, _peaks, 44);
+                }
+            }
+
+            DragDrop.SetAllowDrop(this, true);
+            DragDrop.AddDragOverHandler(this, (_, e) => { e.DragEffects = o.DragEffectFor(e, c, header: false); e.Handled = true; });
+            DragDrop.AddDragEnterHandler(this, (_, e) => { if (o.DragEffectFor(e, c, header: false) != DragDropEffects.None) { _dropHover = true; InvalidateVisual(); } });
+            DragDrop.AddDragLeaveHandler(this, (_, _) => { _dropHover = false; InvalidateVisual(); });
+            DragDrop.AddDropHandler(this, (_, e) =>
+            {
+                _dropHover = false; InvalidateVisual();
+                if (o.TryDeviceDrop(e, c)) return;
+                var items = BrowserView.DroppedItems(e);
+                if (items.Count > 0) { _o.RaiseDrop(items[0], c.TrackId, scene, c.IsInstrument); e.Handled = true; }
+            });
+        }
+
+        private static readonly Rect LaunchZone = new(3, 3, 18, 18);
+        private Rect CentreZone => new(Bounds.Width / 2 - 8, Bounds.Height / 2 - 8, 16, 16);
+        // The take's own slot, or another slot recording along with it (specs/086).
+        private bool Recording => (_o._recTrack == _c.TrackId && _o._recScene == _scene)
+                                  || (_o._recScene >= 0 && _o._engine.SessionSlotState(_c.TrackId, _scene) == 4);
+        private int _lastState = -1;
+        private bool _lastArmed, _lastDrag;
+
+        public void Tick()
+        {
+            int st = Recording ? 4 : _o._engine.SessionSlotState(_c.TrackId, _scene);
+            bool armed = _o._armed.Contains(_c.TrackId);
+            bool drag = _o._dragTarget == (_c.TrackId, _scene);
+            bool animating = st is 2 or 3 or 4;   // blink, progress, elapsed
+            if (st == _lastState && armed == _lastArmed && drag == _lastDrag && !animating) return;
+            _lastState = st; _lastArmed = armed; _lastDrag = drag;
+            InvalidateVisual();
+        }
+
+        protected override void OnPointerMoved(PointerEventArgs e)
+        {
+            var p = e.GetPosition(this);
+            bool hl = LaunchZone.Contains(p), hc = CentreZone.Contains(p);
+            if (hl != _hoverLaunch || hc != _hoverCentre) { _hoverLaunch = hl; _hoverCentre = hc; InvalidateVisual(); }
+            Cursor = (_filled || Recording) && hl || !_filled && hc ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            bool queuedTip = _filled && hl && _o._engine.SessionSlotLaunchQueued(_c.TrackId, _scene);
+            if (queuedTip != (ToolTip.GetTip(this) is not null)) ToolTip.SetTip(this, queuedTip ? Loc.T("session.grid.queued_alt_click_to_cancel") : null);
+
+            if (_pressed && _filled && !_dragging && Math.Abs(p.X - _pressAt.X) + Math.Abs(p.Y - _pressAt.Y) > 5) _dragging = true;
+            if (_dragging)
+            {
+                Cursor = new Cursor(StandardCursorType.DragMove);
+                var hit = _o.SlotAt(e.GetPosition(_o));
+                var t = hit is { } h && (h.Col.TrackId, h.Scene) != (_c.TrackId, _scene) ? (h.Col.TrackId, h.Scene) : ((int, int)?)null;
+                if (t != _o._dragTarget) { _o._dragTarget = t; _o.UpdateStates(); }
+            }
+        }
+
+        protected override void OnPointerExited(PointerEventArgs e)
+        {
+            if (_hoverLaunch || _hoverCentre) { _hoverLaunch = _hoverCentre = false; InvalidateVisual(); }
+        }
+
+        protected override void OnPointerPressed(PointerPressedEventArgs e)
+        {
+            var pt = e.GetCurrentPoint(this);
+            var p = pt.Position;
+            if (pt.Properties.IsRightButtonPressed)
+            {
+                _o.Select(new Selection(SelKind.Slot, _c.TrackId, _scene));
+                _o.ShowSlotMenu(this, _c, _scene);
+                e.Handled = true;
+                return;
+            }
+            if (!pt.Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+
+            if (Recording && LaunchZone.Contains(p)) { _o._engine.StopSessionRecordSlot(_c.TrackId); _o.Refresh(); return; }
+            if (_filled && LaunchZone.Contains(p) && (e.KeyModifiers & KeyModifiers.Alt) != 0
+                && _o._engine.SessionSlotLaunchQueued(_c.TrackId, _scene))
+            {
+                _o.CancelSlotLaunch(_c.TrackId, _scene);   // #480: Alt+click withdraws a queued launch
+                return;
+            }
+            if (_filled && LaunchZone.Contains(p))
+            {
+                _o.LaunchSlotVisual(_c, _scene);
+                _o._engine.LaunchSlotVelocity(_c.TrackId, _scene, 1f);
+                _launched = true;
+                e.Pointer.Capture(this);   // a Gate / Repeat clip stops when the button lets go
+                _o.UpdateStates();
+                return;
+            }
+            if (!_filled && !Recording && CentreZone.Contains(p))
+            {
+                if (_o._armed.Contains(_c.TrackId)) { _o._engine.RecordSessionSlot(_c.TrackId, _scene); _o.Refresh(); }
+                else if (_stopButton) { _o._engine.StopSlot(_c.TrackId); _o.UpdateStates(); }
+                return;
+            }
+
+            _o.Select(new Selection(SelKind.Slot, _c.TrackId, _scene), renotify: _filled && e.ClickCount == 1);
+            if (e.ClickCount == 2)
+            {
+                if (_filled) _o.SlotEditRequested?.Invoke(_c.TrackId, _scene);
+                else if (_c.IsInstrument) { _o.InsertMidiClip(_c.TrackId, _scene); _o.SlotEditRequested?.Invoke(_c.TrackId, _scene); }
+                return;
+            }
+            _pressed = true; _pressAt = p;
+            e.Pointer.Capture(this);
+        }
+
+        protected override void OnPointerReleased(PointerReleasedEventArgs e)
+        {
+            if (_launched) { _launched = false; _o._engine.ReleaseSlot(_c.TrackId, _scene); }
+            bool wasDragging = _dragging;
+            _pressed = _dragging = false;
+            e.Pointer.Capture(null);
+            if (wasDragging && _o._dragTarget is { } t)
+            {
+                bool copy = (e.KeyModifiers & KeyModifiers.Alt) != 0;   // Alt+drag copies
+                _o._dragTarget = null;
+                if (_o.MoveOrCopySlot(_c.TrackId, _scene, t.TrackId, t.Scene, move: !copy))
+                {
+                    _o.Select(new Selection(SelKind.Slot, t.TrackId, t.Scene));
+                    _o.Say(copy ? Loc.T("session.copied_clip") : Loc.T("session.moved_clip"));
+                }
+                else _o.Say(Loc.T("session.grid.drop_a_midi_clip_on"));
+                return;
+            }
+            if (_o._dragTarget is not null) { _o._dragTarget = null; _o.UpdateStates(); }
+        }
+
+        public override void Render(DrawingContext ctx)
+        {
+            var r = new Rect(Bounds.Size);
+            var eng = _o._engine;
+            bool selected = _o._sel.Kind == SelKind.Slot && _o._sel.TrackId == _c.TrackId && _o._sel.Scene == _scene;
+            bool dropTarget = _dropHover || _o._dragTarget == (_c.TrackId, _scene);
+
+            if (Recording) { RenderRecording(ctx, r); if (selected) DrawSelection(ctx, r); return; }
+
+            if (!_filled)
+            {
+                FillCell(ctx, r, NotaPalette.Well, dropTarget ? NotaPalette.Accent : null);
+                var c = r.Center;
+                if (_o._armed.Contains(_c.TrackId))
+                    ctx.DrawEllipse(null, new Pen(_hoverCentre ? NotaPalette.Record : NotaPalette.TextMuted, 1.5), c, 3.25, 3.25);
+                else if (_stopButton)
+                    ctx.DrawRectangle(_hoverCentre ? NotaPalette.TextSecondary : NotaPalette.BorderStrong, null, new Rect(c.X - 3, c.Y - 3, 6, 6), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+                if (_prepared.Length > 0)
+                {
+                    // The next take's own length (#503), where a clip shows its length — muted, no name.
+                    var prepFt = Ft(_prepared, NotaFonts.Measure, 10, NotaPalette.TextMuted, r.Width - 12);
+                    ctx.DrawText(prepFt, new Point(r.Width - 6 - prepFt.Width, (TopRowH - prepFt.Height) / 2));
+                }
+                if (selected) DrawSelection(ctx, r);
+                return;
+            }
+
+            int state = eng.SessionSlotState(_c.TrackId, _scene);
+            bool playing = state == 3, queued = state == 2;
+            bool leaving = playing && QueuedElsewhere();   // another slot on this track is about to take over
+            double pos = playing ? eng.SessionSlotPosition(_c.TrackId) : 0;
+            double frac = playing && _lenBeats > 0 ? pos / _lenBeats : 0;
+
+            IBrush bg = NotaPalette.Wash(_brush, playing ? (byte)0x45 : (byte)0x33);   // the clip's 20 % track tint
+            IBrush border = dropTarget ? NotaPalette.Accent
+                : playing ? NotaPalette.Success
+                : queued ? (_o._blinkOn ? NotaPalette.Warning : NotaPalette.Wash(NotaPalette.Warning, 0x66))
+                : NotaPalette.Wash(_brush, 0x55);
+            FillCell(ctx, r, bg, border);
+
+            // Launch: a triangle (queued blinks between full and dim Caution), or the
+            // progress pie while the clip plays.
+            var lc = LaunchZone.Center;
+            bool blinkDim = (queued || leaving) && !_o._blinkOn;
+            if (_hoverLaunch) ctx.DrawRectangle(NotaPalette.Wash(NotaPalette.TextPrimary, 0x14), null, LaunchZone, NotaRadius.FieldValue, NotaRadius.FieldValue);
+            if (playing && !leaving) DrawPie(ctx, lc, 5.5, frac);
+            else
+            {
+                IBrush tri = queued ? (blinkDim ? NotaPalette.Wash(NotaPalette.Warning, 0x66) : NotaPalette.Warning)
+                    : playing ? (blinkDim ? NotaPalette.Wash(NotaPalette.Success, 0x66) : NotaPalette.Success)
+                    : _hoverLaunch ? NotaPalette.TextPrimary : NotaPalette.TextSecondary;
+                DrawTriangle(ctx, lc, 8, 9, tri);
+            }
+
+            var lenFt = Ft(_len, NotaFonts.Measure, 10, playing ? NotaPalette.TextStrong : NotaPalette.TextTertiary);
+            double lenX = r.Width - 6 - lenFt.Width;
+            ctx.DrawText(lenFt, new Point(lenX, (TopRowH - lenFt.Height) / 2));
+            if (_followHeld)
+            {
+                // Its follow actions are bypassed: the Bypass ring left of the length.
+                lenX -= 13;
+                Glyph.Draw(ctx, GlyphKind.Bypass, new Rect(lenX, (TopRowH - 10) / 2, 10, 10), playing ? NotaPalette.TextStrong : NotaPalette.TextSecondary);
+                lenX -= 2;
+            }
+            var nameFt = Ft(_name, NotaFonts.SansSemiBold, NotaType.ClipName, _brush, lenX - 27 - 4);
+            ctx.DrawText(nameFt, new Point(27, (TopRowH - nameFt.Height) / 2));
+
+            var area = new Rect(7, 25, r.Width - 14, r.Height - 31);
+            DrawPreview(ctx, area);
+            if (playing)
+            {
+                double x = area.X + Math.Clamp(frac, 0, 1) * area.Width;
+                ctx.DrawLine(PlayheadPen, new Point(Math.Round(x) + 0.5, area.Y - 2), new Point(Math.Round(x) + 0.5, area.Bottom + 2));
+            }
+            if (selected) DrawSelection(ctx, r);
+        }
+
+        private bool QueuedElsewhere()
+        {
+            for (int s = 0; s < _o._sceneCount; s++)
+                if (s != _scene && _o._engine.SessionSlotState(_c.TrackId, s) == 2) return true;
+            return false;
+        }
+
+        private void DrawPreview(DrawingContext ctx, Rect area)
+        {
+            if (_c.IsInstrument)
+            {
+                if (_notes.Count == 0 || _lenBeats <= 0) return;
+                int range = Math.Max(1, _maxPitch - _minPitch);
+                foreach (var n in _notes)
+                {
+                    if (n.Start >= _lenBeats) continue;
+                    double x = area.X + n.Start / _lenBeats * area.Width;
+                    double w = Math.Max(1.5, Math.Min(n.Len, _lenBeats - n.Start) / _lenBeats * area.Width);
+                    double y = area.Y + (_maxPitch - n.Pitch) / (double)range * (area.Height - 3);
+                    ctx.DrawRectangle(_brush, null, new Rect(x, y, w, 3), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+                }
+                return;
+            }
+            DrawPeaks(ctx, area, _peaks, _peakCount, _brush);
+        }
+
+        private void RenderRecording(DrawingContext ctx, Rect r)
+        {
+            // Waiting for the take to begin: a fresh take before its launch quantum, or a retried
+            // one (⌘., specs/078) before the boundary it records from — slot state 5.
+            bool waiting = _o._recElapsed <= 0 || _o._engine.SessionSlotState(_c.TrackId, _scene) == 5;
+            FillCell(ctx, r, NotaPalette.Wash(NotaPalette.Record, 0x33), NotaPalette.Record);
+            var lc = LaunchZone.Center;
+            ctx.DrawEllipse(waiting && !_o._blinkOn ? NotaPalette.Wash(NotaPalette.Record, 0x66) : NotaPalette.Record, null, lc, 4.5, 4.5);
+            var lenFt = Ft(FormatDuration(waiting ? 0 : _o._recElapsed), NotaFonts.Measure, 9, NotaPalette.DangerBright);
+            double lenX = r.Width - 6 - lenFt.Width;
+            ctx.DrawText(lenFt, new Point(lenX, (TopRowH - lenFt.Height) / 2));
+            var nameFt = Ft(waiting ? Loc.T("session.grid.rec_in") : Loc.T("session.recording"), NotaFonts.SansMedium, 11, NotaPalette.TextHeading, lenX - 31);
+            ctx.DrawText(nameFt, new Point(27, (TopRowH - nameFt.Height) / 2));
+            if (!_c.IsInstrument)
+            {
+                var buf = new float[44 * 2];
+                int n = _o._engine.AudioRecordPeaksOf(_c.TrackId, buf, 44);   // this slot's lane (specs/086)
+                DrawPeaks(ctx, new Rect(7, 25, r.Width - 14, r.Height - 31), buf, n, NotaPalette.DangerBright);
+            }
+            else DrawRecordingNotes(ctx, new Rect(7, 25, r.Width - 14, r.Height - 31));
+        }
+
+        // A MIDI slot being recorded (#56): the notes stored so far plus the keys held into it,
+        // growing to the slot's clock; a held note that wrapped past the loop end draws as its
+        // tail plus the part from the loop start. New notes settle in from the accent.
+        private void DrawRecordingNotes(DrawingContext ctx, Rect area)
+        {
+            var rp = _o.RecordPreview;
+            var stored = _o._engine.GetSessionNotes(_c.TrackId, _scene);
+            ReadOnlySpan<NotaRecordHeldNote> held = rp is { } p0 && p0.TrackId == _c.TrackId && p0.SessionScene == _scene
+                ? p0.Held : ReadOnlySpan<NotaRecordHeldNote>.Empty;
+            if ((stored.Length == 0 && held.IsEmpty) || area.Width <= 0 || area.Height <= 3) return;
+            double slotLen = _o._engine.SessionSlotLength(_c.TrackId, _scene);
+            // An open-ended take shows whole bars recorded so far, not its provisional length.
+            double len = Math.Min(slotLen > 0 ? slotLen : 4, Math.Max(4, Math.Ceiling((_o._recElapsed + 1e-6) / 4) * 4));
+            int lo = 127, hi = 0;
+            foreach (var n in stored) { lo = Math.Min(lo, n.Pitch); hi = Math.Max(hi, n.Pitch); }
+            foreach (var h in held) { lo = Math.Min(lo, h.Pitch); hi = Math.Max(hi, h.Pitch); }
+            int range = Math.Max(1, hi - lo);
+            var ink = NotaPalette.DangerBright;
+            using var _ = ctx.PushClip(area);
+            void Bar(int pitch, double start, double length, double prog)
+            {
+                double x = area.X + start / len * area.Width;
+                double wd = Math.Max(1.5, Math.Min(length, len - start) / len * area.Width);
+                double y = area.Y + (hi - pitch) / (double)range * (area.Height - 3);
+                var b = prog < 1 ? RecordPreview.AppearBrush(ink.Color, prog) : ink;
+                ctx.DrawRectangle(b, null, new Rect(x, y, wd, 3), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+            }
+            foreach (var n in stored)
+                if (n.StartBeat < len) Bar(n.Pitch, n.StartBeat, n.LengthBeats, rp?.Progress(n.Pitch, n.StartBeat) ?? 1);
+            double now = rp?.NowBeat ?? 0;
+            foreach (var h in held)
+            {
+                double prog = rp!.Progress(h.Pitch, h.StartBeat);
+                if (now >= h.StartBeat) Bar(h.Pitch, h.StartBeat, now - h.StartBeat, prog);
+                else { Bar(h.Pitch, h.StartBeat, len - h.StartBeat, prog); Bar(h.Pitch, 0, now, prog); }   // wrapped
+            }
+        }
+    }
+
+    // Waveform preview: one bar per peak bucket, centred, scaled to the loudest bucket.
+    private static void DrawPeaks(DrawingContext ctx, Rect area, float[]? peaks, int count, IBrush ink)
+    {
+        if (peaks is null || count <= 0) return;
+        float max = 1e-6f;
+        for (int i = 0; i < count; i++) max = Math.Max(max, Math.Max(Math.Abs(peaks[i * 2]), Math.Abs(peaks[i * 2 + 1])));
+        double step = area.Width / count, bw = Math.Max(1, step * 0.62);
+        for (int i = 0; i < count; i++)
+        {
+            double a = Math.Max(Math.Abs(peaks[i * 2]), Math.Abs(peaks[i * 2 + 1])) / max;
+            double h = Math.Max(1, a * area.Height);
+            ctx.DrawRectangle(ink, null, new Rect(area.X + i * step, area.Y + (area.Height - h) / 2, bw, h), NotaSkin.MapRadius(0.5), NotaSkin.MapRadius(0.5));
+        }
+    }
+
+    /// <summary>A group's slot: launches every child slot in the scene; shows how many
+    /// children hold a clip there and one bar per child.</summary>
+    private sealed class GroupCell : Control, ILiveCell
+    {
+        private readonly SessionView _o;
+        private readonly Column _g;
+        private readonly int _scene;
+        private readonly List<(int Id, bool Has, SolidColorBrush Brush)> _kids = new();
+        private bool _hoverLaunch;
+
+        public GroupCell(SessionView o, Column g, int scene)
+        {
+            _o = o; _g = g; _scene = scene;
+            Width = o.SlotW(g); Height = o.SlotH;
+            foreach (int id in g.Children)
+                _kids.Add((id, o._engine.SessionSlotState(id, scene) != 0, ArrangementView.TrackBrush(ArrangementView.EffectiveColorIndex(o._engine, id))));
+        }
+
+        private static readonly Rect LaunchZone = new(3, 3, 18, 18);
+        private bool Any => _kids.Any(k => k.Has);
+        private int _lastSig = -1;
+
+        public void Tick()
+        {
+            int sig = 0;
+            foreach (var k in _kids) sig = sig * 5 + (k.Has ? _o._engine.SessionSlotState(k.Id, _scene) : 0);
+            if (sig == _lastSig) return;
+            _lastSig = sig;
+            InvalidateVisual();
+        }
+
+        protected override void OnPointerMoved(PointerEventArgs e)
+        {
+            bool h = Any && LaunchZone.Contains(e.GetPosition(this));
+            if (h != _hoverLaunch) { _hoverLaunch = h; Cursor = h ? new Cursor(StandardCursorType.Hand) : Cursor.Default; InvalidateVisual(); }
+        }
+
+        protected override void OnPointerPressed(PointerPressedEventArgs e)
+        {
+            var pt = e.GetCurrentPoint(this);
+            if (!pt.Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+            var p = pt.Position;
+            if (Any && LaunchZone.Contains(p) && (e.KeyModifiers & KeyModifiers.Alt) != 0
+                && _o._engine.SessionSlotLaunchQueued(_g.TrackId, _scene))
+            { _o.CancelGroupLaunch(_g, _scene); return; }   // #480
+            if (Any && LaunchZone.Contains(p)) { _o.LaunchGroup(_g, _scene); _o.UpdateStates(); return; }
+            if (!Any && new Rect(Bounds.Width / 2 - 8, Bounds.Height / 2 - 8, 16, 16).Contains(p)) { _o.StopColumn(_g); _o.UpdateStates(); return; }
+            _o.Select(new Selection(SelKind.Slot, _g.TrackId, _scene));
+        }
+
+        public override void Render(DrawingContext ctx)
+        {
+            var r = new Rect(Bounds.Size);
+            bool selected = _o._sel.Kind == SelKind.Slot && _o._sel.TrackId == _g.TrackId && _o._sel.Scene == _scene;
+            if (!Any)
+            {
+                FillCell(ctx, r, NotaPalette.Well, null);
+                ctx.DrawRectangle(NotaPalette.BorderStrong, null, new Rect(r.Center.X - 3, r.Center.Y - 3, 6, 6), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+                if (selected) DrawSelection(ctx, r);
+                return;
+            }
+            var eng = _o._engine;
+            bool playingAny = _kids.Any(k => k.Has && eng.SessionSlotState(k.Id, _scene) == 3);
+            FillCell(ctx, r, NotaPalette.Wash(_g.Brush, playingAny ? (byte)0x2E : (byte)0x17), playingAny ? NotaPalette.Wash(NotaPalette.Success, 0x80) : null);
+            DrawTriangle(ctx, LaunchZone.Center, 8, 9, playingAny ? NotaPalette.Success : _hoverLaunch ? NotaPalette.TextPrimary : NotaPalette.TextSecondary);
+            var label = Ft($"{_kids.Count(k => k.Has)} of {_kids.Count}", NotaFonts.Sans, 10, NotaPalette.TextSecondary);
+            ctx.DrawText(label, new Point(27, (TopRowH - label.Height) / 2));
+
+            double y = r.Height - 7 - 3;
+            for (int i = _kids.Count - 1; i >= 0 && y > TopRowH; i--, y -= 6)
+            {
+                var k = _kids[i];
+                IBrush ink = !k.Has ? NotaPalette.BorderDefault : eng.SessionSlotState(k.Id, _scene) == 3 ? NotaPalette.Success : k.Brush;
+                ctx.DrawRectangle(ink, null, new Rect(7, y, r.Width - 14, 3), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+            }
+            if (selected) DrawSelection(ctx, r);
+        }
+    }
+
+    /// <summary>A scene row in the rail: launch box, colour, name, index, tempo / signature.</summary>
+    private int? _sceneDragTarget;
+
+    private int SceneAt(Point p)
+    {
+        for (int s = 0; s < _sceneCells.Count; s++)
+        {
+            // Along the scenes' axis: down the rail (Scenes down) or across the head row (specs/108).
+            if (this.TranslatePoint(p, _sceneCells[s]) is not { } q) continue;
+            double along = _across ? q.X : q.Y, size = _across ? _sceneCells[s].Bounds.Width : _sceneCells[s].Bounds.Height;
+            if (along >= -Gap && along < size) return s;
+        }
+        if (_sceneCells.Count == 0 || this.TranslatePoint(p, _sceneCells[0]) is not { } first) return 0;
+        return (_across ? first.X : first.Y) < 0 ? 0 : _sceneCells.Count - 1;
+    }
+
+    private sealed class SceneCell : Control
+    {
+        private readonly SessionView _o;
+        private readonly int _scene;
+        private readonly string _name;
+        private readonly bool _named;
+        private readonly IBrush _color;
+        private readonly string _badge;
+        private bool _hoverLaunch;
+        private string? _cutName;   // the full name, when the cell cuts it short (shown on hover, specs/108)
+
+        public SceneCell(SessionView o, int scene)
+        {
+            _o = o; _scene = scene;
+            Width = o.SceneW; Height = o.SceneH;
+            string n = o._engine.GetSceneName(scene);
+            _named = n.Length > 0;
+            _name = _named ? n : Loc.F("session.scene", scene + 1);
+            o._engine.TryGetSceneProps(scene, out var p);
+            _color = p.Color >= 0 ? ArrangementView.TrackBrush(p.Color) : NotaPalette.BorderStrong;
+            var parts = new List<string>();
+            if (p.Tempo > 0) parts.Add(NotaNum.Str(p.Tempo, "0.##"));
+            if (p.SigNum > 0 && p.SigDen > 0) parts.Add($"{p.SigNum}/{p.SigDen}");
+            _badge = string.Join(" · ", parts);
+        }
+
+        private Rect LaunchBox => new(8, (Height - 22) / 2, 22, 22);
+        private int _lastSig = -1;
+        private bool _pressed, _dragging;
+        private Point _pressAt;
+
+        public void Tick()
+        {
+            int sig = 0;
+            bool queued = false;
+            foreach (var c in _o.LaunchCols)
+            {
+                int st = _o._engine.SessionSlotState(c.TrackId, _scene);
+                if (st == 2) queued = true;
+                sig = unchecked(sig * 7 + st);
+            }
+            if (_o._engine.SessionSceneQueued(_scene)) { queued = true; sig = unchecked(sig * 7 + 9); }   // #480: stops-only rows, restarts
+            if (_o._sceneDragTarget == _scene) sig ^= 0x5A5A;
+            if (sig == _lastSig && !queued) return;
+            _lastSig = sig;
+            InvalidateVisual();
+        }
+
+        protected override void OnPointerMoved(PointerEventArgs e)
+        {
+            var p = e.GetPosition(this);
+            bool h = LaunchBox.Contains(p);
+            if (h != _hoverLaunch) { _hoverLaunch = h; Cursor = h ? new Cursor(StandardCursorType.Hand) : Cursor.Default; InvalidateVisual(); }
+            string? tip = h && _o.SceneQueued(_scene) ? Loc.T("session.grid.queued_alt_click_to_cancel") : _cutName;
+            if (!Equals(ToolTip.GetTip(this), tip)) ToolTip.SetTip(this, tip);
+            // Drag a scene along the rail (up / down, or sideways when the grid is turned) to reorder it.
+            if (_pressed && !_dragging && Math.Abs(_o._across ? p.X - _pressAt.X : p.Y - _pressAt.Y) > 5) _dragging = true;
+            if (_dragging)
+            {
+                Cursor = new Cursor(_o._across ? StandardCursorType.SizeWestEast : StandardCursorType.SizeNorthSouth);
+                int t = _o.SceneAt(e.GetPosition(_o));
+                int? target = t == _scene ? null : t;
+                if (target != _o._sceneDragTarget) { _o._sceneDragTarget = target; _o.InvalidateAll(); }
+            }
+        }
+
+        protected override void OnPointerReleased(PointerReleasedEventArgs e)
+        {
+            bool wasDragging = _dragging;
+            _pressed = _dragging = false;
+            e.Pointer.Capture(null);
+            if (_o._sceneDragTarget is { } to && wasDragging)
+            {
+                _o._sceneDragTarget = null;
+                if (_o._engine.MoveScene(_scene, to)) { _o.Refresh(); _o.Select(new Selection(SelKind.Scene, 0, to)); _o.Say(Loc.T("session.grid.moved_scene")); }
+                return;
+            }
+            if (_o._sceneDragTarget is not null) { _o._sceneDragTarget = null; _o.InvalidateAll(); }
+        }
+
+        protected override void OnPointerExited(PointerEventArgs e) { if (_hoverLaunch) { _hoverLaunch = false; InvalidateVisual(); } }
+
+        protected override void OnPointerPressed(PointerPressedEventArgs e)
+        {
+            var pt = e.GetCurrentPoint(this);
+            if (pt.Properties.IsRightButtonPressed)
+            {
+                _o.Select(new Selection(SelKind.Scene, 0, _scene));
+                _o.ShowSceneMenu(this, _scene);
+                e.Handled = true;
+                return;
+            }
+            if (!pt.Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+            if (LaunchBox.Contains(pt.Position) && (e.KeyModifiers & KeyModifiers.Alt) != 0 && _o.SceneQueued(_scene))
+            { _o.CancelSceneLaunch(_scene); return; }   // #480: Alt+click withdraws the queued scene
+            if (LaunchBox.Contains(pt.Position)) { _o.LaunchSceneRow(_scene); _o.UpdateStates(); return; }
+            _o.Select(new Selection(SelKind.Scene, 0, _scene));
+            if (e.ClickCount == 2) { _o.PromptText(this, _named ? _name : "", t => { _o._engine.SetSceneName(_scene, t); _o.RefreshScene(_scene); }); return; }
+            _pressed = true; _pressAt = pt.Position;
+            e.Pointer.Capture(this);
+        }
+
+        public override void Render(DrawingContext ctx)
+        {
+            var r = new Rect(Bounds.Size);
+            var eng = _o._engine;
+            bool playing = false, all = true, queued = false, any = false;
+            foreach (var c in _o.LaunchCols)
+            {
+                int st = eng.SessionSlotState(c.TrackId, _scene);
+                if (st == 0) continue;
+                any = true;
+                if (st == 3) playing = true; else all = false;
+                if (st == 2) queued = true;
+            }
+            queued |= eng.SessionSceneQueued(_scene);   // #480: a row queued as a whole blinks, whatever its slots show
+            bool selected = _o._sel.Kind == SelKind.Scene && _o._sel.Scene == _scene;
+            bool rowSel = _o._sel.Kind == SelKind.Slot && _o._sel.Scene == _scene;
+            IBrush? edge = _o._sceneDragTarget == _scene ? NotaPalette.Accent : any && playing && all ? NotaPalette.Wash(NotaPalette.Success, 0x66) : null;
+            FillCell(ctx, r, rowSel ? NotaPalette.SurfaceRaised : NotaPalette.SurfaceCard, edge);
+
+            ctx.DrawRectangle(_hoverLaunch ? NotaPalette.SurfaceHover : NotaPalette.BgSunken, new Pen(NotaPalette.BorderDefault, 1), LaunchBox.Deflate(0.5), NotaRadius.CellValue, NotaRadius.CellValue);
+            IBrush tri = queued ? (_o._blinkOn ? NotaPalette.Warning : NotaPalette.Wash(NotaPalette.Warning, 0x66)) : playing ? NotaPalette.Success : NotaPalette.TextSecondary;
+            DrawTriangle(ctx, LaunchBox.Center, 8, 9, tri);
+
+            double x = LaunchBox.Right + 8;
+            ctx.DrawRectangle(_color, null, new Rect(x, r.Height / 2 - 3, 6, 6), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+            x += 14;
+            double right = r.Width - 8;
+            // The tempo / signature badge only while it leaves the name room: a scene head in a
+            // turned grid (specs/108) is a track column wide, too narrow for both.
+            var badge = _badge.Length > 0 ? Ft(_badge, NotaFonts.Measure, 9, NotaPalette.TextSecondary) : null;
+            if (badge is not null && right - x - (badge.Width + 14) < 48) badge = null;
+            if (badge is { } b)
+            {
+                var box = new Rect(right - b.Width - 8, r.Height / 2 - 8, b.Width + 8, 16);
+                ctx.DrawRectangle(null, new Pen(NotaPalette.BorderDefault, 1), box.Deflate(0.5), NotaRadius.CellValue, NotaRadius.CellValue);
+                ctx.DrawText(b, new Point(box.X + 4, box.Y + (16 - b.Height) / 2));
+                right = box.X - 6;
+            }
+            var idx = Ft((_scene + 1).ToString("00", CultureInfo.CurrentCulture), NotaFonts.Measure, 9, NotaPalette.TextDisabled);
+            double nameW = Math.Max(10, right - x - idx.Width - 6);
+            var name = Ft(_name, NotaFonts.SansSemiBold, 12, _named ? NotaPalette.TextPrimary : NotaPalette.TextTertiary, nameW);
+            // A narrow scene head (Scenes across) shows on hover what it had no room for.
+            bool cut = Ft(_name, NotaFonts.SansSemiBold, 12, NotaPalette.TextPrimary).Width > nameW;
+            bool badgeHidden = _badge.Length > 0 && badge is null;
+            _cutName = cut || badgeHidden ? (badgeHidden ? $"{_name} · {_badge}" : _name) : null;
+            ctx.DrawText(name, new Point(x, (r.Height - name.Height) / 2));
+            ctx.DrawText(idx, new Point(x + name.Width + 6, (r.Height - name.Height) / 2 + (name.Baseline - idx.Baseline)));
+            if (selected) DrawSelection(ctx, r);
+        }
+    }
+
+    // ---- context menus -------------------------------------------------------------------
+
+    // Locate ▸ for an audio take (spec 092, #581); nothing for a MIDI clip.
+    private Control[] LocateItems(int trackId, int scene)
+        => Locate is { } hooks && _engine.TryGetSessionAudioSlot(trackId, scene, out var sa)
+            ? new Control[] { LocateMenu.Build(hooks, sa.SampleId) }
+            : Array.Empty<Control>();
+
+    // Bypass / restore a clip's follow actions without changing them (#499).
+    private Control FollowBypassItem(int trackId, int scene)
+    {
+        bool held = _engine.TryGetSessionClipProps(trackId, scene, out var p) && p.FollowBypass != 0;
+        return MenuKit.Item(held ? Loc.T("session.grid.restore_follow_actions") : Loc.T("session.grid.bypass_follow_actions"), GlyphKind.Follow, () =>
+        {
+            if (!_engine.TryGetSessionClipProps(trackId, scene, out var cur)) return;
+            cur.FollowBypass = cur.FollowBypass != 0 ? 0 : 1;
+            _engine.SetSessionClipProps(trackId, scene, cur);
+            RefreshSlot(trackId, scene);   // also rebuilds the inspector
+            Say(cur.FollowBypass != 0 ? Loc.T("session.follow_bypassed") : Loc.T("session.follow_restored"));
+        });
+    }
+
+    private void ShowSlotMenu(Control anchor, Column c, int scene)
+    {
+        bool filled = SlotFilled(c.TrackId, scene);
+        var f = new MenuFlyout();
+        if (filled)
+        {
+            string name = _engine.GetSessionClipName(c.TrackId, scene);
+            MenuKit.AddGroups(f.Items,
+                new Control[] { MenuKit.Header(name.Length > 0 ? name : Loc.T("common.clip"), c.Brush, Loc.F("session.grid.scene_2", c.Name, scene + 1)) },
+                new Control?[]
+                {
+                    MenuKit.Item(Loc.T("session.launch"), GlyphKind.Play, () => _engine.LaunchSlot(c.TrackId, scene)),
+                    // #480: only while the launch waits for its boundary.
+                    _engine.SessionSlotLaunchQueued(c.TrackId, scene)
+                        ? MenuKit.Item(Loc.T("session.grid.cancel_launch"), GlyphKind.Close, () => CancelSlotLaunch(c.TrackId, scene)) : null,
+                    MenuKit.Item(Loc.T("common.edit"), GlyphKind.Edit, () => SlotEditRequested?.Invoke(c.TrackId, scene)),
+                    MenuKit.Item(Loc.T("common.rename"), GlyphKind.Edit, () => RenameSelection(), new KeyGesture(Key.F2)),
+                }.OfType<Control>().ToArray(),
+                new Control[] { FollowBypassItem(c.TrackId, scene) },
+                LocateItems(c.TrackId, scene),
+                new Control[] { MenuKit.Item(Loc.T("session.grid.copy_to_arrangement"), GlyphKind.Arrow, () => CopySelectionToArrangement(), MenuKit.CopyToOtherViewKey) },
+                new Control[] { AddTrackSubmenu(c.TrackId) },
+                MenuKit.ClipboardGroup(() => CopySelection(), () => CutSelection(), () => PasteSelection(), () => DuplicateSelection(), CanPaste),
+                new Control[] { MenuKit.Danger(Loc.T("common.delete"), GlyphKind.Trash, () => DeleteSelection(), MenuKit.DeleteKey) });
+        }
+        else
+        {
+            var create = new List<Control>();
+            if (c.IsInstrument) create.Add(MenuKit.Item(Loc.T("session.insert_midi_clip"), GlyphKind.Plus, () => InsertMidiClip(c.TrackId, scene)));
+            create.Add(MenuKit.Item(Loc.T("session.record_here"), GlyphKind.Record, () => { _engine.RecordSessionSlot(c.TrackId, scene); Refresh(); }));
+            bool stop = _engine.GetSessionSlotStopButton(c.TrackId, scene);
+            create.Add(MenuKit.Item(stop ? Loc.T("session.grid.remove_stop_button") : Loc.T("session.grid.add_stop_button"), GlyphKind.Stop, () => { _engine.SetSessionSlotStopButton(c.TrackId, scene, !stop); RefreshSlot(c.TrackId, scene); }));
+            if (TakeLengthSubmenu(c, scene) is { } takeLength) create.Add(takeLength);
+            MenuKit.AddGroups(f.Items, create,
+                new Control[] { MenuKit.Item(Loc.T("common.paste"), GlyphKind.Paste, () => PasteSelection(), MenuKit.PasteKey, CanPaste) },
+                new Control[] { AddTrackSubmenu(c.TrackId) });
+        }
+        f.ShowAt(anchor, showAtPointer: true);
+    }
+
+    // "Add …" entries: the new track lands after `anchorTrackId` (inside it for a group), or at the end.
+    private IEnumerable<MenuItem> AddTrackItems(int anchorTrackId)
+    {
+        yield return MenuKit.Item(Loc.T("session.grid.add_instrument_track"), GlyphKind.Plus, () => AddTrackRequested?.Invoke(NewTrackKind.Instrument, anchorTrackId));
+        yield return MenuKit.Item(Loc.T("session.grid.add_audio_track"), GlyphKind.Plus, () => AddTrackRequested?.Invoke(NewTrackKind.Audio, anchorTrackId));
+        yield return MenuKit.Item(Loc.T("session.grid.add_return_track"), GlyphKind.Plus, () => AddTrackRequested?.Invoke(NewTrackKind.Return, anchorTrackId));
+    }
+
+    // "Add track ▸ Instrument / Audio / Return · Recent" — the same submenu the arrangement
+    // track menu has.
+    public Func<int, IReadOnlyList<MenuItem>>? RecentInstrumentItems;
+
+    private MenuItem AddTrackSubmenu(int anchorTrackId)
+    {
+        var add = MenuKit.Item(Loc.T("session.grid.add_track"), GlyphKind.Plus);
+        add.Items.Add(MenuKit.Item(Loc.T("common.instrument"), GlyphKind.Plus, () => AddTrackRequested?.Invoke(NewTrackKind.Instrument, anchorTrackId)));
+        add.Items.Add(MenuKit.Item(Loc.T("common.audio"), GlyphKind.Plus, () => AddTrackRequested?.Invoke(NewTrackKind.Audio, anchorTrackId)));
+        add.Items.Add(MenuKit.Item(Loc.T("common.return"), GlyphKind.Plus, () => AddTrackRequested?.Invoke(NewTrackKind.Return, anchorTrackId)));
+        MenuKit.AddRecent(add, RecentInstrumentItems?.Invoke(anchorTrackId));
+        return add;
+    }
+
+    private void ShowAddTrackMenu(Control anchor, int anchorTrackId)
+    {
+        var f = new MenuFlyout();
+        foreach (var mi in AddTrackItems(anchorTrackId)) f.Items.Add(mi);
+        if (RecentInstrumentItems?.Invoke(anchorTrackId) is { Count: > 0 } recent)
+        {
+            f.Items.Add(new Separator());
+            f.Items.Add(MenuKit.Caption(Loc.T("common.recent")));
+            foreach (var mi in recent) f.Items.Add(mi);
+        }
+        f.ShowAt(anchor, showAtPointer: true);
+    }
+
+    // Column header menu (spec 034): the track named at the top, its colour, rename, add a
+    // track next to it, delete.
+    private void ShowHeaderMenu(Control anchor, Column c)
+    {
+        var f = new MenuFlyout();
+        if (c.Kind == ColKind.Master)
+        {
+            MenuKit.AddGroups(f.Items,
+                new Control[] { MenuKit.Header(Loc.T("common.master"), NotaPalette.Master, Loc.T("common.master")) },
+                new Control[] { AddTrackSubmenu(-1) });
+            f.ShowAt(anchor, showAtPointer: true);
+            return;
+        }
+        int pos = NavCols.FindIndex(x => x.TrackId == c.TrackId);
+        f.FlyoutPresenterClasses.Add("rows");
+        int stored = _engine.GetTrackColorIndex(c.TrackId);
+        var colour = MenuKit.ColourGrid(stored, ci =>
+        {
+            _engine.SetTrackColorIndex(c.TrackId, ci);
+            Refresh();
+            ArrangementChanged?.Invoke();
+        });
+        MenuKit.AddGroups(f.Items,
+            new Control[] { MenuKit.Header(c.Name, c.Brush, pos >= 0 ? $"{c.KindLabel} · {pos + 1}" : c.KindLabel) },
+            new Control[] { colour },
+            new Control[]
+            {
+                MenuKit.Item(Loc.T("common.rename"), GlyphKind.Edit, () => PromptRenameTrack(anchor, c.TrackId)),
+                MenuKit.Item(Loc.T("common.show_in_modular"), GlyphKind.Modular, () => ShowInModularRequested?.Invoke(c.TrackId)),   // specs/095
+            },
+            new Control[] { AddTrackSubmenu(c.TrackId) },
+            new Control[]
+            {
+                MenuKit.Danger(c.Kind == ColKind.Group ? Loc.T("session.grid.delete_group_and_its_tracks") : Loc.T("common.delete"), GlyphKind.Trash, () =>
+                {
+                    _engine.RemoveTracks(new[] { c.TrackId });   // a group takes its tracks along, one undo step
+                    Refresh();
+                    ArrangementChanged?.Invoke();
+                }),
+            });
+        f.ShowAt(anchor, showAtPointer: true);
+    }
+
+    private void PromptRenameTrack(Control anchor, int trackId)
+        => PromptText(anchor, _engine.GetTrackName(trackId), t =>
+        {
+            _engine.SetTrackName(trackId, t);
+            Refresh();
+            ArrangementChanged?.Invoke();   // the arrangement header shows the same name
+        });
+
+    private void ShowSceneMenu(Control anchor, int scene)
+    {
+        var f = new MenuFlyout();
+        string name = _engine.GetSceneName(scene);
+        MenuKit.AddGroups(f.Items,
+            new Control[] { MenuKit.Header(name.Length > 0 ? name : Loc.F("session.scene", scene + 1), null, Loc.F("session.grid.scene_n", scene + 1)) },
+            new Control?[]
+            {
+                MenuKit.Item(Loc.T("session.grid.launch_scene"), GlyphKind.Play, () => LaunchSceneRow(scene)),
+                SceneQueued(scene) ? MenuKit.Item(Loc.T("session.grid.cancel_launch"), GlyphKind.Close, () => CancelSceneLaunch(scene)) : null,   // #480
+                MenuKit.Item(Loc.T("session.grid.stop_scene"), GlyphKind.Stop, () => _engine.StopScene(scene)),
+                MenuKit.Item(Loc.T("common.rename"), GlyphKind.Edit, () => RenameSelection(), new KeyGesture(Key.F2)),
+            }.OfType<Control>().ToArray(),
+            new Control[]
+            {
+                MenuKit.Item(Loc.T("session.grid.insert_scene_below"), GlyphKind.Plus, () => InsertSceneAtSelection(), MenuKit.Cmd(Key.I)),
+                MenuKit.Item(Loc.T("session.grid.capture_playing_clips_below"), GlyphKind.Copy, CaptureScene),
+                MenuKit.Item(Loc.T("session.grid.copy_scene_to_arrangement"), GlyphKind.Arrow, () => CopySelectionToArrangement(), MenuKit.CopyToOtherViewKey, SelectedSlots().Length > 0),
+            },
+            MenuKit.ClipboardGroup(null, null, () => PasteSelection(), () => DuplicateSelection(), ClipTransfer.FromArrangement(_engine)),
+            new Control[] { MenuKit.Danger(Loc.T("session.grid.delete_scene"), GlyphKind.Trash, () => DeleteSelection(), MenuKit.DeleteKey, _sceneCount > 1) });
+        f.ShowAt(anchor, showAtPointer: true);
+    }
+}

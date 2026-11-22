@@ -1,0 +1,3857 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Nota.Application;
+using Nota.Application.Editing;
+using Nota.Presentation;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+/// <summary>Audio-clip → MIDI conversion modes (arrangement clip context menu).</summary>
+public enum ClipConvertMode { Drums, Slice, Melody, Harmony }
+
+/// <summary>Which kind of track an arrangement context menu asked for.</summary>
+public enum NewTrackKind { Instrument, Audio, Return }
+
+/// <summary>How much of the arrangement names its clips (View ▸ Clip names).</summary>
+public enum ClipLabelMode { Every, RunStart, None }
+
+/// <summary>How audio clips draw their waveform: the peak outline around its RMS body (default),
+/// a solid column per pixel, or spaced peak strokes. The values are the stored setting.</summary>
+public enum WaveformStyle { Smooth, Solid, Bars }
+
+public sealed partial class ArrangementView : UserControl
+{
+    // --- coordinate model / shared state ---
+    private double _pixelsPerBeat = 28;
+    private double _scrollBeats;
+    private double _playheadBeats;
+    private double _displayPlayheadBeats; // paint/follow only; edits keep using _playheadBeats
+    private double _totalBeats = 64;
+    private int _beatsPerBar = 4;
+    private ResolvedGrid _lastGrid;                // what the snap chip last showed (GridChanged)
+    internal int SelTrackId = -1, SelClipIndex = -1;   // "primary" selection (Clip tab, effect target, trim)
+    // Multi-selection of clips across tracks (marquee / group move + delete). The
+    // primary (SelTrackId/SelClipIndex) is always one of these when non-empty.
+    private readonly HashSet<(int track, int clip)> _sel = new();
+    // General time-range selection (arrangement, not automation): a beat range over a span
+    // of visual rows. Mutually exclusive with the clip selection (req 1.2.5). Operations act
+    // on the covered clip *parts*, splitting at the range edges.
+    internal double _timeSelStart, _timeSelEnd;
+    internal int _timeSelRowLo = -1, _timeSelRowHi = -1;
+    internal bool HasTimeSelection => _timeSelRowLo >= 0 && _timeSelEnd - _timeSelStart > 1e-6;
+    private bool _automationMode;                     // toolbar Automation toggle (M9-A3)
+    private double _autoBaselineSig = double.NaN;      // signature of visible empty-lane baselines (redraw on change)
+    // Loop region highlight: cached from the engine (message-thread mirror) and
+    // drawn as a brace in the ruler + a wash across the lanes. During a ruler
+    // drag we show a live preview before committing to the engine on release.
+    private bool _loopActive;
+    private double _loopS, _loopE;
+    private bool _loopDragging;
+    /// <summary>Raised after the arrangement authors a loop region (ruler drag /
+    /// "Loop selection"), so the transport bar can reflect it.</summary>
+    public event Action? LoopChanged;
+    private readonly List<TrackVM> _tracks = new();   // audio + instrument (scrolling)
+    private readonly List<TrackVM> _returns = new();  // return buses (pinned footer)
+    private readonly Dictionary<int, MeterBar> _meters = new(); // per-track header meters (M6-2)
+    // Per-track header vol/pan controls, refreshed each tick so automation moves them live.
+    private readonly Dictionary<int, MiniFader> _volFaders = new();
+    private readonly List<(int Track, int Bus, MiniFader Fader)> _sendFaders = new();   // Large headers' sends
+    private readonly Dictionary<int, PanBar> _panBars = new();
+    // Return / Master footer rows: meter, volume fader and its dB read-out. Kept apart from the
+    // track-header maps because the two columns are rebuilt independently.
+    private readonly Dictionary<int, MeterBar> _footerMeters = new();
+    private readonly Dictionary<int, MiniFader> _footerFaders = new();
+    private readonly Dictionary<int, TextBlock> _footerDb = new();
+    private MeterBar? _masterRowMeter;
+    private MiniFader? _masterRowFader;
+    private TextBlock? _masterRowDb;
+
+    /// <summary>The master volume lives in <c>TransportViewModel.MasterVolume</c> (saved with the
+    /// project, shown in the MST module); the Master row reads and writes it through these.</summary>
+    public Func<float>? GetMasterVolume { get; set; }
+    public Action<float>? SetMasterVolume { get; set; }
+    // Per-track header card + its name label, so a selection change repaints just those two
+    // properties instead of tearing down and rebuilding every header control (click latency).
+    private readonly Dictionary<int, (Border card, TextBlock name, bool isGroup, Border spine, IBrush spineIdle)> _headerCards = new();
+    // Per-track chosen automation target, kept across Refresh (which rebuilds VMs).
+    private readonly Dictionary<int, (AutomationTarget target, int dev, int param, string paramId, int chain, int slot, int lane)> _autoTargets = new();
+
+    // Header column width and track row heights are user-resizable (ArrangementView.Sizing.cs).
+    private double HeaderW => _headerW;
+    private const double GroupRowHeight = 26;    // a group row: a slim titled bar, no controls
+    private const double RulerH = 24;
+    private const double SectionsH = 22;    // song-structure lane above the ruler
+
+    // Row geometry. Rows are no longer a fixed pitch — a group weighs a fraction of a track
+    // (design 1a), so every y↔row conversion goes through the prefix table below instead of
+    // multiplying/dividing by one constant. Rebuilt on every Refresh, after ApplyHierarchy.
+    private double[] _rowTops = { 0 };
+
+    private void RebuildRowGeometry()
+    {
+        var tops = new double[_tracks.Count + 1];
+        double y = 0;
+        for (int i = 0; i < _tracks.Count; i++)
+        {
+            tops[i] = y;
+            y += RowHeightAt(i);
+        }
+        tops[_tracks.Count] = y;
+        _rowTops = tops;
+    }
+
+    /// <summary>Height of arrangement row <paramref name="i"/>: its clip area plus any open take lanes.</summary>
+    /// <summary>The height a row's header card is laid out for: the slim group bar or the track row.</summary>
+    private double HeaderRowHeight(TrackVM t) => IsSlimRow(t) ? GroupRowHeight : TrackRowHeight(t);
+
+    internal double RowHeightAt(int i)
+        => ClipAreaHeightAt(i) + (i >= 0 && i < _tracks.Count ? TakesHeight(_tracks[i]) : 0);
+
+    /// <summary>Height of row <paramref name="i"/>'s clip area — a slim bar for a group. Clips,
+    /// automation and the header card live here; open take lanes sit below it.</summary>
+    internal double ClipAreaHeightAt(int i)
+        => i < 0 || i >= _tracks.Count ? DefaultRowHeight
+         : IsSlimRow(_tracks[i]) ? GroupRowHeight : TrackRowHeight(_tracks[i]);
+
+    /// <summary>A group is a slim titled bar (1a: "groups weigh the same as their children"
+    /// was the problem) — until it is the selected track, where it opens to a full row so its
+    /// own mute/solo, fader, pan and meter stay reachable.</summary>
+    private bool IsSlimRow(TrackVM t) => t.IsGroup && t.Id != SelTrackId;
+    internal bool IsSlimRowAt(int i) => i >= 0 && i < _tracks.Count && IsSlimRow(_tracks[i]);
+
+    /// <summary>Top edge of row <paramref name="i"/> in lane coordinates. Indices past the
+    /// last row extrapolate by a default track row, so "the gap after the end" still has a y.</summary>
+    internal double RowTop(int i)
+    {
+        if (i <= 0) return 0;
+        int n = _tracks.Count;
+        return i <= n ? _rowTops[i] : _rowTops[n] + (i - n) * DefaultRowHeight;
+    }
+
+    /// <summary>Combined height of every visible row.</summary>
+    internal double RowsHeight => _rowTops[_tracks.Count];
+
+    /// <summary>Scroll the track list so <paramref name="trackId"/>'s whole row is in view. Runs
+    /// after the next layout pass, so it also works straight after a Refresh that added the
+    /// row (the scroll extent isn't updated until then). A row already fully visible doesn't move.</summary>
+    /// <summary>Set by the main window: what an audio clip's Locate submenu does (spec 092).</summary>
+    internal LocateHooks? Locate { get; set; }
+
+    public void RevealTrack(int trackId)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            int i = _tracks.FindIndex(t => t.Id == trackId);
+            if (i < 0) return;
+            double top = RowTop(i), bottom = RowTop(i + 1), view = _scroller.Viewport.Height;
+            double y = _scroller.Offset.Y;
+            if (top < y) y = top;
+            else if (bottom > y + view) y = bottom - view;
+            else return;
+            _scroller.Offset = new Vector(_scroller.Offset.X, Math.Max(0, y));
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>Row containing <paramref name="y"/>, or -1 when it falls outside the rows.</summary>
+    internal int RowAtY(double y)
+    {
+        if (y < 0 || _tracks.Count == 0 || y >= _rowTops[_tracks.Count]) return -1;
+        for (int i = 0; i < _tracks.Count; i++)
+            if (y < _rowTops[i + 1]) return i;
+        return -1;
+    }
+
+    /// <summary>Like <see cref="RowAtY"/> but clamped to the first/last row (-1 only when
+    /// there are no rows at all) — for gestures that must always land somewhere.</summary>
+    internal int RowAtYClamped(double y)
+    {
+        if (_tracks.Count == 0) return -1;
+        int r = RowAtY(y);
+        return r >= 0 ? r : (y < 0 ? 0 : _tracks.Count - 1);
+    }
+
+    // Footer geometry (specs/045): the pinned return/master rows each have their own height —
+    // returns first, the master last. Rebuilt with the track rows on every Refresh and live
+    // while a footer seam is dragged.
+    private double[] _footerRowTops = { 0, DefaultFooterRowHeight };
+
+    private void RebuildFooterGeometry()
+    {
+        int n = _returns.Count + 1;
+        var tops = new double[n + 1];
+        for (int i = 0; i < n; i++) tops[i + 1] = tops[i] + FooterRowHeightRaw(i);
+        _footerRowTops = tops;
+    }
+
+    private double FooterRowHeightRaw(int i)
+        => i < _returns.Count ? StoredRowHeight(_returns[i].Id) : _masterHeight;
+
+    /// <summary>Height of footer row <paramref name="i"/> (returns, then the master).</summary>
+    internal double FooterRowHeight(int i)
+        => i >= 0 && i + 1 < _footerRowTops.Length ? _footerRowTops[i + 1] - _footerRowTops[i] : DefaultFooterRowHeight;
+
+    /// <summary>Top of footer row <paramref name="i"/>; past the last row, the content bottom.</summary>
+    internal double FooterRowTop(int i)
+        => _footerRowTops[Math.Clamp(i, 0, _footerRowTops.Length - 1)];
+
+    /// <summary>Combined height of the return and master rows.</summary>
+    internal double FooterContentHeight => _footerRowTops[^1];
+
+    /// <summary>Insertion gap nearest <paramref name="y"/> (0.._tracks.Count) — where a
+    /// header-reorder drop would land.</summary>
+    internal int RowGapAtY(double y)
+    {
+        int n = _tracks.Count;
+        if (n == 0) return 0;
+        for (int i = 0; i < n; i++)
+        {
+            double top = _rowTops[i], bot = _rowTops[i + 1];
+            if (y < (top + bot) / 2) return i;
+            if (y < bot) return i + 1;
+        }
+        return n;
+    }
+
+    private IAudioEngine? _engine;
+
+    private readonly RulerControl _ruler;
+    private readonly LaneControl _lanes;
+    // Playhead + loop band live on a thin, hit-transparent overlay ABOVE the lanes so the
+    // 30 Hz transport tick repaints only these few strokes instead of the whole clip/waveform
+    // surface underneath (which is static during playback). See SetPlayhead / Redraw.
+    private readonly LaneOverlayControl _overlay;
+    private readonly Canvas _headers;
+    private readonly ThinScrollBar _hScroll;
+    // The vertical scroller wrapping [headers | lanes]; its offset/viewport drive row culling
+    // in LaneControl.Render so off-screen tracks skip their clip/waveform work.
+    private ScrollViewer _scroller = null!;
+
+    // Track reorder: grab a header's title strip to drag it to a new slot. Manual
+    // capture-drag (headers live in a Canvas); an accent insertion line marks the drop gap.
+    private int _hdrDragId = -1, _hdrDragFrom = -1, _hdrDropGap = -1;
+    private bool _hdrDragging;
+    private Point _hdrDragStart;
+    private readonly Border _trackDropLine = new()
+    {
+        IsVisible = false, IsHitTestVisible = false, Height = 2, Width = DefaultHeaderW,
+        Background = NotaPalette.AccentBright,
+    };
+
+    // Browser drag-over: a ring over the target row's header — the scrolling tracks' and the
+    // return/master footer's (the lanes get their own wash + edge).
+    private readonly Border _headerDropRing = DropRing();
+    private readonly Border _footerDropRing = DropRing();
+    private static Border DropRing() => new()
+    {
+        IsVisible = false, IsHitTestVisible = false, Width = DefaultHeaderW,
+        BorderThickness = new Thickness(2), BorderBrush = DropEdge, Background = DropWash,
+    };
+
+    // Return/Master section pinned under the scrolling tracks (no scroll).
+    private readonly Canvas _footerHeaders;
+    private readonly FooterLaneControl _footerLanes;
+    private readonly Grid _footer;
+    private readonly ScrollViewer _footerScroller;
+    private Grid _centerArea = null!;
+
+    /// <summary>Raised when a MIDI clip is double-clicked (trackId, clipIndex).</summary>
+    public event Action<int, int>? MidiClipActivated;
+    /// <summary>"Edit selected clips together" from a clip's context menu (specs/029).</summary>
+    public event Action? EditSelectedClipsRequested;
+    /// <summary>The set of selected clips changed (click, ⌘-click, ⇧-click, marquee, select
+    /// all, delete). Raised once per change, after the arrangement has settled its own state;
+    /// the Clip editor follows it (specs/029).</summary>
+    public event Action? ClipSelectionChanged;
+    /// <summary>Clips were split (Cmd+E, a time range, the clip menu's "Split here"). A split
+    /// inserts the right half after the left, so the clips after it change index: a track-mode
+    /// Clip editor reopens the track's clips (specs/059). Raised after the arrangement refreshed.</summary>
+    public event Action? ClipsSplit;
+    private (int, int)[] _notifiedSel = Array.Empty<(int, int)>();
+    private bool _selNotifyQueued;
+
+    private void QueueSelectionNotify()
+    {
+        if (_selNotifyQueued) return;
+        _selNotifyQueued = true;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _selNotifyQueued = false;
+            var now = _sel.OrderBy(s => s.track).ThenBy(s => s.clip).ToArray();
+            if (now.SequenceEqual(_notifiedSel)) return;
+            _notifiedSel = now;
+            ClipSelectionChanged?.Invoke();
+        });
+    }
+    /// <summary>Raised when an audio clip is double-clicked (trackId, clipIndex).</summary>
+    public event Action<int, int>? AudioClipActivated;
+    /// <summary>Raised when a track becomes selected (clip or header click).</summary>
+    public event Action<int>? TrackSelected;
+    /// <summary>Raised when the track selection is cleared (Escape, a click on empty space), so
+    /// views that mark the selected track — the Mixer's outline (specs/070) — can drop it.</summary>
+    public event Action? SelectionCleared;
+    /// <summary>Raised when a track header is double-clicked: open its devices (#308).</summary>
+    public event Action<int>? TrackDevicesRequested;
+    /// <summary>Live-freeze (v1.1): per-track role for the header badge — 0 none, 1 sleeping
+    /// source, 2 linked frozen. Set by MainWindow; queried while rebuilding headers.</summary>
+    public Func<int, int>? FreezeRole;
+    /// <summary>Who plays the track from a phone (Nota Remote), for the header badge; null = nobody.</summary>
+    public Func<int, string?>? PlayerBadge;
+    /// <summary>Freeze / Live Freeze entries for a track's context menu (empty when the track
+    /// can't be frozen). Built by MainWindow, which owns the freeze state and commands.</summary>
+    public Func<int, IReadOnlyList<Control>>? FreezeMenuItems;
+    /// <summary>Freeze entries for the multi-track context menu (the selected ids, row order).</summary>
+    public Func<IReadOnlyList<int>, IReadOnlyList<Control>>? FreezeTracksMenuItems;
+    /// <summary>Called at the start of a full <see cref="Refresh"/>, before the track model is
+    /// rebuilt — MainWindow drops live-freeze links whose tracks were deleted or undone.</summary>
+    public Action? RefreshStarting;
+    /// <summary>A transient status line the arrangement wants shown (e.g. an automation-follow hint).</summary>
+    public event Action<string>? StatusMessage;
+    /// <summary>Raised after a clip is copied into a session slot (M5-6).</summary>
+    public event Action? SessionChanged;
+    /// <summary>Raised when a browser item is dropped on a lane (M7-5): item, target
+    /// track id (-1 if past the last track), and the snapped drop beat.</summary>
+    public event Action<BrowserItem, int, double>? ItemDropped;
+    /// <summary>Audio-clip context-menu "Convert / Slice to New MIDI Track" (track id, clip index, mode).</summary>
+    public event Action<int, int, ClipConvertMode>? ConvertClipRequested;
+    /// <summary>Audio-clip context-menu "Separate Stems" (track id, clip index).</summary>
+    public event Action<int, int>? SeparateStemsRequested;
+    /// <summary>The Convert submenu's offer to download the basic-pitch model.</summary>
+    public event Action? TranscriptionModelRequested;
+    /// <summary>Whether Convert Melody / Harmony run on the AI model (else the menu offers it).</summary>
+    public Func<bool>? CanTranscribe { get; set; }
+    /// <summary>A context menu asked for a new track. MainWindow owns creation — the seed
+    /// MIDI clip, the session / modular / device-chain refreshes and the status line — so the
+    /// menu only asks, and the toolbar's + buttons and these entries stay one behaviour.
+    /// The id is the track the menu was opened on (-1 = none): the new track lands after it,
+    /// or inside it for a group (see <see cref="PlaceNewTrack"/>).</summary>
+    public event Action<NewTrackKind, int>? AddTrackRequested;
+    /// <summary>Raised after a clip's start/length changed in place (edge-drag trim or
+    /// stretch): track id, clip index. An open clip editor re-reads its geometry from this.</summary>
+    public event Action<int, int>? ClipGeometryChanged;
+
+    internal void RaiseClipGeometryChanged(int trackId, int clipIndex)
+        => ClipGeometryChanged?.Invoke(trackId, clipIndex);
+
+    public ArrangementView()
+    {
+        EditorGrids.Shared.Changed += k => { if (k == EditorKind.Arrangement) Redraw(); };
+        _fold.Changed += OnFoldChanged;   // the default fold; MainWindow swaps in the shared one (specs/070)
+        _ruler = new RulerControl(this) { Height = RulerH };
+        _overview = new OverviewControl(this);
+        _sectionsLane = new SectionsControl(this);
+        _lanes = new LaneControl(this) { VerticalAlignment = VerticalAlignment.Top };
+        // Sits in the same grid cell as _lanes, on top; hit-transparent so all pointer
+        // gestures pass through to the lanes beneath.
+        _overlay = new LaneOverlayControl(this)
+        {
+            VerticalAlignment = VerticalAlignment.Top,
+            IsHitTestVisible = false,
+        };
+        // Drop target is the whole scroller (below), not _lanes — _lanes is only as
+        // tall as the tracks, so instruments dropped in the empty space beneath them
+        // (the natural "make a new track" gesture) would otherwise miss.
+        _headers = new Canvas { Width = HeaderW, VerticalAlignment = VerticalAlignment.Top };
+        _headerColumnParts.Add(_headers);
+        _headerColumnParts.Add(_trackDropLine);
+        _headerColumnParts.Add(_headerDropRing);
+        _headerColumnParts.Add(_footerDropRing);
+        _hScroll = new ThinScrollBar();
+        _hScroll.Scroll += (_, _) => { _scrollBeats = _hScroll.Value; NoteManualScroll(); Redraw(); };
+        // Keep the scroll range in sync with the visible width — outside the
+        // render pass (mutating controls during Render() is illegal / crashes).
+        _lanes.SizeChanged += (_, _) => SyncScroll(_lanes.Bounds.Width);
+
+        // Top: zoom controls over the header spacer, ruler over the lanes.
+        var zoomOut = ZoomChip("−");
+        var zoomIn = ZoomChip("+");
+        zoomOut.Click += (_, _) => Zoom(1 / 1.25);
+        zoomIn.Click += (_, _) => Zoom(1.25);
+        // The visible range ("bars 1 to 8 of 36", 11 ink 3) with zoom out / in at the right.
+        _overviewRange = new TextBlock
+        {
+            FontSize = NotaType.Caption, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        _overviewRange.BindResource(TextBlock.ForegroundProperty, "Brush.TextTertiary");
+        _overviewRange.BindResource(TextBlock.FontFamilyProperty, "Font.Measure");
+        // "Zoom" names the two keys. On a header narrowed so far that the range read-out
+        // would be cut, the caption steps aside first (the keys keep their tooltips).
+        var zoomLabel = new TextBlock
+        {
+            Text = Loc.T("arrangement.zoom"), Classes = { "SectionLabel" },
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 2, 0),
+        };
+        var zoomBar = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"), ColumnSpacing = 4,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(NameGap, 0, HeaderRightPad - 4, 0),
+        };
+        zoomBar.Children.Add(_overviewRange);
+        Grid.SetColumn(zoomLabel, 1);
+        Grid.SetColumn(zoomOut, 2);
+        Grid.SetColumn(zoomIn, 3);
+        zoomBar.Children.Add(zoomLabel);
+        zoomBar.Children.Add(zoomOut);
+        zoomBar.Children.Add(zoomIn);
+        void FitZoomLabel()
+        {
+            if (zoomBar.Bounds.Width <= 0) return;
+            // The TextBlock's FontSize already carries the text-size step, so measure it as is.
+            static double TextW(TextBlock t) => new NotaFormattedText(t.Text ?? "", CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight, new Typeface(t.FontFamily, t.FontStyle, t.FontWeight), t.FontSize, null,
+                NotaTextSize.InCard).Width;
+            double need = Math.Ceiling(TextW(_overviewRange)) + Math.Ceiling(TextW(zoomLabel)) + zoomLabel.Margin.Right
+                          + zoomOut.Width + zoomIn.Width + 3 * zoomBar.ColumnSpacing;
+            zoomLabel.IsVisible = need <= zoomBar.Bounds.Width;
+        }
+        zoomBar.SizeChanged += (_, _) => FitZoomLabel();
+        _overviewRange.PropertyChanged += (_, e) => { if (e.Property == TextBlock.TextProperty) FitZoomLabel(); };
+        _zoomBar = zoomBar;
+        _tracksCaption.Text = Loc.T("modular.tracks");
+        var topLeft = HeaderPanel(new Panel { Children = { zoomBar, _tracksCaption } });
+        var topGrid = _topGrid = new Grid { Height = RulerH };
+        topGrid.Children.Add(topLeft);
+        topGrid.Children.Add(_ruler);
+        AddSideRow(topGrid, topLeft, _ruler);
+        // The chrome stack (Overview · Sections · Zoom) ends on a full-width line, so the
+        // tracks start under a clear edge rather than straight off the ruler.
+        var top = new Border { BorderThickness = new Thickness(0, 0, 0, 1), Child = topGrid };
+        top.BindResource(Border.BorderBrushProperty, "Brush.BorderDefault");
+
+        // Above the ruler: the Overview strip (whole project + a draggable viewport window),
+        // then the Sections lane — song structure sits directly over the bar numbers it names.
+        _overviewRow = BuildOverviewRow();
+        _sectionsRow = BuildSectionsRow();
+
+        // Center: vertical scroll over [headers | lanes].
+        // Top-anchored: the ScrollViewer would otherwise stretch the short
+        // content to the viewport and centre the fixed-height lanes.
+        var center = new Grid { VerticalAlignment = VerticalAlignment.Top };
+        center.Children.Add(_headers);
+        center.Children.Add(_lanes);
+        center.Children.Add(_overlay);   // above _lanes (added later = on top)
+        AddSideRow(center, _headers, _lanes, _overlay);
+        var scroller = _scroller = new ScrollViewer
+        {
+            Content = center,
+            Background = Brushes.Transparent,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        // Repaint the lanes/overlay when the vertical scroll changes so culling re-evaluates
+        // which rows are on-screen (the ScrollViewer moves the retained content under a fixed
+        // viewport; without a repaint the culled off-screen rows would scroll in blank).
+        scroller.ScrollChanged += (_, _) =>
+        {
+            _lanes.InvalidateVisual();
+            _overlay.InvalidateVisual();
+        };
+        // Browser drag & drop covers the whole scroll viewport (incl. empty space
+        // below the tracks) so instruments/samples can be dropped anywhere.
+        DragDrop.SetAllowDrop(scroller, true);
+        DragDrop.AddDragOverHandler(scroller, OnLaneDragOver);
+        DragDrop.AddDragLeaveHandler(scroller, (_, _) => { SetDropTrack(-1); DwellOverTrack(-1); });
+        DragDrop.AddDropHandler(scroller, OnLaneDrop);
+        // Right-click the empty area below the tracks → paste a copied track there (the
+        // header cards / lanes are top-anchored, so clicks below them land on the scroller).
+        scroller.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(scroller).Properties.IsRightButtonPressed) return;
+            double y = e.GetPosition(_headers).Y;                     // shared vertical (scrolls with content)
+            if (y >= 0 && y < RowsHeight) return;                     // on a track → it shows its own menu
+            ShowEmptyAreaMenu(scroller);
+        };
+        // Wheel over the empty area below the tracks (top-anchored lanes leave a gap when few
+        // tracks) still zooms/scrolls the timeline. Events over the lanes are handled there
+        // first (Handled), so this only picks up the gap.
+        scroller.PointerWheelChanged += (_, e) => { if (!e.Handled) HandleLaneWheel(e, e.GetPosition(_lanes).X); };
+        // Full-height header-column backdrop behind the scroller so the header
+        // column reads as a distinct panel even with no tracks.
+        _columnBackdrop = new Border
+        {
+            Width = HeaderW,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            BorderThickness = ColumnDivider,
+        };
+        _headerColumnParts.Add(_columnBackdrop);
+        _columnDividers.Add(_columnBackdrop);
+        _columnBackdrop.BindResource(Border.BackgroundProperty, "Brush.Panel");
+        _columnBackdrop.BindResource(Border.BorderBrushProperty, "Brush.BorderDefault");
+        var centerArea = _centerArea = new Grid();
+        centerArea.Children.Add(_columnBackdrop);
+        centerArea.Children.Add(scroller);
+
+        // Return / Master: a slim section pinned under the tracks (no scroll).
+        _footerHeaders = new Canvas { Width = HeaderW };
+        var footerHeaderPanel = new Border { Width = HeaderW, BorderThickness = ColumnDivider, Child = _footerHeaders };
+        _headerColumnParts.Add(_footerHeaders);
+        _headerColumnParts.Add(footerHeaderPanel);
+        _columnDividers.Add(footerHeaderPanel);
+        footerHeaderPanel.BindResource(Border.BackgroundProperty, "Brush.SurfaceDeep");
+        footerHeaderPanel.BindResource(Border.BorderBrushProperty, "Brush.BorderDefault");
+        _footerLanes = new FooterLaneControl(this);
+        _footer = new Grid();
+        _footer.Children.Add(footerHeaderPanel);
+        _footer.Children.Add(_footerLanes);
+        AddSideRow(_footer, footerHeaderPanel, _footerLanes);
+        // Effects / presets dropped on a return or the master go on that bus.
+        DragDrop.SetAllowDrop(_footer, true);
+        DragDrop.AddDragOverHandler(_footer, OnFooterDragOver);
+        DragDrop.AddDragLeaveHandler(_footer, (_, _) => SetFooterDropRow(-1));
+        DragDrop.AddDropHandler(_footer, OnFooterDrop);
+        // Tall returns must not crowd out the tracks: past about half the arrangement the
+        // footer stops growing and scrolls (specs/045).
+        _footerScroller = new ScrollViewer
+        {
+            Content = _footer,
+            Background = Brushes.Transparent,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+
+        // Bottom: a thin horizontal scrollbar under the lanes, on the well, past a hairline.
+        var bottomGrid = _bottomGrid = new Grid();
+        var bottomLeft = HeaderPanel(null);
+        bottomLeft.BindResource(Border.BackgroundProperty, "Brush.BgSunken");
+        bottomGrid.Children.Add(bottomLeft);
+        bottomGrid.Children.Add(_hScroll);
+        AddSideRow(bottomGrid, bottomLeft, _hScroll);
+        var bottom = new Border { BorderThickness = new Thickness(0, 1, 0, 0), Child = bottomGrid };
+        bottom.BindResource(Border.BackgroundProperty, "Brush.BgSunken");
+        bottom.BindResource(Border.BorderBrushProperty, "Brush.Hairline");
+
+        // The pinned return/master band meets the scrolling tracks on a seam, so a track
+        // scrolled to the bottom edge never reads as sitting on a return row (critique F1).
+        var footerSeam = new Border { Height = 1 };
+        footerSeam.BindResource(Border.BackgroundProperty, "Brush.Seam");
+
+        var root = new DockPanel();
+        DockPanel.SetDock(_overviewRow, Dock.Top);
+        DockPanel.SetDock(_sectionsRow, Dock.Top);
+        DockPanel.SetDock(top, Dock.Top);
+        DockPanel.SetDock(bottom, Dock.Bottom);
+        DockPanel.SetDock(_footerScroller, Dock.Bottom);
+        DockPanel.SetDock(footerSeam, Dock.Bottom);
+        root.Children.Add(_overviewRow);   // Overview sits above the ruler
+        root.Children.Add(_sectionsRow);   // …then the named song sections
+        root.Children.Add(top);
+        root.Children.Add(bottom);
+        root.Children.Add(_footerScroller);
+        root.Children.Add(footerSeam);     // docked after the footer → sits on top of it
+        root.Children.Add(centerArea);
+
+        // A docked panel like the browser: square, no frame of its own — it meets its
+        // neighbours on the seam the shell grid draws. ClipToBounds keeps the ruler, the
+        // header column and the pinned footer inside it.
+        // The header/lane seam is draggable along the view's full height (overview to footer).
+        _columnSeam = BuildColumnSeam();
+        PlaceColumnSeam();
+        var layered = new Grid { Children = { root, _columnSeam } };
+        SizeChanged += (_, _) => { OnViewSizeChanged(); CapFooterHeight(); };
+
+        var island = new Border
+        {
+            BorderThickness = new Thickness(0),
+            ClipToBounds = true,
+            Child = layered,
+        };
+        island.BindResource(Border.CornerRadiusProperty, "Radius.Docked");
+        island.BindResource(Border.BackgroundProperty, "Brush.BgApp");   // lanes sit on the ground
+        island.BindResource(Border.BorderBrushProperty, "Brush.BorderDefault");
+        Content = island;
+    }
+
+    public IAudioEngine? Engine
+    {
+        get => _engine;
+        set
+        {
+            if (_engine is not null) _engine.AutomationTouched -= OnAutomationTouched;
+            _engine = value;
+            if (_engine is not null) _engine.AutomationTouched += OnAutomationTouched;
+            Refresh();
+        }
+    }
+
+    public double PixelsPerBeat => _pixelsPerBeat;
+    public double ScrollBeats => _scrollBeats;
+    public double PlayheadBeats => _playheadBeats;
+    public int BeatsPerBar { get => _beatsPerBar; set { _beatsPerBar = value; Redraw(); } }
+
+    /// <summary>The snap grid at the current zoom (specs/003-adaptive-snap-grid): the step
+    /// every clip edit snaps to and the finest line drawn. Resolved on demand — it is a few
+    /// comparisons and allocates nothing — so zoom, time signature and setting changes can
+    /// never leave a stale cache behind. Snap off (the transport magnet, ⌘4) keeps the lines.</summary>
+    internal ResolvedGrid SnapGridState => SnapGrid.Resolve(EditorGrids.Shared.Get(EditorKind.Arrangement), _pixelsPerBeat, GridBarLength);
+
+    /// <summary>The step in effect changed (zoom, time signature or the grid setting) — the
+    /// toolbar's snap chip relabels.</summary>
+    public event Action? GridChanged;
+
+    private double SnapStepBeats => SnapGridState.Snap.Beats(GridBarLength);
+
+    /// <summary>How many clips print their name on the lane (View ▸ Clip names). The default
+    /// names only the head of each run, so a repeating pattern reads as one block.</summary>
+    public ClipLabelMode ClipLabels
+    {
+        get => _clipLabels;
+        set { if (_clipLabels == value) return; _clipLabels = value; _lanes.InvalidateVisual(); }
+    }
+    private ClipLabelMode _clipLabels = ClipLabelMode.RunStart;
+    /// <summary>Tinted clips (the new look) or solid ones with a title band (0.59; Settings →
+    /// Appearance → Clips, spec 091).</summary>
+    public ClipStyle ClipStyle
+    {
+        get => _clipStyle;
+        set { if (_clipStyle == value) return; _clipStyle = value; _lanes.InvalidateVisual(); }
+    }
+    private ClipStyle _clipStyle = ClipStyle.Tinted;
+    /// <summary>How groups are drawn in the track headers (specs/094): trays in the new look,
+    /// 0.59.2's staircase of spines in the classic one. Follows the worn look.</summary>
+    public Look HeaderLook
+    {
+        get => _headerLook;
+        set
+        {
+            if (_headerLook == value) return;
+            _headerLook = value;
+            RebuildHeaders();
+            _lanes.InvalidateVisual();   // a group lane's wash follows the look
+        }
+    }
+    private Look _headerLook = Look.New;
+    private bool ClassicHeaders => _headerLook == Look.Classic;
+    /// <summary>Audio-clip waveform style (Settings → Appearance).</summary>
+    public WaveformStyle Waveform
+    {
+        get => _waveform;
+        set { if (_waveform == value) return; _waveform = value; _lanes.InvalidateVisual(); }
+    }
+    private WaveformStyle _waveform = WaveformStyle.Smooth;
+    /// <summary>A heavier grid line every this many bars, counted from bar 1; 0 = off
+    /// (Settings → Appearance, specs/092). Drawn on the lanes, the footer rows and the ruler.</summary>
+    public int PhraseBars
+    {
+        get => _phraseBars;
+        set
+        {
+            value = PhraseLines.Normalize(value);
+            if (_phraseBars == value) return;
+            _phraseBars = value;
+            Redraw();
+        }
+    }
+    private int _phraseBars;
+    /// <summary>Show/edit parameter-automation envelopes over the lanes (M9-A3).</summary>
+    public bool AutomationMode
+    {
+        get => _automationMode;
+        set { if (_automationMode == value) return; _automationMode = value; Refresh(); }
+    }
+    /// <summary>While recording, reload the visible envelopes so writes appear live (M9-C).</summary>
+    public void RefreshAutomationLive()
+    {
+        // Only reload while actually recording: automation record on + playing + no
+        // hand-drag in progress. Otherwise this would clobber manual envelope editing.
+        if (!_automationMode) return;
+        var eng = _engine;
+        if (eng is not { IsPlaying: true } || !eng.AutomationRecording) return;
+        if (_lanes.IsEditingPoint || _footerLanes.IsEditingPoint) return;
+        foreach (var t in _tracks) LoadAutoPoints(t);
+        foreach (var t in _returns) LoadAutoPoints(t);
+        _lanes.InvalidateVisual();
+        _footerLanes.InvalidateVisual();
+    }
+    internal IReadOnlyList<TrackVM> Tracks => _tracks;
+
+    /// <summary>When on, the grid scrolls to keep the playhead centred during playback
+    /// ("Follow"); the transport-bar Follow toggle drives this. Setting it (either way)
+    /// clears a suspension.</summary>
+    public bool FollowPlayhead
+    {
+        get => _followPlayhead;
+        set { _followPlayhead = value; SetFollowSuspended(false); }
+    }
+    private bool _followPlayhead;
+
+    /// <summary>Follow is on but paused because the user scrolled the lanes away during
+    /// playback (#105): the view stays where they took it until Show playhead, the Follow
+    /// toggle or the next Play picks it up again.</summary>
+    public bool FollowSuspended { get; private set; }
+    /// <summary>Raised when <see cref="FollowSuspended"/> flips, for the transport button and status.</summary>
+    public event Action? FollowSuspendedChanged;
+    private void SetFollowSuspended(bool on)
+    {
+        if (FollowSuspended == on) return;
+        FollowSuspended = on;
+        FollowSuspendedChanged?.Invoke();
+    }
+    private bool _wasPlaying;
+
+    // A scroll the user asked for (wheel, scrollbar, overview strip, drag auto-scroll):
+    // while Follow is driving the view during playback, it pauses Follow instead of being
+    // undone on the next tick.
+    private void NoteManualScroll()
+    {
+        if (!_followPlayhead || _engine is not { IsPlaying: true }) return;
+        _wasPlaying = true;   // this run is under way: the next tick must not read it as a new Play
+        SetFollowSuspended(true);
+    }
+
+    /// <summary>Show playhead (#105): bring the playhead into view without moving it, the
+    /// zoom, the tracks' vertical position or the selection. Does nothing when it is already
+    /// comfortably on screen; otherwise it lands a quarter of the way in, with what comes
+    /// next in view. Also resumes a suspended Follow. False when there was nothing to do.</summary>
+    public bool RevealPlayhead()
+    {
+        SetFollowSuspended(false);
+        double laneWidth = _lanes.Bounds.Width;
+        if (laneWidth <= 0 || _pixelsPerBeat <= 0) return false;
+        double playheadX = BeatToX(_displayPlayheadBeats), margin = laneWidth * 0.05;
+        if (playheadX >= margin && playheadX <= laneWidth - margin) return false;
+        double target = Math.Clamp(ScrollBeatForX(_displayPlayheadBeats, laneWidth * 0.25), 0, Math.Max(0, _hScroll.Maximum));
+        if (Math.Abs(target - _scrollBeats) < 1e-6) return false;
+        _scrollBeats = target;
+        _hScroll.Value = target;
+        Redraw();
+        return true;
+    }
+
+    /// <summary>Where the playhead sits relative to the lanes: −1 left of the view, +1 right
+    /// of it, 0 on screen (the ruler draws an arrow at that edge, #105).</summary>
+    internal int PlayheadOffscreen()
+    {
+        double x = BeatToX(_displayPlayheadBeats), w = _lanes.Bounds.Width;
+        return w <= 0 ? 0 : x < 0 ? -1 : x > w ? 1 : 0;
+    }
+
+    /// <summary>Snap the view to the playhead now (called when Follow is switched on so the
+    /// grid jumps to the cursor immediately, without waiting for the next playback tick).</summary>
+    public void RecenterOnPlayhead()
+    {
+        CenterOnPlayhead();
+        _ruler.InvalidateVisual();
+        _sectionsLane.InvalidateVisual();
+        _lanes.InvalidateVisual();
+        _overlay.InvalidateVisual();
+        _footerLanes.InvalidateVisual();
+        _overview.InvalidateVisual();
+    }
+
+    // Recentre the horizontal scroll on the playhead (called each tick while following +
+    // playing). Clamped to the scroll range, so near the start/end the playhead just sits
+    // where it lands instead of the view over-scrolling.
+    // Returns true when the scroll actually moved, so the caller can repaint the lane
+    // surface (a programmatic _hScroll.Value change does NOT raise the Scroll event that
+    // otherwise redraws the lanes).
+    private bool CenterOnPlayhead()
+    {
+        double laneWidth = _lanes.Bounds.Width;
+        if (laneWidth <= 0 || _pixelsPerBeat <= 0) return false;
+        double target = Math.Clamp(ScrollBeatForX(_displayPlayheadBeats, laneWidth / 2.0), 0, Math.Max(0, _hScroll.Maximum));
+        if (Math.Abs(target - _scrollBeats) < 1e-6) return false;
+        _scrollBeats = target;
+        _hScroll.Value = target;   // the InvalidateVisual calls below repaint with the new scroll
+        return true;
+    }
+
+    public void SetPlayhead(double beats, bool preserveDisplay = false)
+    {
+        _playheadBeats = beats;
+        bool playing = _engine is { IsPlaying: true };
+        // Converge the loop highlight with the engine (~30 Hz) so transport-bar
+        // toggles/changes reflect here too — except mid-drag, where we show a preview.
+        bool loopChanged = false;
+        if (!_loopDragging && _engine is { } eng)
+        {
+            bool on = eng.LoopEnabled; double s = eng.LoopStart, e = eng.LoopEnd;
+            if (on != _loopActive || s != _loopS || e != _loopE)
+            { _loopActive = on; _loopS = s; _loopE = e; loopChanged = true; }
+        }
+        // Automation mode: an empty lane draws a baseline at the param's live value, so it must
+        // follow a knob turned in the device. Redraw the lanes only when a visible empty lane's
+        // baseline actually changed (params with points are automation-driven — no baseline).
+        if (_automationMode) RefreshAutoBaselines();
+        UpdatePlayheadDisplay(preserveDisplay && playing ? _displayPlayheadBeats : beats, playing, loopChanged);
+    }
+
+    /// <summary>Frame-rate display update; does no meter, automation or loop polling.</summary>
+    public void SetPlayheadFrame(double positionBeats, double displayBeats, bool playing)
+    {
+        _playheadBeats = positionBeats;
+        UpdatePlayheadDisplay(displayBeats, playing, false);
+    }
+
+    private void UpdatePlayheadDisplay(double beats, bool playing, bool loopChanged)
+    {
+        bool moved = beats != _displayPlayheadBeats;
+        _displayPlayheadBeats = beats;
+        if (playing && !_wasPlaying) SetFollowSuspended(false);
+        _wasPlaying = playing;
+        // Follow must repaint the content as well as the moving overlay.
+        bool scrolled = _followPlayhead && !FollowSuspended && playing && !_lanes.IsGesturing && !_footerLanes.IsGesturing && CenterOnPlayhead();
+        if (scrolled) _lanes.InvalidateVisual();
+        // Stopped with nothing moving: the playhead chrome is already right — repainting it
+        // every tick kept the whole window redrawing ~30×/s while idle (#55).
+        if (!moved && !scrolled && !loopChanged) return;
+        // Only the overlay (playhead + loop band) moves each tick — the lane surface
+        // beneath is unchanged, so leave it be to avoid a full clip/waveform repaint.
+        _ruler.InvalidateVisual();
+        if (_sectionsRow.IsVisible) _sectionsLane.InvalidateVisual();
+        _overlay.InvalidateVisual();
+        _footerLanes.InvalidateVisual();
+        TickOverviewPlayhead();   // only when the marker crossed a pixel of the strip
+    }
+
+    // Repaint the lane surface when a visible un-automated (empty-lane) target's live value
+    // changed, so the dashed baseline follows the device knob in real time.
+    private void RefreshAutoBaselines()
+    {
+        double sig = 17.0;
+        var (rLo, rHi) = VisibleRowRange();
+        for (int i = rLo; i <= rHi && i < _tracks.Count; i++)
+        {
+            var t = _tracks[i];
+            if (t.AutoPoints.Count != 0) continue;   // only empty lanes show a baseline
+            sig = sig * 31.0 + (AutoCurrent(t) + 3.0) * (i * 7 + 1);
+        }
+        for (int i = 0; i < _returns.Count; i++)   // the footer's return lanes (specs/045)
+        {
+            var t = _returns[i];
+            if (t.AutoPoints.Count != 0) continue;
+            sig = sig * 31.0 + (AutoCurrent(t) + 3.0) * (i * 13 + 5);
+        }
+        if (sig != _autoBaselineSig) { _autoBaselineSig = sig; _lanes.InvalidateVisual(); _footerLanes.InvalidateVisual(); }
+    }
+
+    // ---- loop region authoring -------------------------------------------
+
+    /// <summary>Live preview while dragging a loop range on the ruler (no engine write).</summary>
+    private void SetLoopPreview(double a, double b)
+    {
+        _loopDragging = true;
+        _loopActive = true;
+        _loopS = Math.Max(0, Snap(Math.Min(a, b)));
+        _loopE = Math.Max(_loopS + SnapStepBeats, Snap(Math.Max(a, b)));
+        Redraw();
+    }
+
+    /// <summary>Commit the current drag preview to the engine + notify the transport bar.</summary>
+    private void CommitLoopPreview()
+    {
+        _loopDragging = false;
+        SetLoopRegion(_loopS, _loopE);
+    }
+
+    private void CancelLoopPreview() { _loopDragging = false; Redraw(); }
+
+    /// <summary>Live preview of one loop edge dragged on the ruler (#125): the other edge
+    /// stays exactly where it was; the dragged one snaps (unless <paramref name="free"/>)
+    /// and stops a grid step short of the other.</summary>
+    private void SetLoopEdgePreview(bool start, double beat, bool free)
+    {
+        _loopDragging = true;
+        double b = Math.Max(0, free ? beat : Snap(beat));
+        double min = free ? 1.0 / 64 : SnapStepBeats;
+        if (start) _loopS = Math.Min(b, _loopE - min);
+        else _loopE = Math.Max(b, _loopS + min);
+        _loopS = Math.Max(0, _loopS);
+        Redraw();
+    }
+
+    /// <summary>Live preview of the loop region dragged by its brace (#125): same length,
+    /// start moved by <paramref name="delta"/> beats, snapped unless free, never before 0.</summary>
+    private void SetLoopMovePreview(double origStart, double origEnd, double delta, bool free)
+    {
+        _loopDragging = true;
+        double len = origEnd - origStart;
+        double s = Math.Max(0, free ? origStart + delta : origStart + Snap(delta));
+        _loopS = s; _loopE = s + len;
+        Redraw();
+    }
+
+    /// <summary>Commit a moved / resized region as previewed (no re-snap: the edge that was
+    /// not dragged keeps its exact position). Keeps the loop's on/off state.</summary>
+    private void CommitLoopEdit()
+    {
+        _loopDragging = false;
+        if (_engine is null || !(_loopE > _loopS)) return;
+        _engine.SetLoop(_loopActive, _loopS, _loopE);
+        Redraw();
+        LoopChanged?.Invoke();
+    }
+
+    /// <summary>"5.1 – 9.1 · 4 bars": the loop region while it is dragged on the ruler.</summary>
+    private string LoopReadout()
+    {
+        string Pos(double b)   // bar.beat, as the transport's loop cell writes it
+        {
+            int bar = (int)Math.Floor(b / _beatsPerBar + 1e-9);
+            int beat = (int)Math.Floor(b - bar * _beatsPerBar + 1e-9);
+            return $"{bar + 1}.{beat + 1}";
+        }
+        double len = _loopE - _loopS, bars = len / _beatsPerBar;
+        string l = Math.Abs(bars - Math.Round(bars)) < 1e-6
+            ? Loc.Plural("arrangement.bars", (long)Math.Round(bars))
+            : Loc.F("arrangement.beats", len);
+        return $"{Pos(_loopS)} – {Pos(_loopE)} · {l}";
+    }
+
+    /// <summary>Turn looping on / off over the current region (the ruler's menu).</summary>
+    private void SetLoopOn(bool on)
+    {
+        if (_engine is null) return;
+        if (on && !(_loopE > _loopS)) { _loopS = 0; _loopE = 4 * _beatsPerBar; }   // as the transport's Loop does
+        _loopActive = on;
+        _engine.SetLoop(on, _loopS, _loopE);
+        Redraw();
+        LoopChanged?.Invoke();
+    }
+
+    /// <summary>Clear loop region (#125): loop off and the region forgotten, where turning
+    /// the loop off keeps it. Clips, notes and automation are not touched.</summary>
+    internal void ClearLoopRegion()
+    {
+        if (_engine is null) return;
+        _engine.SetLoop(false, 0, 0);
+        _loopActive = false; _loopS = 0; _loopE = 0; _loopDragging = false;
+        Redraw();
+        LoopChanged?.Invoke();
+    }
+
+    /// <summary>Enable looping over [start,end] (snapped). Notifies the transport bar.</summary>
+    internal void SetLoopRegion(double startBeat, double endBeat)
+    {
+        if (_engine is null) return;
+        var (s, e) = SnapLoopRange(startBeat, endBeat);
+        _engine.SetLoop(true, s, e);
+        _loopActive = true; _loopS = s; _loopE = e; _loopDragging = false;
+        Redraw();
+        LoopChanged?.Invoke();
+    }
+
+    /// <summary>Turn the loop off / on when <paramref name="beat"/> is on the loop brace,
+    /// keeping its region (double-click on the ruler, #59). False when it isn't.</summary>
+    internal bool ToggleLoopAt(double beat)
+    {
+        if (_engine is null || _loopDragging || !(_loopE > _loopS) || beat < _loopS || beat > _loopE) return false;
+        _loopActive = !_loopActive;
+        _engine.SetLoop(_loopActive, _loopS, _loopE);
+        Redraw();
+        LoopChanged?.Invoke();
+        return true;
+    }
+
+    private (double Start, double End) SnapLoopRange(double a, double b)
+    {
+        double s = Math.Max(0, Snap(Math.Min(a, b)));
+        return (s, Math.Max(s + SnapStepBeats, Snap(Math.Max(a, b))));
+    }
+
+    /// <summary>Loop over the beat span of the current clip selection. False if nothing selected.</summary>
+    public bool LoopSelection()
+    {
+        if (_engine is null || ClipSelectionSpan() is not { } span) return false;
+        SetLoopRegion(span.Start, span.End);
+        return true;
+    }
+
+    private (double Start, double End)? ClipSelectionSpan()
+    {
+        if (_sel.Count == 0) return null;
+        double min = double.MaxValue, max = double.MinValue;
+        foreach (var t in _tracks)
+            foreach (var c in t.Clips)
+                if (_sel.Contains((t.Id, c.ClipIndex)))
+                { min = Math.Min(min, c.StartBeat); max = Math.Max(max, c.StartBeat + c.LengthBeats); }
+        return max > min ? (min, max) : null;
+    }
+
+    /// <summary>The (snapped) loop region the current selection asks for — a time-range
+    /// selection wins, else the span of the selected clips. Null when nothing is selected.</summary>
+    public (double Start, double End)? SelectionLoopRange()
+    {
+        if (HasTimeSelection) return SnapLoopRange(_timeSelStart, _timeSelEnd);
+        return ClipSelectionSpan() is { } span ? SnapLoopRange(span.Start, span.End) : null;
+    }
+
+    /// <summary>Pushes fresh per-track meter readings into the header meters (~30 Hz, M6-2),
+    /// and refreshes the volume/pan/send controls so automation (playback or scrub) moves them live.</summary>
+    public void UpdateMeters()
+    {
+        if (_engine is not { } eng) return;
+        foreach (var (id, bar) in _meters)
+        {
+            if (eng.TryGetTrackMeter(id, out var m)) bar.Push(m);
+            else bar.Reset();
+        }
+        foreach (var (id, bar) in _footerMeters)
+        {
+            if (eng.TryGetTrackMeter(id, out var m)) bar.Push(m);
+            else bar.Reset();
+        }
+        // The master level is the engine's master meter; the master *track* is only its effect chain.
+        _masterRowMeter?.Push(eng.MasterMeter());
+        if (GetMasterVolume is { } getMaster)
+            FollowVolume(_masterRowFader, _masterRowDb, getMaster());
+        int n = eng.TrackCount;
+        for (int i = 0; i < n; i++)
+        {
+            if (!eng.TryGetTrackInfo(i, out var ti)) continue;
+            // Follow the live (automated) value; don't fight the user mid-drag.
+            if (_volFaders.TryGetValue(ti.Id, out var f) && !f.Dragging && Math.Abs(f.Value - ti.Volume) > 1e-3)
+            {
+                f.Value = ti.Volume;
+            }
+            if (_panBars.TryGetValue(ti.Id, out var p) && !p.Dragging && Math.Abs(p.Pan - ti.Pan) > 1e-3)
+                p.Pan = ti.Pan;
+            if (_footerFaders.TryGetValue(ti.Id, out var rf))
+                FollowVolume(rf, _footerDb.GetValueOrDefault(ti.Id), ti.Volume);
+            if (_footerPans.TryGetValue(ti.Id, out var rp) && !rp.Dragging && Math.Abs(rp.Pan - ti.Pan) > 1e-3)
+                rp.Pan = ti.Pan;
+        }
+        // Large headers' sends follow the mixer, the Sends card and automation (#138).
+        foreach (var (tid, bus, sf) in _sendFaders)
+        {
+            if (sf.Dragging) continue;
+            double v = eng.GetTrackSend(tid, bus);
+            if (Math.Abs(sf.Value - v) > 1e-3) sf.Value = v;
+        }
+        FollowSends(eng);
+    }
+
+    // Moves a footer fader (its value is written inside it) to a volume changed elsewhere
+    // (Mixer, MST, MCP, automation, project load) — unless the user is dragging it.
+    private static void FollowVolume(MiniFader? fader, TextBlock? db, double volume)
+    {
+        if (fader is null || fader.Dragging || Math.Abs(fader.Value - volume) <= 1e-3) return;
+        fader.Value = volume;
+        if (db is not null) db.Text = VolumeDbText(volume);
+    }
+
+    private static void FollowVolume(MiniFader? fader, double volume)
+    {
+        if (fader is null || fader.Dragging || Math.Abs(fader.Value - volume) <= 1e-3) return;
+        fader.Value = volume;
+    }
+
+    private void Zoom(double factor)
+    {
+        _pixelsPerBeat = Math.Clamp(_pixelsPerBeat * factor, 4, 240);
+        SyncScroll(_lanes.Bounds.Width);
+        Redraw();
+    }
+
+    // Zoom horizontally while keeping the beat under the cursor fixed (⌘/Ctrl+wheel).
+    internal void ZoomAtBeat(double factor, double beatAnchor)
+    {
+        double old = _pixelsPerBeat;
+        _pixelsPerBeat = Math.Clamp(_pixelsPerBeat * factor, 4, 240);
+        if (Math.Abs(_pixelsPerBeat - old) < 1e-9) return;
+        _scrollBeats = TempoAxis ? Math.Max(0, TempoBeat(TempoSeconds(beatAnchor) - (TempoSeconds(beatAnchor) - TempoSeconds(_scrollBeats)) * old / _pixelsPerBeat))
+            : Math.Max(0, beatAnchor - (beatAnchor - _scrollBeats) * (old / _pixelsPerBeat));
+        SyncScroll(_lanes.Bounds.Width);   // clamps _scrollBeats to range + syncs the scrollbar
+        Redraw();
+    }
+
+    // Inclusive track-row range currently on screen, given the vertical scroll — the lane
+    // render skips rows outside it so off-screen tracks pay no clip/waveform cost. A one-row
+    // bleed each side keeps partially-scrolled rows fully painted. Returns (0,-1) when empty.
+    internal (int lo, int hi) VisibleRowRange()
+    {
+        if (_tracks.Count == 0) return (0, -1);
+        double offY = _scroller?.Offset.Y ?? 0;
+        double vpH = _scroller is { } s && s.Viewport.Height > 0 ? s.Viewport.Height : _lanes.Bounds.Height;
+        int lo = Math.Max(0, (RowAtYClamped(offY)) - 1);
+        int hi = Math.Min(_tracks.Count - 1, RowAtYClamped(offY + vpH) + 1);
+        return (lo, hi);
+    }
+
+    private void Redraw()
+    {
+        _ruler.InvalidateVisual();
+        _sectionsLane.InvalidateVisual();   // spans follow scroll + zoom
+        _lanes.InvalidateVisual();
+        _overlay.InvalidateVisual();   // playhead/loop band track scroll+zoom+loop edits
+        _footerLanes.InvalidateVisual();
+        _overview.InvalidateVisual();  // the viewport window follows scroll+zoom
+        UpdateOverviewRange();
+        var g = SnapGridState;
+        if (g != _lastGrid) { _lastGrid = g; GridChanged?.Invoke(); }
+    }
+
+    /// <summary>Rebuilds the track/clip model + headers from the engine. Pass
+    /// <paramref name="rebuildHeaders"/>=false to refresh only the clip data + lane drawing
+    /// (used during recording, so the header controls — the input combobox — and any open
+    /// context menu survive the 60 Hz tick instead of being torn down each frame).</summary>
+    /// <summary>The recording MIDI take's held notes and appear animation (#56), drawn on the
+    /// take's row. Owned and updated by the window on its recording tick.</summary>
+    internal RecordPreview? RecordPreview { get; set; }
+
+    public void Refresh(bool rebuildHeaders = true)
+    {
+        var linkBefore = _linkSeen;
+        Refresh(rebuildHeaders, movedOnly: false);
+        // A Link turned on or off anywhere (header, Mixer, Session, undo, MCP): the selected
+        // clips' partners follow the new link sets (specs/076).
+        if (rebuildHeaders && _sel.Count > 0 && linkBefore is not null && !linkBefore.SameSets(Link)) ReconcileLinkedSelection();
+    }
+
+    /// <summary>After an edit that only moved, cut or removed clips (a section rearrange,
+    /// specs/073): reload clip and automation data without rebuilding the track headers — the
+    /// slow part on a big song — and keep the peaks of every audio clip whose source is unchanged,
+    /// wherever it now sits.</summary>
+    internal void RefreshMovedClips() => Refresh(rebuildHeaders: false, movedOnly: true);
+
+    private void Refresh(bool rebuildHeaders, bool movedOnly)
+    {
+        if (rebuildHeaders) RefreshStarting?.Invoke();
+        // Peak reuse (⑤): on a live refresh (no header rebuild) the audio content of existing
+        // clips can't change — recording appends a separate take drawn elsewhere, and the live
+        // MIDI-drag path only touches a MIDI clip. So carry each audio clip's already-fetched
+        // peaks over instead of recomputing 2048 buckets per clip on every 60 Hz tick. A full
+        // Refresh (after an edit) always refetches, so trims/reverses/warps stay correct.
+        Dictionary<(int track, int clip), ClipVM>? oldClips = null;
+        // A moved clip keeps its index only by chance (a cut adds pieces), so after a move the
+        // peaks are matched by what they show — the clip's source and length — not by index.
+        Dictionary<(int track, PeakSourceKey source, double length), ClipVM>? movedClips = null;
+        if (movedOnly)
+        {
+            movedClips = new();
+            foreach (var t in _tracks)
+                foreach (var c in t.Clips)
+                    if (c.PeakSource is { } src && c.Peaks is not null) movedClips[(t.Id, src, c.LengthBeats)] = c;
+        }
+        else if (!rebuildHeaders)
+        {
+            oldClips = new();
+            foreach (var t in _tracks)
+                foreach (var c in t.Clips)
+                    if (!c.IsMidi && c.Peaks is not null) oldClips[(t.Id, c.ClipIndex)] = c;
+        }
+        if (rebuildHeaders) ReloadSections();   // sections live in the engine's project (specs/016)
+        if (!movedOnly) ReloadTempo();
+        _tracks.Clear();
+        _returns.Clear();
+        _link = null;   // group Link sets (specs/076): rebuilt on next use
+        var takePeaks = new Dictionary<(int, int, long), (float[], int)>();
+        if (_engine is { } eng)
+        {
+            int n = eng.TrackCount;
+            for (int i = 0; i < n; i++)
+            {
+                if (!eng.TryGetTrackInfo(i, out var ti)) continue;
+                // Stored colour (set via the header menu) wins; otherwise auto by position.
+                int effColor = EffectiveColorIndex(eng, ti.Id);
+                var tvm = new TrackVM
+                {
+                    Id = ti.Id,
+                    IsInstrument = ti.IsInstrument,
+                    IsReturn = ti.IsReturn,
+                    IsGroup = ti.IsGroup,
+                    GroupId = ti.GroupId,
+                    ColorIndex = effColor,
+                    Muted = ti.Muted != 0,
+                    Soloed = ti.Soloed != 0,
+                    Armed = ti.Armed != 0,
+                    Frozen = !ti.IsReturn && !ti.IsGroup && eng.IsTrackFrozen(ti.Id),   // M7
+                    LiveRole = FreezeRole?.Invoke(ti.Id) ?? 0,                          // live-freeze (v1.1)
+                    Player = PlayerBadge?.Invoke(ti.Id),                                 // Nota Remote
+                    // A stored name (set via the header menu) wins; otherwise the derived default.
+                    Name = IsProcessingTrack(ti.Id) ? Loc.T("arrangement.processing") : TrackNames.Of(eng, ti),
+                    Volume = ti.Volume,
+                    Pan = ti.Pan,
+                    EditLink = ti.IsGroup && eng.GetTrackEditLink(ti.Id),   // group Link (specs/076)
+                };
+                if (_automationMode)
+                {
+                    // First visit to this track's lane: show its first automated param, not Volume.
+                    if (!_autoTargets.TryGetValue(ti.Id, out var sel) && FirstAutomatedTarget(eng, ti.Id) is { } first)
+                        _autoTargets[ti.Id] = sel = first;
+                    if (_autoTargets.ContainsKey(ti.Id))
+                    {
+                        (tvm.AutoTarget, tvm.AutoDeviceIndex, tvm.AutoParamIndex, tvm.AutoParamId, tvm.AutoChain, tvm.AutoSlot, tvm.AutoLane) = sel;
+                        if (tvm.AutoChain >= 0) ResyncNestedTarget(tvm);   // a rack edit may have moved its device
+                        if (tvm.AutoTarget == AutomationTarget.Send) ResyncSendTarget(tvm);   // a return delete may have moved its bus
+                    }
+                    tvm.AutoLabel = AutoLabelFor(tvm);
+                    LoadAutoPoints(tvm);
+                }
+                for (int c = 0; c < ti.ClipCount; c++)
+                {
+                    if (!eng.TryGetClipInfo(ti.Id, c, out var ci)) continue;
+                    var cvm = new ClipVM
+                    {
+                        ClipIndex = c,
+                        StartBeat = ci.StartBeat,
+                        LengthBeats = ci.LengthBeats,
+                        IsMidi = ci.IsMidi,
+                        Active = ci.IsActive,
+                        Name = eng.GetClipName(ti.Id, c),
+                    };
+                    NotaAudioClipInfo ai = default;
+                    bool audioInfo = !ci.IsMidi && eng.TryGetAudioClipInfo(ti.Id, c, out ai);
+                    // A warped clip's peaks also follow its warp markers, which the key can't see:
+                    // it is always re-read.
+                    if (audioInfo && ai.WarpEnabled == 0) cvm.PeakSource = PeakSourceKey.Of(ai);
+                    ClipVM? same = null;
+                    if (ci.IsMidi)
+                    {
+                        cvm.Notes = eng.GetClipNotes(ti.Id, c);
+                    }
+                    else if (movedClips is not null && cvm.PeakSource is { } src
+                             && movedClips.TryGetValue((ti.Id, src, ci.LengthBeats), out same))
+                    {
+                        cvm.Peaks = same.Peaks;
+                        cvm.Rms = same.Rms;
+                        cvm.PeakCount = same.PeakCount;
+                        (cvm.DetailPeaks, cvm.DetailRms, cvm.DetailCount, cvm.DetailF0, cvm.DetailF1)
+                            = (same.DetailPeaks, same.DetailRms, same.DetailCount, same.DetailF0, same.DetailF1);
+                    }
+                    else if (oldClips is not null
+                             && oldClips.TryGetValue((ti.Id, c), out var prev)
+                             && Math.Abs(prev.StartBeat - ci.StartBeat) < 1e-9
+                             && Math.Abs(prev.LengthBeats - ci.LengthBeats) < 1e-9)
+                    {
+                        // Unchanged audio clip on a live refresh: reuse the peaks (no native recompute).
+                        cvm.Peaks = prev.Peaks;
+                        cvm.Rms = prev.Rms;
+                        cvm.PeakCount = prev.PeakCount;
+                        (cvm.DetailPeaks, cvm.DetailRms, cvm.DetailCount, cvm.DetailF0, cvm.DetailF1)
+                            = (prev.DetailPeaks, prev.DetailRms, prev.DetailCount, prev.DetailF0, prev.DetailF1);
+                    }
+                    else
+                    {
+                        // Request enough buckets that even wide/zoomed clips stay detailed
+                        // (the lane draws one aggregated column per pixel).
+                        const int buckets = 2048;
+                        var peaks = new float[buckets * 2];
+                        var rms = new float[buckets];
+                        cvm.PeakCount = eng.GetClipPeaks(ti.Id, c, peaks, buckets, rms);
+                        cvm.Peaks = peaks;
+                        cvm.Rms = rms;
+                    }
+                    if (audioInfo)
+                    {
+                        cvm.Warped = ai.WarpEnabled != 0 && ai.WarpBeats > 0;
+                        cvm.Gain = ai.Gain;
+                        cvm.Adsr = eng.GetClipAdsr(ti.Id, c);
+                        cvm.TakeId = eng.ClipTakeId(ti.Id, c);
+                        cvm.SourceOffsetFrames = ai.SourceOffsetFrames;
+                    }
+                    tvm.Clips.Add(cvm);
+                }
+                if (ti.Type == 0) LoadTakes(eng, tvm, takePeaks);
+                MarkClipRuns(tvm);
+                (tvm.IsReturn ? _returns : _tracks).Add(tvm);
+            }
+        }
+
+        _takePeaks = takePeaks;
+        _takesOpen.RemoveWhere(id => !_tracks.Any(t => t.Id == id && t.Takes.Count > 0));
+        ApplyHierarchy();   // reorder _tracks into group DFS order (depth + collapse-filtered)
+        PruneTrackHeights();    // heights of deleted tracks go with them
+        RebuildRowGeometry();   // row tops depend on which rows are groups → after the reorder
+        RecomputeTotalBeats();
+        LoadMasterAuto();   // master-volume automation for the footer row (M9 follow-up)
+        RebuildFooterGeometry();   // footer rows follow the returns just rebuilt
+        if (rebuildHeaders)
+        {
+            RebuildHeaders();
+            RebuildFooterHeaders();
+        }
+        _lanes.Height = Math.Max(DefaultRowHeight, RowsHeight);
+        _overlay.Height = _lanes.Height;   // keep the playhead/loop overlay the same span
+        ApplyFooterHeight();
+        SyncScroll(_lanes.Bounds.Width);
+        Redraw();
+    }
+
+    // A clip heads a run when nothing on the track ends where it begins. Engine clip order
+    // is not sorted by time, so this walks a start-ordered view and leaves the VM order alone
+    // (clip indices there address the engine).
+    private static void MarkClipRuns(TrackVM t)
+    {
+        if (t.Clips.Count == 0) return;
+        var byStart = t.Clips.OrderBy(c => c.StartBeat).ToList();
+        double runEnd = double.NegativeInfinity;
+        foreach (var c in byStart)
+        {
+            c.RunStart = c.StartBeat > runEnd + 1e-6;
+            runEnd = Math.Max(runEnd, c.StartBeat + c.LengthBeats);
+        }
+    }
+
+    private void RecomputeTotalBeats()
+    {
+        double end = 0;
+        foreach (var t in _tracks)
+            foreach (var c in t.Clips)
+                end = Math.Max(end, c.StartBeat + c.LengthBeats);
+        _totalBeats = Math.Max(64, Math.Ceiling(end / _beatsPerBar) * _beatsPerBar + 16);
+    }
+
+    // Keep the horizontal scrollbar's range in sync with the visible width.
+    internal void SyncScroll(double laneWidth)
+    {
+        double viewportBeats = laneWidth > 0 ? XToBeat(laneWidth) - XToBeat(0) : _totalBeats;
+        // A mapped viewport spans fixed seconds, but a different number of beats at
+        // each origin. Find its last origin from the project ending, not today's span.
+        double maximum = laneWidth > 0 && TempoAxis
+            ? TempoBeat(Math.Max(0, TempoSeconds(_totalBeats) - laneWidth / (_pixelsPerBeat * 2)))
+            : _totalBeats - viewportBeats;
+        _hScroll.Maximum = Math.Max(0, maximum);
+        if (_scrollBeats > _hScroll.Maximum) { _scrollBeats = _hScroll.Maximum; }
+        _hScroll.ViewportSize = laneWidth > 0 ? XToBeat(laneWidth) - XToBeat(0) : _totalBeats;
+        _hScroll.Value = _scrollBeats;
+    }
+
+    internal void ScrollByBeats(double delta)
+    {
+        NoteManualScroll();
+        _scrollBeats = Math.Clamp(_scrollBeats + delta, 0, _hScroll.Maximum);
+        _hScroll.Value = _scrollBeats;
+        Redraw();
+    }
+
+    // Wheel zoom/scroll for the timeline. Shared by the lanes and the scroller so the empty
+    // area below the tracks (when few lanes) reacts too. cursorX is the horizontal cursor
+    // position in lane coordinates (for zoom-toward-cursor). Plain vertical is left unhandled
+    // so the enclosing ScrollViewer can scroll the tracks.
+    internal void HandleLaneWheel(PointerWheelEventArgs e, double cursorX)
+    {
+        var mods = e.KeyModifiers;
+
+        // ⌘/Ctrl + wheel → horizontal zoom toward the cursor (DAW-standard).
+        if ((mods & (KeyModifiers.Control | KeyModifiers.Meta)) != 0)
+        {
+            double beatAtCursor = XToBeat(cursorX);
+            ZoomAtBeat(WheelInput.ZoomFactor(e.Delta.Y, 1.25), beatAtCursor);
+            e.Handled = true;
+            return;
+        }
+
+        // Horizontal intent: a horizontal-dominant trackpad swipe, or Shift + wheel. Delta is
+        // device-normalized to a pixel amount, then converted to beats at the current zoom so
+        // it scrolls a consistent distance and can't fly to the ends.
+        if (Math.Abs(e.Delta.X) > Math.Abs(e.Delta.Y))
+        {
+            ScrollByBeats(-WheelInput.Pixels(e.Delta.X) / _pixelsPerBeat);
+            e.Handled = true;
+            return;
+        }
+        if ((mods & KeyModifiers.Shift) != 0)
+        {
+            ScrollByBeats(-WheelInput.Pixels(e.Delta.Y) / _pixelsPerBeat);
+            e.Handled = true;
+            return;
+        }
+
+        // Plain vertical wheel / trackpad → let the enclosing ScrollViewer scroll the tracks
+        // vertically (don't handle, so the event bubbles up to it).
+    }
+
+    // The multi-selection a click just narrowed down to one clip, kept for the double-click
+    // that click may be the first half of (specs/029).
+    private (int Track, int Clip, (int, int)[] Before)? _narrowed;
+
+    internal void RememberNarrowed(int trackId, int clipIndex, bool wasSelected)
+        => _narrowed = wasSelected && _sel.Count > 1 ? (trackId, clipIndex, _sel.ToArray()) : null;
+
+    /// <summary>A double-click on the clip a click just narrowed the selection to: put the
+    /// selection back, so the clips open together.</summary>
+    internal void RestoreNarrowed(int trackId, int clipIndex)
+    {
+        if (_narrowed is { } n && n.Track == trackId && n.Clip == clipIndex && _sel.Count == 1 && _sel.Contains((trackId, clipIndex)))
+        {
+            SetSelection(n.Before);
+            SelTrackId = trackId; SelClipIndex = clipIndex;
+        }
+        _narrowed = null;
+    }
+
+    /// <summary>The selected MIDI clips, ordered by start then track order (specs/029).</summary>
+    public IReadOnlyList<(int TrackId, int ClipIndex)> SelectedMidiClips()
+    {
+        var list = new List<(int, int, double, int)>();
+        for (int r = 0; r < _tracks.Count; r++)
+            foreach (var c in _tracks[r].Clips)
+                if (c.IsMidi && _sel.Contains((_tracks[r].Id, c.ClipIndex))) list.Add((_tracks[r].Id, c.ClipIndex, c.StartBeat, r));
+        return list.OrderBy(x => x.Item3).ThenBy(x => x.Item4).Select(x => (x.Item1, x.Item2)).ToList();
+    }
+
+    internal void OnClipDoubleClicked(int trackId, int clipIndex, bool isMidi)
+    {
+        if (isMidi) MidiClipActivated?.Invoke(trackId, clipIndex);
+        else AudioClipActivated?.Invoke(trackId, clipIndex);
+    }
+
+    /// <summary>Currently selected track id, or -1 (M4.1-C: effect target).</summary>
+    public int SelectedTrackId => SelTrackId;
+
+    /// <summary>Currently selected clip index within the selected track, or -1.</summary>
+    public int SelectedClipIndex => SelClipIndex;
+
+    /// <summary>Best track to auto-arm when Record is pressed with nothing armed:
+    /// the selected track if it's a recordable (audio/instrument) row, else the
+    /// last such row, else 0. Return buses (in <c>_returns</c>) are never a target.</summary>
+    public int RecordArmTarget()
+    {
+        foreach (var t in _tracks)
+            if (t.Id == SelTrackId) return t.Id;
+        return _tracks.Count > 0 ? _tracks[^1].Id : 0;
+    }
+
+    /// <summary>Creates an empty MIDI clip on an instrument track at the bar containing
+    /// <paramref name="beat"/> (double-click on empty lane space). Selects the new clip.</summary>
+    internal void AddMidiClipAt(int trackId, double beat)
+    {
+        if (_engine is null) return;
+        double bar = Math.Max(1, _beatsPerBar);
+        double start = Math.Max(0, Math.Floor(beat / bar) * bar);
+        int idx = _engine.AddMidiClip(trackId, start, bar);
+        Refresh();
+        if (idx >= 0) { SelTrackId = trackId; SelClipIndex = idx; UpdateHeaderSelection(); Redraw(); }
+    }
+
+    // The whole clip selection as an engine block: the multi-selection when non-empty,
+    // else the primary clip, else empty. Copy/Cut/Duplicate/Paste all operate on this
+    // block so a group of clips travels together (with its automation) preserving geometry.
+    private (int trackId, int clipIndex)[] SelectionBlock()
+    {
+        if (_sel.Count > 0) return _sel.Select(s => (s.track, s.clip)).ToArray();
+        if (SelTrackId > 0 && SelClipIndex >= 0) return new[] { (SelTrackId, SelClipIndex) };
+        return Array.Empty<(int, int)>();
+    }
+
+    // Re-select exactly the clips the last block paste/duplicate produced.
+    // A move passes its map (old clip → new clip), so each clip picked alone with ⌥ stays alone
+    // (specs/076); without one (duplicate, paste) the choice carries over when every clip had it.
+    private void ReselectPlaced(ClipBlockMove? move = null)
+    {
+        if (_engine is null) return;
+        var placed = _engine.LastPlacedClips();
+        if (placed.Length > 0)
+        {
+            var aloneBefore = _selAlone.Where(c => _sel.Contains(c)).ToList();
+            bool allAlone = _sel.Count > 0 && _sel.All(c => _selAlone.Contains(c));
+            SetSelection(placed);
+            var placedSet = new HashSet<(int track, int clip)>(placed);
+            if (move is not null)
+            {
+                foreach (var c in aloneBefore)
+                    if (move.Map.TryGetValue((c.track, c.clip), out var to) && to is { } n && placedSet.Contains((n.Track, n.Clip)))
+                        _selAlone.Add((n.Track, n.Clip));
+            }
+            else if (allAlone) foreach (var c in placed) _selAlone.Add(c);
+            RelinkSelection();
+        }
+    }
+
+    // Tell the window the primary track changed under a clip selection (devices / clip tab follow).
+    internal void AnnounceSelectedTrack()
+    {
+        if (SelTrackId > 0) TrackSelected?.Invoke(SelTrackId);
+    }
+
+    /// <summary>Duplicates the whole clip selection as one block, placed right after itself
+    /// (keyboard Cmd+D / context menu). The copies become the new selection. False if none.</summary>
+    public bool DuplicateSelectedClip()
+    {
+        if (_engine is null) return false;
+        var sel = SelectionBlock();
+        if (sel.Length == 0 || _engine.DuplicateClipBlock(sel) < 0) return false;
+        Refresh();
+        ReselectPlaced();
+        return true;
+    }
+
+    /// <summary>Copies the whole clip selection (with its automation) to the block clipboard.</summary>
+    public bool CopySelectedClip()
+    {
+        if (_engine is null) return false;
+        var sel = SelectionBlock();
+        if (sel.Length == 0 || !_engine.CopyClipBlock(sel)) return false;
+        ClipTransfer.TookFromArrangement();
+        FocusTopTrackOf(sel);
+        return true;
+    }
+
+    /// <summary>Cuts the whole clip selection: copies the block to the clipboard, then removes
+    /// the clips and their track automation.</summary>
+    public bool CutSelectedClip()
+    {
+        if (_engine is null) return false;
+        var sel = SelectionBlock();
+        bool cut = false;
+        if (sel.Length > 0) RemovingClips(sel.Select(c => c.trackId), () => cut = _engine.CutClipBlock(sel));
+        if (!cut) return false;
+        ClipTransfer.TookFromArrangement();
+        FocusTopTrackOf(sel);
+        Select(-1, -1);
+        Refresh();
+        return true;
+    }
+
+    /// <summary>Pastes the block clipboard at <paramref name="atBeat"/>, remapped so its top
+    /// track lands on <paramref name="trackId"/> (single clip → that track). Selects the paste.
+    /// A slot copied in the Session view lands the same way.</summary>
+    public bool PasteClipboardAt(int trackId, double atBeat)
+    {
+        if (_engine is null || trackId <= 0) return false;
+        if (ClipTransfer.FromSession) return PasteSessionSlot(atBeat, trackId);
+        if (_engine.PasteClipBlock(atBeat, trackId) <= 0) return false;
+        Refresh();
+        ReselectPlaced();
+        return true;
+    }
+
+    /// <summary>Keyboard paste at the playhead, onto the track the user last clicked
+    /// (<see cref="FocusTrackId"/>) — a multi-track block shifts so its top track lands there.
+    /// With no focused clip track the block lands on its source tracks (a slot copied in the
+    /// Session view: on its own track).</summary>
+    public bool PasteClipboard()
+    {
+        if (_engine is null) return false;
+        double at = Math.Max(0.0, _playheadBeats);
+        int dest = PasteTargetTrackId();
+        if (ClipTransfer.FromSession) return PasteSessionSlot(at, dest);
+        if (_engine.ClipboardBlockCount() == 0) return false;
+        if (_engine.PasteClipBlock(at, dest) <= 0)
+        {
+            if (dest <= 0) return false;
+            StatusMessage?.Invoke(Loc.T("arrangement.paste_a_midi_clip_onto"));
+            return true;
+        }
+        Refresh();
+        ReselectPlaced();
+        return true;
+    }
+
+    // After a copy/cut the keyboard paste targets the block's own top track until the user
+    // clicks another one (a marquee selection doesn't move the focus by itself).
+    private void FocusTopTrackOf((int trackId, int clipIndex)[] sel)
+    {
+        int top = -1, topRow = int.MaxValue;
+        foreach (var (track, _) in sel)
+            if (RowOfTrack(track) is var r and >= 0 && r < topRow) { topRow = r; top = track; }
+        if (top > 0) FocusTrackId = top;
+    }
+
+    // The keyboard paste's target: the focused track when it can hold clips, else -1 (source tracks).
+    private int PasteTargetTrackId()
+        => _tracks.Find(t => t.Id == FocusTrackId) is { IsReturn: false, IsGroup: false } ? FocusTrackId : -1;
+
+    // The session clipboard's slot onto the timeline (destTrackId -1 = its own track); a cut
+    // slot moves, emptying its slot in the same undo step.
+    private bool PasteSessionSlot(double atBeat, int destTrackId)
+    {
+        if (_engine is null || ClipTransfer.Slot is not { } src) return false;
+        _engine.BeginUndoGroup();
+        int placed;
+        try
+        {
+            placed = _engine.SessionSlotsToArrangement(new[] { (src.TrackId, src.Scene) }, atBeat, destTrackId);
+            if (placed > 0 && src.Cut) _engine.ClearSessionSlot(src.TrackId, src.Scene);
+        }
+        finally { _engine.EndUndoGroup(); }
+        if (placed <= 0)
+        {
+            StatusMessage?.Invoke(Loc.T("arrangement.paste_a_midi_clip_onto"));
+            return true;
+        }
+        if (src.Cut) { ClipTransfer.SlotMoved(null); SessionChanged?.Invoke(); }
+        Refresh();
+        ReselectPlaced();
+        return true;
+    }
+
+    /// <summary>True when ⌘V has something to paste onto the timeline (drives menu enablement).</summary>
+    public bool HasClipClipboard => _engine is not null && (ClipTransfer.FromSession || _engine.ClipboardBlockCount() > 0);
+
+    /// <summary>Copy to Session (⌘⇧C): the clip selection into session slots — each track's clips,
+    /// in time order, down consecutive slots of one scene row; <paramref name="startScene"/> -1 =
+    /// the first row where they all fit (new rows are added when needed). Returns the first row
+    /// filled, or -1 when nothing was copied.</summary>
+    public int CopySelectionToSession(int startScene = -1)
+    {
+        if (_engine is null) return -1;
+        var sel = SelectionBlock();
+        if (sel.Length == 0) return -1;
+        int scene = _engine.ArrangementClipsToSession(sel, startScene);
+        if (scene < 0) return -1;
+        SessionChanged?.Invoke();
+        StatusMessage?.Invoke(sel.Length == 1 ? Loc.F("arrangement.copied_clip_to_session_scene", scene + 1)
+                                              : Loc.F("arrangement.copied_clips_to_the_session", sel.Length, scene + 1));
+        return scene;
+    }
+
+    internal double Snap(double beat)
+    {
+        var g = SnapGridState;
+        return g.SnapOn ? SnapGrid.SnapBeat(beat, g.Snap.Beats(GridBarLength), GridBarLength) : beat;
+    }
+
+    /// <summary>Snap unless Alt is held (Alt = free/fine positioning). Reads the live
+    /// modifier state so it can be toggled mid-drag (req 1.2.1/2.4/3.1/8.2.1, 7.10).</summary>
+    internal double SnapMaybe(double beat, KeyModifiers mods)
+        => (mods & KeyModifiers.Alt) != 0 ? beat : Snap(beat);
+
+    /// <summary>Snap to the grid, but let a nearby snap target (a neighbouring clip edge or
+    /// marker within ~8px) win when it is closer — a magnetic snap (req 2.4). Alt bypasses all
+    /// snapping. <paramref name="targets"/> are absolute beats.</summary>
+    internal double SnapMagnetic(double raw, KeyModifiers mods, IReadOnlyList<double> targets)
+    {
+        if ((mods & KeyModifiers.Alt) != 0) return raw;
+        double best = Snap(raw);
+        double bestDist = Math.Abs(raw - best);
+        double thresh = _pixelsPerBeat > 0 ? 8.0 / _pixelsPerBeat : 0;   // 8 logical px
+        foreach (var t in targets)
+        {
+            double d = Math.Abs(raw - t);
+            if (d <= thresh && d < bestDist) { best = t; bestDist = d; }
+        }
+        return best;
+    }
+
+    /// <summary>Absolute beats of every clip edge (start/end) plus the loop bounds, excluding
+    /// the given clips — the magnetic-snap targets for a drag (req 2.4).</summary>
+    internal List<double> SnapTargets(ISet<(int track, int clip)> exclude)
+    {
+        var list = new List<double>();
+        foreach (var t in _tracks)
+            foreach (var c in t.Clips)
+            {
+                if (exclude.Contains((t.Id, c.ClipIndex))) continue;
+                list.Add(c.StartBeat);
+                list.Add(c.StartBeat + c.LengthBeats);
+            }
+        if (_loopE > _loopS) { list.Add(_loopS); list.Add(_loopE); }
+        return list;
+    }
+
+    /// <summary>Primary selection modifier: Cmd on macOS, Ctrl on Windows/Linux (req 7.11).
+    /// On macOS Ctrl is reserved for the system context-menu click, so it never toggles.</summary>
+    internal static bool IsPrimaryDown(KeyModifiers mods)
+        => OperatingSystem.IsMacOS() ? (mods & KeyModifiers.Meta) != 0
+                                     : (mods & KeyModifiers.Control) != 0;
+
+    /// <summary>"bar.beat" label (1-indexed) for a beat position — drag tooltips (req 2.9).</summary>
+    internal string FormatBarBeat(double beat)
+    {
+        double bpb = _beatsPerBar > 0 ? _beatsPerBar : 4;
+        int bar = (int)Math.Floor(beat / bpb) + 1;
+        double inBar = beat - (bar - 1) * bpb + 1;
+        return $"{bar}.{inBar:0.##}";
+    }
+
+    // --- browser drag & drop (M7-5) ---
+    private void OnLaneDragOver(object? sender, DragEventArgs e)
+    {
+        if (BrowserView.IsClipDrag) { OnClipDragOverLanes(e); return; }
+        if (DeviceDrag.IsActive) { OnDeviceDragOver(e); return; }
+        bool ok = BrowserView.IsAcceptableDrag(e);
+        e.DragEffects = ok ? DragDropEffects.Copy : DragDropEffects.None;
+        SetDropTrack(ok ? RowAtY(e.GetPosition(_lanes).Y) : -1);
+    }
+
+    // Marks row ti (-1 = none) as the browser drop target: lane wash + header ring.
+    private void SetDropTrack(int ti)
+    {
+        if (ti == DropTrackIndex) return;
+        DropTrackIndex = ti;
+        _lanes.InvalidateVisual();
+        _headerDropRing.IsVisible = ti >= 0 && ti < _tracks.Count;
+        if (!_headerDropRing.IsVisible) return;
+        Canvas.SetTop(_headerDropRing, RowTop(ti));
+        _headerDropRing.Height = RowHeightAt(ti);
+    }
+
+    // The return/master footer row at y: returns first, master last; -1 outside.
+    private int FooterRowAt(double y)
+    {
+        if (y < 0) return -1;
+        for (int i = 0; i + 1 < _footerRowTops.Length; i++)
+            if (y < _footerRowTops[i + 1]) return i;
+        return -1;
+    }
+    private int FooterRowTrackId(int row)
+        => row < 0 ? -1 : row < _returns.Count ? _returns[row].Id : _engine?.MasterTrackId ?? -1;
+
+    // Only effects and presets have a home on a bus; instruments / samples belong on tracks.
+    private static bool IsBusDrop()
+        => BrowserView.CurrentDrag is { Kind: BrowserItemKind.BuiltinEffect or BrowserItemKind.PluginEffect or BrowserItemKind.Preset };
+
+    private void OnFooterDragOver(object? sender, DragEventArgs e)
+    {
+        if (DeviceDrag.IsActive)   // returns and the master take audio effects
+        {
+            int id = FooterRowTrackId(FooterRowAt(e.GetPosition(_footerHeaders).Y));
+            bool can = id > 0 && _engine is not null && DeviceDrag.CanTake(_engine, id);
+            e.DragEffects = !can ? DragDropEffects.None : (e.KeyModifiers & KeyModifiers.Alt) != 0 ? DragDropEffects.Copy : DragDropEffects.Move;
+            SetFooterDropRow(can ? FooterRowAt(e.GetPosition(_footerHeaders).Y) : -1);
+            return;
+        }
+        bool ok = IsBusDrop();
+        e.DragEffects = ok ? DragDropEffects.Copy : DragDropEffects.None;
+        SetFooterDropRow(ok ? FooterRowAt(e.GetPosition(_footerHeaders).Y) : -1);
+    }
+
+    private void OnFooterDrop(object? sender, DragEventArgs e)
+    {
+        int row = FooterRowAt(e.GetPosition(_footerHeaders).Y);
+        SetFooterDropRow(-1);
+        if (DeviceDrag.IsActive)
+        {
+            int id = FooterRowTrackId(row);
+            if (id > 0 && _engine is not null && DeviceDrag.CanTake(_engine, id) && DeviceDrag.RequestFor(id, e.KeyModifiers) is { } r)
+            { DeviceDropped?.Invoke(r); e.Handled = true; }
+            return;
+        }
+        if (!IsBusDrop() || BrowserView.CurrentDrag is not { } item) return;
+        int trackId = FooterRowTrackId(row);
+        if (trackId <= 0) return;
+        ItemDropped?.Invoke(item, trackId, 0);
+        e.Handled = true;
+    }
+
+    internal int FooterDropRow = -1;   // footer row under a browser drag (-1 none); drawn by FooterLaneControl
+    private void SetFooterDropRow(int row)
+    {
+        if (row == FooterDropRow) return;
+        FooterDropRow = row;
+        _footerLanes.InvalidateVisual();
+        _footerDropRing.IsVisible = row >= 0;
+        if (row < 0) return;
+        Canvas.SetTop(_footerDropRing, FooterRowTop(row));
+        _footerDropRing.Height = FooterRowHeight(row);
+    }
+
+    // A device card dragged out of the Devices panel (specs/043): the row it is over lights when
+    // that track can take it; the drop moves it there (⌥ copies).
+    private void OnDeviceDragOver(DragEventArgs e)
+    {
+        int ti = RowAtY(e.GetPosition(_lanes).Y);
+        bool ok = ti >= 0 && ti < _tracks.Count && _engine is not null && DeviceDrag.CanTake(_engine, _tracks[ti].Id);
+        e.DragEffects = !ok ? DragDropEffects.None : (e.KeyModifiers & KeyModifiers.Alt) != 0 ? DragDropEffects.Copy : DragDropEffects.Move;
+        SetDropTrack(ok ? ti : -1);
+    }
+
+    private void OnDeviceDrop(DragEventArgs e)
+    {
+        SetDropTrack(-1);
+        int ti = RowAtY(e.GetPosition(_lanes).Y);
+        if (ti < 0 || ti >= _tracks.Count || _engine is null || !DeviceDrag.CanTake(_engine, _tracks[ti].Id)) return;
+        if (DeviceDrag.RequestFor(_tracks[ti].Id, e.KeyModifiers) is { } r) DeviceDropped?.Invoke(r);
+        e.Handled = true;
+    }
+
+    /// <summary>A device card was dropped on a track row or footer row (specs/043).</summary>
+    public event Action<DeviceMoveRequest>? DeviceDropped;
+
+    private void OnLaneDrop(object? sender, DragEventArgs e)
+    {
+        if (BrowserView.IsClipDrag) { OnClipDropOnLanes(e); return; }
+        if (DeviceDrag.IsActive) { OnDeviceDrop(e); return; }
+        SetDropTrack(-1);
+        var items = BrowserView.DroppedItems(e);
+        if (items.Count == 0) return;
+        var p = e.GetPosition(_lanes);
+        int ti = RowAtY(p.Y);
+        int trackId = ti >= 0 ? _tracks[ti].Id : -1;
+        // A drop on a header lands at the visible start, whichever side the headers are on.
+        double x = p.X >= 0 && p.X <= _lanes.Bounds.Width ? p.X : 0;
+        double beat = Math.Max(0.0, Snap(XToBeat(x)));
+        // One internal item drops as-is; multiple external files land the first on the
+        // target track and each of the rest on its own new track (trackId -1), so they
+        // never stack on top of each other.
+        for (int i = 0; i < items.Count; i++)
+            ItemDropped?.Invoke(items[i], i == 0 ? trackId : -1, beat);
+        e.Handled = true;
+    }
+    /// <summary>Select a track from another view (the Stereo Map, specs/008): the same as a
+    /// header click — the device panel and the other views follow.</summary>
+    public void SelectTrackFromOutside(int trackId)
+    {
+        Select(trackId, -1);
+        TrackSelected?.Invoke(trackId);
+    }
+
+    /// <summary>Selects one clip (or just a track, clipIndex -1). On a linked group's track the
+    /// clips at the same place on the group's other tracks come along (specs/076) unless
+    /// <paramref name="linked"/> is false (⌥-click).</summary>
+    internal void Select(int trackId, int clipIndex, bool keepTrackSet = false, bool linked = true)
+    {
+        if (HasTimeSelection) ClearTimeSelection();   // clip- and time-selection are exclusive (1.2.5)
+        if (!keepTrackSet) _selTracks.Clear();        // any other selection resets the header multi-selection
+        int prev = SelTrackId;
+        SelTrackId = trackId;
+        SelClipIndex = clipIndex;
+        if (trackId > 0) FocusTrackId = trackId;
+        _sel.Clear();
+        ClearLinkState();
+        if (trackId > 0 && clipIndex >= 0)
+        {
+            _sel.Add((trackId, clipIndex));
+            if (linked) AddMatches(trackId, clipIndex);
+            else if (Link.IsLinked(trackId)) _selAlone.Add((trackId, clipIndex));   // ⌥-click: the edits that follow stay on this track
+        }
+        // Selecting into or out of a group changes that row's height, so the rows below it
+        // move: re-lay them before the headers repaint their selection.
+        if (prev != trackId && (IsGroupTrack(prev) || IsGroupTrack(trackId))) RelayoutRows();
+        UpdateHeaderSelection();
+        RebuildFooterHeaders();   // returns/master carry the selection highlight too (1e)
+        Redraw();
+        if (trackId > 0) TrackSelected?.Invoke(trackId);
+        else if (prev > 0) SelectionCleared?.Invoke();
+    }
+
+    private bool IsGroupTrack(int id)
+    {
+        if (id <= 0) return false;
+        foreach (var t in _tracks) if (t.Id == id) return t.IsGroup;
+        return false;
+    }
+
+    // Re-measure the rows and rebuild the header cards against the new heights. Cheaper than a
+    // full Refresh (no engine read, no peak fetch) and enough for a pure layout change.
+    private void RelayoutRows()
+    {
+        RebuildRowGeometry();
+        RebuildHeaders();
+        _lanes.Height = Math.Max(DefaultRowHeight, RowsHeight);
+        _overlay.Height = _lanes.Height;
+    }
+
+    /// <summary>True if the clip is part of the current multi-selection.</summary>
+    internal bool IsSelected(int trackId, int clipIndex) => _sel.Contains((trackId, clipIndex));
+
+    /// <summary>Whole current selection (for group move).</summary>
+    internal IReadOnlyCollection<(int track, int clip)> Selection => _sel;
+
+    /// <summary>Number of clips in the current multi-selection.</summary>
+    internal int SelectionCount => _sel.Count;
+
+    /// <summary>Cmd/Ctrl+click: toggle a clip in the multi-selection, leaving the rest intact
+    /// (req 1.1.2). Clip- and automation-selection are mutually exclusive (req 1.2.5).</summary>
+    internal void ToggleSelect(int trackId, int clipIndex)
+    {
+        if (trackId <= 0 || clipIndex < 0) return;
+        if (HasTimeSelection) ClearTimeSelection();
+        if (HasAutoSelection) ClearAutoSelection();
+        if (_sel.Remove((trackId, clipIndex)))
+        {
+            // Its partners leave with it — those the link added, not ones picked by hand.
+            _selLinked.Remove((trackId, clipIndex));
+            _selAlone.Remove((trackId, clipIndex));
+            foreach (var m in MatchesOf(trackId, clipIndex))
+                if (_selLinked.Remove(m)) _sel.Remove(m);
+            // Removed: keep the primary stable unless we just removed it.
+            if (SelTrackId == trackId && SelClipIndex == clipIndex)
+            {
+                if (_sel.Count > 0) { var f = _sel.First(); SelTrackId = f.track; SelClipIndex = f.clip; }
+                else { SelTrackId = -1; SelClipIndex = -1; }
+            }
+        }
+        else
+        {
+            _sel.Add((trackId, clipIndex));
+            _selLinked.Remove((trackId, clipIndex));
+            _selAlone.Remove((trackId, clipIndex));
+            AddMatches(trackId, clipIndex);
+            SelTrackId = trackId; SelClipIndex = clipIndex; FocusTrackId = trackId;   // the just-clicked clip is the primary
+        }
+        UpdateHeaderSelection();
+        Redraw();
+    }
+
+    /// <summary>The live ClipVM for a (track, clip) pair, or null if it no longer exists.</summary>
+    internal ClipVM? FindClipVM(int trackId, int clipIndex)
+    {
+        foreach (var t in _tracks)
+            if (t.Id == trackId)
+                foreach (var c in t.Clips)
+                    if (c.ClipIndex == clipIndex) return c;
+        return null;
+    }
+
+    /// <summary>Esc: cancel an in-progress lane gesture if one is active (no model change),
+    /// otherwise clear any selection (req 1.2.6 / 2.11). Returns true if it did something.</summary>
+    /// <summary>Abort any in-progress lane gesture with no model change (window focus loss).</summary>
+    public void CancelActiveGesture() { _lanes.CancelGesture(); _footerLanes.CancelGesture(); CancelSectionsGesture(); }
+
+    internal bool EscapePressed()
+    {
+        if (_lanes.CancelGesture() | _footerLanes.CancelGesture() | CancelSectionsGesture()) return true;
+        bool had = _sel.Count > 0 || SelTrackId > 0 || HasAutoSelection || HasTimeSelection;
+        if (HasAutoSelection) ClearAutoSelection();
+        if (HasTimeSelection) ClearTimeSelection();
+        if (_sel.Count > 0 || SelTrackId > 0) Select(-1, -1);
+        return had;
+    }
+
+    // --- general time-range selection (req 1.2 / 1.2.3 / 5.3 / 4.1-range) -------
+    private int RowOfTrack(int trackId)
+    {
+        for (int r = 0; r < _tracks.Count; r++) if (_tracks[r].Id == trackId) return r;
+        return -1;
+    }
+
+    /// <summary>Sets (live, during a drag) the time-range selection over [a,b] beats and the
+    /// visual rows spanned. Clears any clip selection — the two are mutually exclusive.</summary>
+    internal void SetTimeSelection(double a, double b, int rowA, int rowB)
+    {
+        _timeSelStart = Math.Max(0, Math.Min(a, b));
+        _timeSelEnd = Math.Max(a, b);
+        _timeSelRowLo = Math.Max(0, Math.Min(rowA, rowB));
+        _timeSelRowHi = Math.Min(Math.Max(0, _tracks.Count - 1), Math.Max(rowA, rowB));
+        WidenRangeToLinkSets();
+        if (_sel.Count > 0) { _sel.Clear(); ClearLinkState(); SelClipIndex = -1; UpdateHeaderSelection(); }
+        if (HasTimeSelection) BounceSource = (TimeSelectionTrackIds(), _timeSelStart, _timeSelEnd);
+        Redraw();
+    }
+
+    /// <summary>Paste Bounced Audio (⌘⇧V) source: the most recent time selection's tracks and
+    /// range. Outlives the selection itself, so the user can click over to the target track.</summary>
+    public (int[] TrackIds, double Start, double End)? BounceSource { get; private set; }
+
+    /// <summary>The track the user last clicked (clip, header, or empty lane space) — the target
+    /// of Paste Bounced Audio. Unlike <see cref="SelectedTrackId"/>, a click on empty lane space
+    /// keeps it, since that click is how the paste position (the playhead) is placed.</summary>
+    public int FocusTrackId { get; internal set; } = -1;
+
+    /// <summary>Context-menu Paste Bounced Audio onto (track id, beat).</summary>
+    public event Action<int, double>? PasteBouncedRequested;
+    internal void RequestPasteBounced(int trackId, double beat) => PasteBouncedRequested?.Invoke(trackId, beat);
+
+    /// <summary>True when Paste Bounced Audio can land on <paramref name="trackId"/>: it's an audio
+    /// track and the remembered range covers exactly one audio/instrument track that still exists.</summary>
+    internal bool CanPasteBouncedOnto(int trackId)
+    {
+        if (BounceSource is not { } src) return false;
+        var target = _tracks.Find(t => t.Id == trackId);
+        if (target is null || target.IsInstrument || target.IsReturn || target.IsGroup) return false;
+        int sources = 0;
+        foreach (int id in src.TrackIds)
+            if (_tracks.Find(t => t.Id == id) is { IsReturn: false, IsGroup: false }) sources++;
+        return sources == 1;
+    }
+
+    /// <summary>Refreshes and selects the clips the engine placed last (e.g. a bounced paste).</summary>
+    public void RefreshAndSelectPlaced()
+    {
+        Refresh();
+        ReselectPlaced();
+    }
+
+    internal void ClearTimeSelection()
+    {
+        if (_timeSelRowLo < 0) return;
+        _timeSelRowLo = _timeSelRowHi = -1;
+        Redraw();
+    }
+
+    // Non-return track IDs the time selection covers (target of range ops).
+    private int[] TimeSelectionTrackIds()
+    {
+        var ids = new List<int>();
+        for (int r = _timeSelRowLo; r <= _timeSelRowHi && r >= 0 && r < _tracks.Count; r++)
+            if (!_tracks[r].IsReturn) ids.Add(_tracks[r].Id);
+        return LinkTracks(ids);   // a range on a linked group's track spans the whole group (specs/076)
+    }
+
+
+    /// <summary>True when the time selection spans this track's row at this beat (right-click
+    /// inside the range acts on the range).</summary>
+    internal bool TimeSelectionCovers(int trackId, double beat)
+    {
+        if (!HasTimeSelection) return false;
+        int r = RowOfTrack(trackId);
+        return r >= _timeSelRowLo && r <= _timeSelRowHi && beat >= _timeSelStart && beat <= _timeSelEnd;
+    }
+
+    /// <summary>Delete the covered clip content in the time selection (split at edges, no
+    /// ripple; req 5.3). Consumes the key whenever a range is active.</summary>
+    public bool DeleteTimeSelection()
+    {
+        if (_engine is null || !HasTimeSelection) return false;
+        var ids = TimeSelectionTrackIds();
+        if (ids.Length > 0) RemovingClips(ids, () => _engine.DeleteClipsInRange(ids, _timeSelStart, _timeSelEnd));
+        Refresh();
+        return true;
+    }
+
+    /// <summary>Cmd+E over a time selection: split every covered track's clips at the range
+    /// edges, so the selected slice becomes its own clip(s). False when there's no range.</summary>
+    public bool SplitTimeSelection()
+    {
+        if (_engine is null || !HasTimeSelection) return false;
+        var ids = TimeSelectionTrackIds();
+        if (ids.Length == 0 || !_engine.SplitClipsInRange(ids, _timeSelStart, _timeSelEnd)) return false;
+        Refresh();
+        ClipsSplit?.Invoke();
+        return true;
+    }
+
+    /// <summary>Cmd+J Consolidate: merge the time selection — or, without one, the span of the
+    /// clip selection on the selected clips' tracks — into one clip per track (MIDI notes merged,
+    /// audio rendered to a new sample). The new clips become the selection. False when there's
+    /// nothing to consolidate.</summary>
+    public bool ConsolidateSelection()
+    {
+        if (_engine is null) return false;
+        int[] ids;
+        double start, end;
+        if (HasTimeSelection)
+        {
+            ids = TimeSelectionTrackIds();
+            start = _timeSelStart; end = _timeSelEnd;
+        }
+        else
+        {
+            var sel = SelectionBlock();
+            start = double.MaxValue; end = double.MinValue;
+            foreach (var (track, clip) in sel)
+                if (FindClipVM(track, clip) is { } c)
+                { start = Math.Min(start, c.StartBeat); end = Math.Max(end, c.StartBeat + c.LengthBeats); }
+            ids = sel.Select(s => s.trackId).Distinct().ToArray();
+        }
+        if (ids.Length == 0 || end <= start || !_engine.ConsolidateRange(ids, start, end)) return false;
+        Refresh();
+        ReselectPlaced();
+        return true;
+    }
+
+    /// <summary>⌘C over a time selection: the covered slice of every selected track goes to the
+    /// block clipboard (cut at the range edges, nothing in the project changes). The range's top
+    /// track becomes the paste target, so ⌘V without clicking elsewhere pastes it back there.
+    /// False when there's no range or it covers no clip.</summary>
+    public bool CopyTimeSelection()
+    {
+        if (_engine is null || !HasTimeSelection) return false;
+        var ids = TimeSelectionTrackIds();
+        if (ids.Length == 0 || !_engine.CopyRange(ids, _timeSelStart, _timeSelEnd)) return false;
+        ClipTransfer.TookFromArrangement();
+        FocusTrackId = ids[0];
+        return true;
+    }
+
+    /// <summary>⌘X over a time selection: <see cref="CopyTimeSelection"/>, then the slice is
+    /// removed (one undo step). The range stays selected. False when nothing was cut.</summary>
+    public bool CutTimeSelection()
+    {
+        if (_engine is null || !HasTimeSelection) return false;
+        var ids = TimeSelectionTrackIds();
+        bool cut = false;
+        if (ids.Length > 0) RemovingClips(ids, () => cut = _engine.CutRange(ids, _timeSelStart, _timeSelEnd));   // editors follow (#647)
+        if (!cut) return false;
+        ClipTransfer.TookFromArrangement();
+        FocusTrackId = ids[0];
+        Refresh();
+        return true;
+    }
+
+    /// <summary>Duplicate the time selection right after its end and move the selection onto
+    /// the copy, so repeated presses chain (req 4.1-range).</summary>
+    public bool DuplicateTimeSelection()
+    {
+        if (_engine is null || !HasTimeSelection) return false;
+        var ids = TimeSelectionTrackIds();
+        double len = ids.Length > 0 ? _engine.DuplicateRange(ids, _timeSelStart, _timeSelEnd) : 0;
+        if (len <= 0) return false;
+        _timeSelStart = _timeSelEnd;
+        _timeSelEnd = _timeSelStart + len;
+        Refresh();
+        return true;
+    }
+
+    /// <summary>⌘⇧D Duplicate Time: insert a copy of the time selection right after it, pushing
+    /// everything later right on every track (clips and automation), then move the selection
+    /// onto the copy so repeated presses chain.</summary>
+    public bool DuplicateTimeInsert()
+    {
+        if (_engine is null || !HasTimeSelection) return false;
+        double len = _timeSelEnd - _timeSelStart;
+        if (!_engine.InsertTime(_timeSelEnd, len, duplicate: true)) return false;
+        _timeSelStart = _timeSelEnd;
+        _timeSelEnd = _timeSelStart + len;
+        Refresh();
+        return true;
+    }
+
+    /// <summary>⌘⇧I Insert Silence: open an empty gap the length of the time selection at its
+    /// start, pushing everything after it right on every track. The selection stays on the gap.</summary>
+    public bool InsertSilenceAtTimeSelection()
+    {
+        if (_engine is null || !HasTimeSelection) return false;
+        if (!_engine.InsertTime(_timeSelStart, _timeSelEnd - _timeSelStart, duplicate: false)) return false;
+        Refresh();
+        return true;
+    }
+
+    /// <summary>Shift+click rectangular clip selection: every clip between the primary-selection
+    /// anchor and the clicked clip, across rows and beats (req 1.1.3).</summary>
+    internal void ShiftSelectTo(int trackId, int clipIndex)
+    {
+        var target = FindClipVM(trackId, clipIndex);
+        if (target is null) return;
+        var anchor = SelClipIndex >= 0 ? FindClipVM(SelTrackId, SelClipIndex) : null;
+        if (anchor is null) { Select(trackId, clipIndex); return; }
+        int ra = RowOfTrack(SelTrackId), rt = RowOfTrack(trackId);
+        if (ra < 0 || rt < 0) { Select(trackId, clipIndex); return; }
+        int rlo = Math.Min(ra, rt), rhi = Math.Max(ra, rt);
+        double blo = Math.Min(anchor.StartBeat, target.StartBeat);
+        double bhi = Math.Max(anchor.StartBeat + anchor.LengthBeats, target.StartBeat + target.LengthBeats);
+        ClearTimeSelection();
+        _sel.Clear();
+        ClearLinkState();
+        for (int r = rlo; r <= rhi && r < _tracks.Count; r++)
+            foreach (var c in _tracks[r].Clips)
+                if (c.StartBeat < bhi - 1e-6 && c.StartBeat + c.LengthBeats > blo + 1e-6)
+                    _sel.Add((_tracks[r].Id, c.ClipIndex));
+        SelTrackId = trackId; SelClipIndex = clipIndex; FocusTrackId = trackId;
+        UpdateHeaderSelection();
+        Redraw();
+    }
+
+    /// <summary>Cmd+E: split every selected clip that spans the playhead, at the playhead
+    /// (req 5.1). Returns false when nothing was actually split.</summary>
+    public bool SplitSelectedAtPlayhead()
+    {
+        if (_engine is null || _sel.Count == 0) return false;
+        double at = Math.Max(0, _playheadBeats);
+        // One undo step; on a linked group the other tracks are cut at the playhead too, whatever
+        // clip they have there (specs/076).
+        bool any = SplitLinkedAt(_sel.ToList(), at);
+        if (any) { Select(-1, -1); Refresh(); ClipsSplit?.Invoke(); }
+        return any;
+    }
+
+    /// <summary>Fade at splits: a short fade on both sides of every join where two audio clips
+    /// touch and at least one of them is selected. One undo step. False when nothing changed.</summary>
+    public bool FadeSelectedSplits()
+    {
+        if (_engine is null || _sel.Count == 0) return false;
+        var tracks = new int[_sel.Count];
+        var clips = new int[_sel.Count];
+        int i = 0;
+        foreach (var s in _sel)
+        {
+            tracks[i] = s.track;
+            clips[i] = s.clip;
+            i++;
+        }
+        if (!_engine.FadeSplits(tracks, clips)) return false;
+        Refresh();
+        // The open audio editor caches the ADSR it loaded. Both sides of each join have to
+        // reload, including a neighbour that was not selected, or the next edit writes the
+        // pre-fade shape back over the fade.
+        const double join = 1e-4;
+        foreach (var track in _tracks)
+        {
+            var ordered = track.Clips.OrderBy(c => c.StartBeat).ToList();
+            for (int j = 0; j + 1 < ordered.Count; j++)
+            {
+                var left = ordered[j];
+                var right = ordered[j + 1];
+                if (left.IsMidi || right.IsMidi) continue;
+                if (!_sel.Contains((track.Id, left.ClipIndex)) && !_sel.Contains((track.Id, right.ClipIndex)))
+                    continue;
+                if (Math.Abs(left.StartBeat + left.LengthBeats - right.StartBeat) > join) continue;
+                RaiseClipGeometryChanged(track.Id, left.ClipIndex);
+                RaiseClipGeometryChanged(track.Id, right.ClipIndex);
+            }
+        }
+        return true;
+    }
+
+    /// <summary>Cmd+A — select every clip in the arrangement. False when there are none,
+    /// so the key falls through.</summary>
+    public bool SelectAllClips()
+    {
+        var all = _tracks.SelectMany(t => t.Clips.Select(c => (t.Id, c.ClipIndex))).ToList();
+        if (all.Count == 0) return false;
+        SetSelection(all);
+        return true;
+    }
+
+    /// <summary>Replaces the selection with the given clips (marquee). Does not open
+    /// the detail panel — it only highlights; the primary becomes the first clip.</summary>
+    internal void SetSelection(IEnumerable<(int track, int clip)> clips)
+    {
+        if (HasTimeSelection) ClearTimeSelection();
+        _sel.Clear();
+        ClearLinkState();
+        foreach (var c in clips) _sel.Add(c);
+        if (_sel.Count > 0) { var f = _sel.First(); SelTrackId = f.track; SelClipIndex = f.clip; FocusTrackId = f.track; }
+        else { SelTrackId = -1; SelClipIndex = -1; }
+        UpdateHeaderSelection();
+        Redraw();
+    }
+
+    /// <summary>Moves the transport playhead to <paramref name="beat"/> (ruler / grid
+    /// click), snapped to the current snap grid.</summary>
+    internal void SeekTo(double beat)
+    {
+        beat = Math.Max(0, Snap(beat));
+        _engine?.Seek(beat);
+        SetPlayhead(beat);   // immediate visual feedback (the timer keeps it in sync)
+    }
+
+    /// <summary>Deletes every clip in the multi-selection. False if nothing selected.</summary>
+    /// <summary>Key 0: toggles the selected clip(s) active/inactive (clip deactivate).
+    /// If any selected clip is active they all deactivate; otherwise they all activate. A
+    /// deactivated clip stays on the timeline but plays nothing and is greyed. False if none.</summary>
+    public bool ToggleSelectedClipsActive()
+    {
+        if (_engine is null) return false;
+        var sel = SelectionBlock();
+        if (sel.Length == 0) return false;
+        // Deactivate if any is currently active, so a mixed selection turns fully off first.
+        bool anyActive = false;
+        foreach (var (track, clip) in sel)
+            if (_engine.TryGetClipInfo(track, clip, out var ci) && ci.IsActive) { anyActive = true; break; }
+        bool target = !anyActive, any = false;
+        foreach (var (track, clip) in sel)
+        {
+            if (!_engine.TryGetClipInfo(track, clip, out _)) continue;   // tolerate a stale entry
+            _engine.SetClipActive(track, clip, target);
+            any = true;
+        }
+        if (any) Refresh();
+        return any;
+    }
+
+    /// <summary>Reverse (non-destructive) on every selected AUDIO clip. Mixed selections
+    /// reverse the audio clips and leave MIDI alone; if any is still forwards the whole
+    /// selection turns on first, so a mixed state resolves to "all reversed".</summary>
+    public bool ToggleSelectedClipsReverse()
+    {
+        if (_engine is null) return false;
+        var sel = SelectionBlock();
+        if (sel.Length == 0) return false;
+        bool anyForward = false, anyAudio = false;
+        foreach (var (track, clip) in sel)
+            if (_engine.TryGetAudioClipInfo(track, clip, out var ai))
+            { anyAudio = true; if (ai.Reversed == 0) anyForward = true; }
+        if (!anyAudio) return false;
+        bool target = anyForward, any = false;
+        foreach (var (track, clip) in sel)
+        {
+            if (!_engine.TryGetAudioClipInfo(track, clip, out _)) continue;   // MIDI / stale entry
+            _engine.SetClipReverse(track, clip, target);
+            RaiseClipGeometryChanged(track, clip);   // an open clip editor re-reads the new direction
+            any = true;
+        }
+        if (any) Refresh();
+        return any;
+    }
+
+    /// <summary>Runs <paramref name="edit"/>, which removes clips, and tells the open editors
+    /// where the rest went: a removal shifts the later clips of a track down an index, and an
+    /// editor still on the old index would show — and edit — a clip that is gone or another one
+    /// (#647). The removal is passed on as a block move, so an undo or redo of it takes the
+    /// editors along too.</summary>
+    /// <summary>Clips are about to be removed: a clip tool's preview is dropped first, while the
+    /// indices it would put the clip's own notes back under still name its clips.</summary>
+    public event Action? ClipsRemoving;
+
+    internal void RemovingClips(IEnumerable<int> touched, Action edit)
+    {
+        // The rows, and the touched tracks besides (a folded group's children have no row).
+        ClipsRemoving?.Invoke();
+        var tracks = _tracks.Select(t => t.Id).Concat(touched).Where(id => id > 0).Distinct().ToList();
+        var before = ClipStartsOf(tracks);
+        edit();
+        var after = ClipStartsOf(tracks);
+        if (ArrangementMoves.SameStarts(before, after)) return;
+        ClipsMoved?.Invoke(new ClipBlockMove(ArrangementMoves.AfterRemoval(before, after), before, after));
+    }
+
+    public bool DeleteSelectedClips()
+    {
+        if (_engine is null || _sel.Count == 0) return false;
+        // Delete highest clip index first: DeleteClip shifts later indices within a
+        // track, and cross-track order is irrelevant. A selection can hold stale entries
+        // (it survives edits and isn't cleared in automation mode), so tolerate an index
+        // the engine rejects rather than throwing out of the keystroke handler.
+        bool any = false;
+        RemovingClips(_sel.Select(c => c.track), () => OneUndoStep(() =>   // a linked delete is one step (specs/076)
+        {
+            foreach (var (track, clip) in _sel.OrderByDescending(c => c.clip))
+                any |= _engine.TryDeleteClip(track, clip);
+        }));
+        _sel.Clear();
+        ClearLinkState();
+        SelTrackId = -1; SelClipIndex = -1;
+        Refresh();
+        return any;   // false when the selection was entirely stale — don't claim a delete
+    }
+
+    // Selection changed but the track set didn't: repaint only the two properties that
+    // depend on selection (card background + name colour) on each existing header card,
+    // instead of rebuilding the whole header column (faders, meters, combos) on every click.
+    private void UpdateHeaderSelection()
+    {
+        QueueSelectionNotify();   // every clip-selection change repaints the headers
+        foreach (var (id, h) in _headerCards)
+        {
+            // Selected row (style guide): a slightly lighter background; the colour bar stays
+            // (classic: the spine goes accent, as in 0.59.2).
+            if (_tracks.Find(v => v.Id == id) is { } t)
+                PaintHeaderFill(h.card, t, IsTrackMultiSelected(id), h.spine, h.spineIdle);
+        }
+    }
+
+    private void RebuildHeaders()
+    {
+        ComputeTraySlices();
+        _headers.Children.Clear();
+        _meters.Clear();
+        _volFaders.Clear();
+        _sendFaders.Clear();
+        _panBars.Clear();
+        _headerCards.Clear();
+        _trayLayers.Clear();
+        _cardTiers.Clear();
+        _cardSends.Clear();
+        _sendKnobs.Clear();
+        for (int i = 0; i < _tracks.Count; i++)
+        {
+            var card = BuildHeaderCard(_tracks[i]);
+            Canvas.SetLeft(card, 0);
+            Canvas.SetTop(card, RowTop(i));     // pin to the same Y as the lane row
+            _headers.Children.Add(card);
+        }
+        AddTakeHeaders();
+        AddRowSeamGrips();                       // row-height grips sit above the cards
+        _headers.Children.Add(_trackDropLine);   // insertion marker (kept invisible until a drag)
+        _headers.Children.Add(_headerDropRing);  // browser drop target (kept invisible until a drag)
+        _bankMarks.Clear();
+        PlaceBankMarks();                        // controller bank bars (specs/051)
+        _headers.Height = Math.Max(DefaultRowHeight, RowsHeight);
+    }
+
+    private Control BuildHeaderCard(TrackVM t)
+    {
+        if (IsSlimRow(t)) return BuildGroupBar(t);
+        return BuildTrackCard(t);
+    }
+
+    // A group's row, collapsed to a title bar: disclosure, name, its own mute/solo, kind tag.
+    // The fader, pan and meter live on the same card when the group is selected (BuildTrackCard),
+    // so nothing is lost — it just stops costing a full row while you work on its children.
+    // New look (specs/094): the row heads the group's tray (its 16 % wash, the tray's edge), and
+    // its meter stands at the right in the tracks' column. Classic: 0.59.2's slim row — the
+    // "Group" tag and the level as a rail on its own line under the title.
+    private Control BuildGroupBar(TrackVM t)
+    {
+        bool selected = IsTrackMultiSelected(t.Id);
+        var spineBrush = TrackBrush(t.ColorIndex);
+        bool classic = ClassicHeaders;
+        var slice = SliceOf(t);
+
+        var tri = new Border
+        {
+            Background = Brushes.Transparent, Padding = new Thickness(2, 0), Margin = new Thickness(0, 0, classic ? 0 : 6, 0),
+            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+            Child = new Glyph(_fold.IsFolded(t.Id) ? GlyphKind.ChevronRight : GlyphKind.ChevronDown, classic ? 8 : 9) { Foreground = Brush("Brush.TextSecondary") },
+        };
+        tri.PointerPressed += (_, e) => { e.Handled = true; ToggleCollapse(t.Id); };
+
+        var name = HeaderName(t.Name);
+        if (classic) { name.FontSize = NotaType.Name; name.Margin = new Thickness(4, 0, 0, 0); }
+        var chips = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = classic ? ClassicChipGap : ChipGap, VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                ChipToggle("M", t.Muted, NotaPalette.Mute, v => { t.Muted = v; _engine?.SetTrackMute(t.Id, v); }),
+                ChipToggle("S", t.Soloed, NotaPalette.Solo, v => { t.Soloed = v; _engine?.SetTrackSolo(t.Id, v); }),
+                LinkToggle(t),
+            },
+        };
+        if (_engine is { } groupEngine && CueKey.Shown(groupEngine))   // Cue (specs/089)
+            chips.Children.Insert(2, CueKey.Create(groupEngine, t.Id, 18, 18, NotaRadius.Field, out _, offFill: NotaPalette.Well));
+
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), VerticalAlignment = VerticalAlignment.Center };
+        var title = NameWithCount(name, slice);
+        Grid.SetColumn(title, 1);
+        Grid.SetColumn(chips, 2);
+        row.Children.Add(tri);
+        row.Children.Add(title);
+        row.Children.Add(chips);
+        if (classic)
+        {
+            var kind = TypeTag(Loc.T("common.group"));
+            Grid.SetColumn(kind, 3);
+            row.Children.Add(kind);
+        }
+
+        var (bars, spine, x) = HeaderBars(t, own: false);
+        Control body;
+        if (classic)
+        {
+            // 0.59.2: the level as a rail on a line of its own under the title.
+            var meter = new MeterBar(horizontal: true) { Height = 4, MinWidth = 0, Margin = new Thickness(0, 0, 0, 3) };
+            _meters[t.Id] = meter;
+            DockPanel.SetDock(meter, Dock.Bottom);
+            body = new DockPanel { LastChildFill = true, Margin = new Thickness(x + 8, 0, 8, 0), Children = { meter, row } };
+        }
+        else
+        {
+            var meter = HeaderMeter(GroupRowHeight - GroupTrayLayout.ClosingBand(slice.Closings, GroupRowHeight));
+            _meters[t.Id] = meter;
+            DockPanel.SetDock(meter, Dock.Right);
+            body = new DockPanel
+            {
+                LastChildFill = true, Children = { meter, row },
+                Margin = new Thickness(x + 2, 0, GroupTrayLayout.TrayInsetR, GroupTrayLayout.ClosingBand(slice.Closings, GroupRowHeight)),
+            };
+        }
+        var card = new Border
+        {
+            Width = HeaderW, Height = GroupRowHeight, ClipToBounds = true,
+            BorderBrush = Brush("Brush.BorderDefault"),
+            BorderThickness = CardBorderFor(t),
+            Child = new Panel { Children = { bars, body } },
+        };
+        _headerCards[t.Id] = (card, name, true, spine, spineBrush);
+        PaintHeaderFill(card, t, selected, spine, spineBrush);
+        AttachHeaderGestures(card, t);
+        ValueEntry.SetScope(card, true);   // Tab in a value box: volume → pan on this header
+        return card;
+    }
+
+    // A group's name with " · N" after it while it is folded (specs/094): the tracks it hides,
+    // nested groups' tracks included. The name trims first; the count stays beside it.
+    private Control NameWithCount(TextBlock name, TraySlice slice)
+    {
+        if (slice.FoldedCount is not { } n) return name;
+        var count = TypeTag("· " + n.ToString(CultureInfo.CurrentCulture));
+        count.Margin = new Thickness(6, 1, 0, 0);
+        return new NameTagPanel { Children = { name, count } };
+    }
+
+    // One builder, three layouts picked by the row's height (specs/015, style guide): compact is
+    // the name row alone (name, kind, M S ● and the monitor); standard adds a second row with
+    // the volume bar (value inside), the pan knob and the input picker; large gives the input
+    // picker a row of its own. The controls and their wiring are shared.
+    private Control BuildTrackCard(TrackVM t)
+    {
+        bool selected = IsTrackMultiSelected(t.Id);
+        var spineBrush = TrackBrush(t.ColorIndex);
+        double rowH = TrackRowHeight(t);
+        var tier = TierFor(rowH);
+        _cardTiers[t.Id] = tier;
+        bool sends = ShowSendsOn(t, tier, rowH);   // specs/069: send knobs on a Large row
+        _cardSends[t.Id] = sends;
+        _sendKnobs.RemoveAll(k => k.trackId == t.Id);
+
+        // Row 1: [group ▸/▾ | freeze badge] name · kind ....... M S ● (monitor)
+        var name = HeaderName(t.Name);
+        // A phone playing the track (Nota Remote) takes the type tag's place: during a jam
+        // "who plays what" matters more than MIDI / Audio.
+        Control typeTag = t.Player is { } player ? PlayerTag(player) : TypeTag(t.IsGroup ? Loc.T("common.group") : t.IsInstrument ? "MIDI" : Loc.T("common.audio"));
+        var nameRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), Height = MiniFader.BarH + 2 };
+        if (t.IsGroup)
+        {
+            // Collapse triangle — hides/shows the group's child rows.
+            var tri = new Border
+            {
+                Background = Brushes.Transparent, Padding = new Thickness(2, 0), Margin = new Thickness(0, 0, 6, 0),
+                Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+                Child = new Glyph(_fold.IsFolded(t.Id) ? GlyphKind.ChevronRight : GlyphKind.ChevronDown, 9) { Foreground = Brush("Brush.TextSecondary") },
+            };
+            tri.PointerPressed += (_, e) => { e.Handled = true; ToggleCollapse(t.Id); };
+            nameRow.Children.Add(tri);
+        }
+        else if (TakesToggle(t) is { } takes)
+        {
+            Grid.SetColumn(takes, 0);
+            nameRow.Children.Add(takes);
+        }
+        else if (t.Frozen || t.LiveRole != 0)
+        {
+            // Freeze badge: a drawn chain-link for a sleeping live-freeze source (1);
+            // a drawn snowflake for an in-place frozen track or a linked frozen track (2).
+            Control badge = t.LiveRole == 1
+                ? new Glyph(GlyphKind.ChainLink, 14) { Foreground = FrozenAccent, Margin = new Thickness(0, 0, 5, 0) }
+                : new Glyph(GlyphKind.Freeze, 10) { Foreground = FrozenAccent, Margin = new Thickness(0, 0, 5, 0) };
+            nameRow.Children.Add(badge);
+        }
+        // The name trims before it can push M / S / ● out of the card; the tag stays beside it.
+        // A member linked with its group carries the link mark before its name (specs/076).
+        Control nameCell = t.IsGroup ? NameWithCount(name, SliceOf(t)) : name;   // a folded group's count (specs/094)
+        if (t.IsGroup && !ClassicHeaders) typeTag.IsVisible = false;   // the tray says it's a group
+        if (LinkMemberMark(t) is { } mark)
+        {
+            var dock = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(mark, Dock.Left);
+            dock.Children.Add(mark);
+            dock.Children.Add(name);
+            nameCell = dock;
+        }
+        var nameAndTag = new NameTagPanel { Children = { nameCell, typeTag } };
+        Grid.SetColumn(nameAndTag, 1);
+        nameRow.Children.Add(nameAndTag);
+
+        // M / S / ● (record-arm), 18 × 18 on the well. Each toggle also writes the TrackVM:
+        // resizing a row rebuilds its card from the VM without re-reading the engine, and a
+        // stale VM put the old state back (#255).
+        var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = ChipGap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+        btnRow.Children.Add(ChipToggle("M", t.Muted, NotaPalette.Mute, v => { t.Muted = v; _engine?.SetTrackMute(t.Id, v); }));
+        btnRow.Children.Add(ChipToggle("S", t.Soloed, NotaPalette.Solo, v => { t.Soloed = v; _engine?.SetTrackSolo(t.Id, v); }));
+        if (_engine is { } cueEngine && CueKey.Shown(cueEngine))   // Cue (specs/089)
+            btnRow.Children.Add(CueKey.Create(cueEngine, t.Id, 18, 18, NotaRadius.Field, out _, offFill: NotaPalette.Well));
+        if (t.IsGroup) btnRow.Children.Add(LinkToggle(t));   // group Link (specs/076)
+        // Record-arm applies to instrument (MIDI capture) + audio (input capture) tracks;
+        // return and group tracks have no input, so they get no arm chip.
+        if (!t.IsReturn && !t.IsGroup)
+            btnRow.Children.Add(ArmToggle(t.Armed, (v, mods) =>
+            {
+                t.Armed = v;
+                if (_engine is not null) TrackArming.Set(_engine, t.Id, v, mods);
+            }));
+
+        // Audio tracks: a monitor key after the arm hears the selected input live.
+        bool isAudioTrack = !t.IsInstrument && !t.IsReturn && !t.IsGroup;
+        var monitor = isAudioTrack ? MonitorToggle(t.Id) : null;
+        if (monitor is not null) btnRow.Children.Add(monitor.Chip);
+        Grid.SetColumn(btnRow, 2);
+        nameRow.Children.Add(btnRow);
+
+        // The input picker ("In None ⌄"): record input on audio tracks, MIDI source on
+        // instrument tracks. A compact row leaves it to the context menu.
+        Control? picker = null;
+        if (tier != HeaderTier.Compact && (isAudioTrack || t.IsInstrument))
+            picker = isAudioTrack ? BuildInputCombo(t.Id, monitor) : BuildMidiSourceCombo(t.Id);
+        else monitor?.SetSource(_engine?.GetTrackRecordInput(t.Id) ?? 0);
+
+        // Volume: the value bar with its value written inside. Double-click resets to 0 dB.
+        int volTrackId = t.Id;   // M9-C: record volume moves while playing
+        var fader = new MiniFader(t.Volume) { VerticalAlignment = VerticalAlignment.Center, Default = 1.0, Text = VolumeDbText };
+        // One undo step per drag / reset (specs/009): opened before the automation write so a
+        // recorded lane and the value undo together, closed after it.
+        var volUndo = _engine is { } ve ? new MixGesture(ve, MixTarget.Volume(volTrackId)) : null;
+        fader.GestureBegin += () => volUndo?.Begin();
+        Action<double> setHdrVol = v => _engine?.SetTrackVolume(volTrackId, (float)v);
+        fader.ValueChanged += v => Change(volUndo, v, setHdrVol);
+        fader.GestureBegin += () => _engine?.BeginAutomationWrite(volTrackId, AutomationTarget.Volume, -1, -1, "");
+        fader.GestureEnd   += () => _engine?.EndAutomationWrite(volTrackId, AutomationTarget.Volume, -1, -1, "");
+        fader.GestureEnd   += () => volUndo?.End();
+        ValueEntry.Attach(fader, fader.EntryField(Loc.T("common.volume"), VolumeDbText));
+        _volFaders[t.Id] = fader;
+
+        // Pan: the small knob with its value beside it. Double-click centres.
+        var pan = new PanBar(t.Pan) { VerticalAlignment = VerticalAlignment.Center };
+        var panUndo = _engine is { } pe ? new MixGesture(pe, MixTarget.Pan(volTrackId)) : null;
+        pan.GestureBegin += () => panUndo?.Begin();
+        Action<double> setHdrPan = p => _engine?.SetTrackPan(volTrackId, (float)p);
+        pan.PanChanged  += p => Change(panUndo, p, setHdrPan);
+        pan.GestureBegin += () => _engine?.BeginAutomationWrite(volTrackId, AutomationTarget.Pan, -1, -1, "");
+        pan.GestureEnd   += () => _engine?.EndAutomationWrite(volTrackId, AutomationTarget.Pan, -1, -1, "");
+        pan.GestureEnd   += () => panUndo?.End();
+        ValueEntry.Attach(pan, pan.EntryField(Loc.T("common.pan")));
+        _panBars[t.Id] = pan;
+
+        // Row 2: volume · pan · input picker (the picker moves to a row of its own when large).
+        var volRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = 6, Height = MiniFader.BarH + 2 };
+        volRow.Children.Add(fader);
+        Grid.SetColumn(pan, 1);
+        volRow.Children.Add(pan);
+
+        var (bars, spine, x) = HeaderBars(t, own: true);
+        var stack = new StackPanel { Spacing = HeaderRowGap };
+        stack.Children.Add(nameRow);
+        switch (tier)
+        {
+            case HeaderTier.Compact:
+                // One line: the volume, pan and routing stay in the mixer and the track's
+                // context menu. A narrow column drops the tag before the name.
+                if (HeaderW < 200) typeTag.IsVisible = false;
+                stack.VerticalAlignment = VerticalAlignment.Center;
+                break;
+            case HeaderTier.Large:
+                stack.Margin = new Thickness(0, 8, 0, 0);
+                stack.Children.Add(volRow);
+                if (picker is not null)
+                {
+                    picker.HorizontalAlignment = HorizontalAlignment.Left;
+                    picker.MinWidth = PickerW;
+                    stack.Children.Add(picker);
+                }
+                // The sends to each return, two to a row, as far as the row's height allows
+                // (the card clips the rest; the mixer and the Sends card show them all) — only
+                // once the row reaches the Large height itself (specs/069, #472).
+                if (sends)
+                {
+                    double used = 8 + 2 * (MiniFader.BarH + 2) + HeaderRowGap + (picker is not null ? HeaderRowGap + PickerH : 0);
+                    int fits = (int)((rowH - used - 6) / (HeaderRowGap + MiniFader.BarH + 2));
+                    foreach (var row in SendRows(t.Id).Take(Math.Max(0, fits))) stack.Children.Add(row);
+                }
+                break;
+            default:
+                stack.VerticalAlignment = VerticalAlignment.Center;
+                // The picker stays on a standard row. A narrow column shrinks it (the source
+                // name trims) and then lets the volume bar give way; only when even "In ⌄"
+                // and a sliver of volume can't sit beside the pan does it go to the context menu.
+                if (picker is not null)
+                {
+                    double room = HeaderW - x - NameGap - MeterW - PanBar.W - 2 * 6 - ContentRightInset;
+                    double pickerW = Math.Clamp(room - MiniFader.MinW, PickerMinW, PickerW);
+                    double faderMin = Math.Min(MiniFader.MinW, room - pickerW);
+                    if (faderMin < FaderSqueezeW)
+                    {
+                        picker = null;
+                        monitor?.SetSource(_engine?.GetTrackRecordInput(t.Id) ?? 0);
+                    }
+                    else
+                    {
+                        fader.MinWidth = faderMin;
+                        picker.Width = pickerW;
+                        Grid.SetColumn(picker, 2);
+                        volRow.Children.Add(picker);
+                    }
+                }
+                else volRow.ColumnSpacing = 10;
+                stack.Children.Add(volRow);
+                break;
+        }
+
+        // The meter down the right edge: two 3px channels, inside the card on every row height
+        // (specs/094). New look: above any closing strips of the trays that end on this row.
+        double band = ClassicHeaders ? 0 : GroupTrayLayout.ClosingBand(SliceOf(t).Closings, rowH);
+        MeterBar meter = ClassicHeaders
+            ? new MeterBar { VerticalAlignment = VerticalAlignment.Stretch, Width = 8, MinHeight = 0, Margin = tier == HeaderTier.Compact ? new Thickness(0, 4, 3, 4) : new Thickness(0, 6, 3, 6) }
+            : HeaderMeter(rowH - band);
+        _meters[t.Id] = meter;
+        DockPanel.SetDock(meter, Dock.Right);
+        var body = new DockPanel { LastChildFill = true, Margin = new Thickness(x + NameGap, 0, ContentRightInset, band), Children = { meter, stack } };
+
+        var card = new Border
+        {
+            Width = HeaderW,
+            Height = rowH,
+            ClipToBounds = true,
+            BorderBrush = Brush("Brush.BorderDefault"),
+            BorderThickness = CardBorderFor(t),
+            Child = new Panel { Children = { bars, body } },
+        };
+        // A background import is still filling the track: the disabled look (by colour, not
+        // opacity), still clickable so the track can be deleted to cancel.
+        if (IsProcessingTrack(t.Id)) card.AttachedToVisualTree += (_, _) => Inactive.Set(card, true, interactive: true);
+        _headerCards[t.Id] = (card, name, t.IsGroup, spine, spineBrush);   // for in-place selection repaint
+        PaintHeaderFill(card, t, selected, spine, spineBrush);
+        AttachHeaderGestures(card, t);
+        ValueEntry.SetScope(card, true);   // Tab in a value box: volume → pan on this header
+        return card;
+    }
+
+    // Header geometry (style guide): 18px chips 4 apart, rows 6 apart, the name 12px past the
+    // colour bar, the input picker 62 wide.
+    // A Large header's sends: the return's colour and letter, then its bar with the amount inside
+    // (– at 0). Double-click resets to 0; double-click the amount or Alt-click types one.
+    private IEnumerable<Control> SendRows(int trackId)
+    {
+        if (_engine is not { } eng) yield break;
+        var sends = new List<Control>();
+        foreach (var r in _returns)
+        {
+            int bus = eng.TrackReturnIndex(r.Id);
+            if (bus < 0) continue;
+            static string SendText(double v) => v <= 0.005 ? "–" : NotaNum.Pct(v);
+            var f = new MiniFader(eng.GetTrackSend(trackId, bus), 1.0) { Default = 0, Text = SendText, VerticalAlignment = VerticalAlignment.Center };
+            int b = bus;
+            SendControl.Attach(f, eng, trackId, b);   // undoable, writes automation (specs/072)
+            ValueEntry.Attach(f, f.EntryField(Loc.F("common.send", SendLetter(b)), SendText));
+            _sendFaders.Add((trackId, b, f));
+            var swatch = new Border { Width = 6, Height = 6, CornerRadius = NotaRadius.Fine, Background = TrackBrush(r.ColorIndex), VerticalAlignment = VerticalAlignment.Center };
+            var letter = new TextBlock { Text = ((char)('A' + b)).ToString(), FontSize = NotaType.Eyebrow, FontWeight = FontWeight.SemiBold, Foreground = Brush("Brush.TextSecondary"), VerticalAlignment = VerticalAlignment.Center };
+            ToolTip.SetTip(letter, Loc.F("arrangement.send", SendLetter(b), r.Name));
+            var cell = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"), ColumnSpacing = 4 };
+            cell.Children.Add(swatch);
+            Grid.SetColumn(letter, 1); cell.Children.Add(letter);
+            Grid.SetColumn(f, 2); cell.Children.Add(f);
+            sends.Add(cell);
+        }
+        for (int i = 0; i < sends.Count; i += 2)
+        {
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 10, Height = MiniFader.BarH + 2 };
+            row.Children.Add(sends[i]);
+            if (i + 1 < sends.Count) { Grid.SetColumn(sends[i + 1], 1); row.Children.Add(sends[i + 1]); }
+            yield return row;
+        }
+    }
+
+    private const double ChipGap = 4, HeaderRowGap = 6, NameGap = 12, PickerW = 66, PickerMinW = 36, FaderSqueezeW = 20, PickerH = 22, HeaderRightPad = 10, MeterW = 7 + 6 + 4;
+
+    private TextBlock HeaderName(string text) => new()
+    {
+        Text = text, FontSize = NotaType.TrackName, FontWeight = FontWeight.SemiBold,
+        Foreground = Brush("Brush.TextPrimary"), VerticalAlignment = VerticalAlignment.Center,
+        TextTrimming = TextTrimming.CharacterEllipsis,
+    };
+
+    // Nesting (specs/094). New look: the row's slice of every group tray it sits in
+    // (GroupTrayLayer) — a member keeps only its own 3 px bar, at the start of its card. Classic
+    // look: 0.59.2's staircase — the row's own 3 px spine, stepped in per nesting level, full
+    // height, nothing for the groups around it. Returns the layer, the row's own stripe (the
+    // selection repaint's handle) and where the row's content starts.
+    private const double OwnBarW = 3, ClassicChipGap = 3;
+    private readonly Dictionary<int, GroupTrayLayer> _trayLayers = new();
+
+    // Every row's controls end at the same x (FR-007): the trays' right inset in the new look.
+    private double ContentRightInset => ClassicHeaders ? 0 : GroupTrayLayout.TrayInsetR;
+
+    private (Control bars, Border own, double contentX) HeaderBars(TrackVM t, bool own)
+    {
+        var slice = SliceOf(t);
+        var canvas = new Panel();
+        Border bar;
+        if (ClassicHeaders)
+        {
+            bar = new Border
+            {
+                Width = GroupTrayLayout.ClassicSpineW, HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(slice.SpineX, 0, 0, 0), Background = TrackBrush(t.ColorIndex),
+            };
+            canvas.Children.Add(bar);
+            return (canvas, bar, slice.ContentLeft);
+        }
+
+        if (slice.Chain.Length > 0)
+        {
+            // The strips are sized for the row height the controls were laid out for, so a
+            // seam drag (which resizes the card without a rebuild) can't move them apart.
+            var layer = new GroupTrayLayer(slice, t.IsGroup ? null : Brush("Brush.Panel"), HeaderRowHeight(t));
+            _trayLayers[t.Id] = layer;
+            canvas.Children.Add(layer);
+        }
+        double x = slice.ContentLeft;
+        if (own && !t.IsGroup)
+        {
+            double band = GroupTrayLayout.ClosingBand(slice.Closings, HeaderRowHeight(t));
+            bar = new Border
+            {
+                Width = OwnBarW, HorizontalAlignment = HorizontalAlignment.Left, CornerRadius = new CornerRadius(OwnBarW / 2),
+                Margin = new Thickness(x, 6, 0, 6 + band), Background = TrackBrush(t.ColorIndex),
+            };
+            canvas.Children.Add(bar);
+            x += OwnBarW;
+        }
+        else
+            bar = new Border { Width = 0 };   // a group's stripe is its tray's edge
+        return (canvas, bar, x);
+    }
+
+    // The header meter (specs/094): a vertical stereo bar at the right, inside the card on every
+    // row height — MeterBar's 40 px floor is for the mixer, a Compact header has 18 px for it.
+    private static MeterBar HeaderMeter(double rowInner)
+    {
+        double v = Math.Clamp((rowInner - 12) / 2, 3, 6);
+        return new MeterBar { VerticalAlignment = VerticalAlignment.Stretch, Width = 7, MinHeight = 0, Margin = new Thickness(6, v, 4, v) };   // MeterW in all
+    }
+
+    // A row inside a tray draws its own seam under its card body; the card keeps only the
+    // column divider so the tray runs unbroken from row to row.
+    private Thickness CardBorderFor(TrackVM t)
+    {
+        var b = CardBorder;
+        return !ClassicHeaders && SliceOf(t).Chain.Length > 0 ? new Thickness(b.Left, 0, b.Right, 0) : b;
+    }
+
+    // The header's fill for its state. New look: a member's card body is painted by its tray
+    // layer (the card itself stays the panel the trays wash over); classic: 0.59.2's raised
+    // group rows and card-surface tracks, the selected row's spine in the accent.
+    private void PaintHeaderFill(Border card, TrackVM t, bool selected, Border spine, IBrush spineIdle)
+    {
+        IBrush rest = ClassicHeaders ? Brush(t.IsGroup ? "Brush.SurfaceRaised" : "Brush.SurfaceCard") : Brush("Brush.Panel");
+        IBrush fill = selected ? SelHeaderBg : (t.Frozen || t.LiveRole != 0) ? FrozenHeaderBg : rest;
+        if (_trayLayers.TryGetValue(t.Id, out var layer) && layer.IsMember)
+        {
+            card.Background = Brush("Brush.Panel");
+            layer.Body = fill;
+        }
+        else card.Background = fill;
+        if (ClassicHeaders) spine.Background = selected ? NotaPalette.Accent : spineIdle;
+    }
+
+    // Select / reorder / context-menu gestures shared by a full track card and a slim group bar.
+    private void AttachHeaderGestures(Border card, TrackVM t)
+    {
+        card.PointerPressed += (_, e) =>
+        {
+            // A click inside the input ComboBox must reach it (and not reselect the track,
+            // which would rebuild the header and destroy the combo before its dropdown opens).
+            if (e.Source is Visual vsrc && vsrc.FindAncestorOfType<ComboBox>(includeSelf: true) is not null) return;
+            if (e.GetCurrentPoint(card).Properties.IsRightButtonPressed) { ShowTrackMenu(card, t.Id); return; }
+            // Double-click a track → its devices in the Detail panel, opening the panel if it is
+            // closed (#308; a plain click only selects). A plug-in's own window is Open
+            // editor on its card there.
+            if (e.ClickCount == 2 && e.GetCurrentPoint(card).Properties.IsLeftButtonPressed)
+            {
+                if (SelTrackId != t.Id) Select(t.Id, -1);
+                TrackDevicesRequested?.Invoke(t.Id);
+                e.Handled = true;
+                return;
+            }
+            // Shift-click selects the range from the anchor; Ctrl/Cmd-click adds or removes one (#249).
+            if (e.GetCurrentPoint(card).Properties.IsLeftButtonPressed)
+            {
+                if ((e.KeyModifiers & KeyModifiers.Shift) != 0) { SelectTrackRange(t.Id); e.Handled = true; return; }
+                if ((e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Meta)) != 0)
+                {
+                    ToggleTrackInSelection(t.Id); _trackAnchorId = t.Id; e.Handled = true; return;
+                }
+            }
+            _selTracks.Clear();   // a plain click resets the multi-selection to just this track
+            _trackAnchorId = t.Id;   // and is where a Shift-click range starts
+            // Grab the title strip (top row, clear of the M/S/arm chips + faders below) to
+            // start a reorder drag; selection is deferred to release so the capture survives
+            // (Select rebuilds the headers). Returns aren't reorderable — select them outright.
+            if (!t.IsReturn && e.GetCurrentPoint(card).Properties.IsLeftButtonPressed
+                && e.GetPosition(card).Y < 24)
+            {
+                _hdrDragId = t.Id;
+                _hdrDragFrom = _tracks.FindIndex(x => x.Id == t.Id);
+                _hdrDragging = false;
+                _hdrDragStart = e.GetPosition(_headers);
+                e.Pointer.Capture(card);
+                return;
+            }
+            Select(t.Id, -1);
+        };
+        card.PointerMoved += (_, e) =>
+        {
+            if (_hdrDragId < 0) return;
+            var p = e.GetPosition(_headers);
+            if (!_hdrDragging && Math.Abs(p.Y - _hdrDragStart.Y) < 5) return;
+            _hdrDragging = true;
+            card.Cursor = new Cursor(StandardCursorType.SizeAll);
+            card.Opacity = 0.55;
+            int gap = RowGapAtY(p.Y);
+            _hdrDropGap = gap;
+            Canvas.SetTop(_trackDropLine, RowTop(gap) - 1);
+            _trackDropLine.IsVisible = true;
+        };
+        card.PointerReleased += (_, e) =>
+        {
+            if (_hdrDragId < 0) return;
+            int id = _hdrDragId;
+            bool dragged = _hdrDragging;
+            double dropY = e.GetPosition(_headers).Y;
+            _hdrDragId = _hdrDragFrom = _hdrDropGap = -1;
+            _hdrDragging = false;
+            _trackDropLine.IsVisible = false;
+            e.Pointer.Capture(null);
+            card.Cursor = null;
+            card.Opacity = 1.0;
+            if (!dragged) { Select(id, -1); return; }   // never crossed the threshold → plain select
+            HandleHeaderDrop(id, dropY);
+        };
+    }
+
+    // Track context menu (Duplicate / Delete). Both go through the engine's
+    // snapshot ops, so undo/redo covers them; the whole view refreshes after.
+
+    // "Add …" entries shared by the arrangement's track-level menus. Return is left enabled
+    // when the buses are full, like the toolbar's + Return — MainWindow says so in the status
+    // line rather than the menu going quietly dead.
+    // Inside the "Add track" submenu the kinds read short ("Instrument", "Audio", "Return").
+    private IEnumerable<MenuItem> AddTrackItems(int anchorTrackId = -1, bool inSubmenu = false)
+    {
+        MenuItem Item(string full, string brief, NewTrackKind kind)
+            => MenuKit.Item(inSubmenu ? brief : full, GlyphKind.Plus, () => AddTrackRequested?.Invoke(kind, anchorTrackId));
+        yield return Item(Loc.T("arrangement.add_instrument_track"), Loc.T("common.instrument"), NewTrackKind.Instrument);
+        yield return Item(Loc.T("arrangement.add_audio_track"), Loc.T("common.audio"), NewTrackKind.Audio);
+        yield return Item(Loc.T("arrangement.add_return_track"), Loc.T("common.return"), NewTrackKind.Return);
+    }
+
+    // Right-click on the empty space below the tracks: add a track (the main thing to do
+    // down there) or paste a copied one.
+    private void ShowEmptyAreaMenu(Control anchor)
+    {
+        if (_engine is null) return;
+        var flyout = new MenuFlyout();
+        foreach (var mi in AddTrackItems()) flyout.Items.Add(mi);
+        flyout.Items.Add(new Separator());
+        var paste = new MenuItem { Header = Loc.T("arrangement.paste_track"), IsEnabled = _engine.HasTrackClipboard(), Icon = MenuKit.Icon(GlyphKind.Paste), InputGesture = MenuKit.PasteKey };
+        paste.Click += (_, _) => PasteTracksAfter(-1);
+        flyout.Items.Add(paste);
+        flyout.ShowAt(anchor, showAtPointer: true);
+    }
+
+    private void ShowTrackMenu(Control anchor, int trackId)
+    {
+        if (_engine is null) return;
+        // Right-click inside a multi-selection acts on the whole set.
+        var selected = SelectedTrackIds();
+        if (selected.Count > 1 && selected.Contains(trackId)) { ShowTracksMenu(anchor, selected); return; }
+        BuildTrackMenu(anchor, trackId)?.ShowAt(anchor, showAtPointer: true);
+    }
+
+    // The track header menu (spec 034), in the shared group order: header → colour and
+    // height rows → naming and inputs → freeze → create / group → clipboard → delete.
+    internal MenuFlyout? BuildTrackMenu(Control anchor, int trackId)
+    {
+        if (_engine is null) return null;
+        var flyout = new MenuFlyout();
+        flyout.FlyoutPresenterClasses.Add("rows");
+        var one = new[] { trackId };
+        var vm = _tracks.FirstOrDefault(v => v.Id == trackId);
+
+        var rename = MenuKit.Item(Loc.T("common.rename"), GlyphKind.Edit, () => PromptRenameTrack(anchor, trackId));
+        var showInModular = ShowInModularItem(trackId);
+
+        // Record input ▸ (audio tracks only): hardware, master, or another track's output
+        // (internal resampling). The active source is ticked and shown on the item.
+        bool isAudio = vm is { IsInstrument: false, IsReturn: false, IsGroup: false };
+        MenuItem? recInput = null;
+        if (isAudio)
+        {
+            var cur = RecordInputPick.Of(_engine, trackId);
+            string curName = Loc.T("arrangement.ext");
+            var choices = new List<MenuItem>();
+            void Src(string label, string shortName, RecordInputPick pick)
+            {
+                bool on = pick.Matches(cur);
+                var mi = new MenuItem { Header = label, ToggleType = MenuItemToggleType.Radio, IsChecked = on };
+                // Rebuild so the header's input selector and monitor chip show the new source.
+                mi.Click += (_, _) => { pick.ApplyTo(_engine, trackId); RebuildHeaders(); };
+                choices.Add(mi);
+                if (on) curName = shortName;
+            }
+            var hardware = RecordInputPick.HardwareEntries(_engine, trackId, probe: true);
+            foreach (var (pick, label, shortName) in hardware) Src(label, shortName, pick);
+            int hwCount = hardware.Count;
+            int fixedCount = hardware.Count + 1;   // the hardware entries + Master
+            Src(Loc.T("common.master"), Loc.T("common.master"), RecordInputPick.Track(-1));
+            foreach (var v in _tracks)
+                if (v.Id != trackId) { string n = v.Name.Length > 0 ? v.Name : Loc.F("common.track_n", v.Id); Src(n, n, RecordInputPick.Track(v.Id)); }
+            foreach (var v in _returns)
+            { string n = v.Name.Length > 0 ? v.Name : Loc.F("common.return_n", v.Id); Src(n, n, RecordInputPick.Track(v.Id)); }
+            recInput = MenuKit.ValueItem(Loc.T("common.record_input"), GlyphKind.Input, curName);
+            if (RecordInputPick.NeedsSubmenus(hardware))
+            {
+                // A large interface (specs/086): its inputs and pairs under their own submenus.
+                var monoMenu = new MenuItem { Header = Loc.T("record_input_pick.mono_inputs") };
+                var pairMenu = new MenuItem { Header = Loc.T("record_input_pick.stereo_pairs") };
+                for (int k = 0; k < hwCount; k++) (hardware[k].Pick.Input.IsStereo ? pairMenu : monoMenu).Items.Add(choices[k]);
+                recInput.Items.Add(monoMenu);
+                if (pairMenu.Items.Count > 0) recInput.Items.Add(pairMenu);
+                recInput.Items.Add(choices[hwCount]);   // Master
+            }
+            else
+                foreach (var c in choices.Take(fixedCount)) recInput.Items.Add(c);
+            if (choices.Count > fixedCount) recInput.Items.Add(new Separator());
+            foreach (var c in choices.Skip(fixedCount)) recInput.Items.Add(c);
+            recInput.Items.Add(new Separator());
+            recInput.Items.Add(MenuKit.Item(Loc.T("record_input_pick.audio_io_setup"), GlyphKind.Levels,
+                () => (TopLevel.GetTopLevel(this) as MainWindow)?.ShowInputPreferences()));
+        }
+
+        // MIDI input ▸ (instrument tracks): which device and channel reach the track (specs/086).
+        MenuItem? midiInput = vm is { IsInstrument: true } ? MidiInputPick.Menu(_engine, trackId) : null;
+
+        // MIDI from ▸ (instrument tracks only): play another instrument track's MIDI through
+        // this track's instrument. The current source is ticked and shown on the item; one that
+        // was removed shows as such (#504) rather than as None.
+        MenuItem? midiFrom = null;
+        if (vm is { IsInstrument: true })
+        {
+            int curSrc = _engine.GetTrackMidiSource(trackId);
+            string curName = curSrc > 0 ? Loc.T("common.removed_track") : Loc.T("common.none");
+            var others = _tracks.Where(v => v.Id != trackId && v.IsInstrument).ToList();
+            foreach (var v in others) if (v.Id == curSrc) curName = v.Name.Length > 0 ? v.Name : Loc.F("common.track_n", v.Id);
+            midiFrom = MenuKit.ValueItem(Loc.T("arrangement.midi_from"), GlyphKind.Note, curName);
+            MenuItem Src(string label, int src)
+            {
+                var mi = new MenuItem { Header = label, ToggleType = MenuItemToggleType.Radio, IsChecked = curSrc == src };
+                mi.Click += (_, _) => _engine.SetTrackMidiSource(trackId, src);
+                return mi;
+            }
+            midiFrom.Items.Add(Src(Loc.T("common.none"), -1));
+            if (others.Count > 0) midiFrom.Items.Add(new Separator());
+            foreach (var v in others)
+                midiFrom.Items.Add(Src(v.Name.Length > 0 ? v.Name : Loc.F("common.track_n", v.Id), v.Id));
+        }
+
+        // Group / Ungroup (submix). "Group" folds the multi-selection (or this track) into a
+        // new group; on a group "Ungroup" dissolves it, on a member "Remove from group" takes
+        // just this track out (#489).
+        var create = new List<Control>();
+        var addTrack = MenuKit.Item(Loc.T("arrangement.add_track"), GlyphKind.Plus);
+        foreach (var mi in AddTrackItems(trackId, inSubmenu: true)) addTrack.Items.Add(mi);
+        AddRecentInstruments(addTrack, trackId);
+        create.Add(addTrack);
+        create.Add(MenuKit.Item(Loc.T("arrangement.group_tracks"), GlyphKind.Folder, () => GroupTracks(trackId), MenuKit.GroupKey));
+        if (vm is { IsGroup: true })
+            create.Add(MenuKit.Item(Loc.T("arrangement.ungroup"), GlyphKind.Ungroup, () => UngroupGroup(trackId), MenuKit.UngroupKey));
+        else if (IsInGroup(trackId))
+            create.Add(MenuKit.Item(Loc.T("arrangement.remove_from_group"), GlyphKind.Ungroup, () => RemoveFromGroup(trackId), MenuKit.UngroupKey));
+        if (vm is { IsGroup: true } gvm)   // group Link (specs/076)
+            create.Add(MenuKit.SwitchItem(Loc.T("arrangement.link_tracks"), GlyphKind.ChainLink, gvm.EditLink, () => SetGroupLink(gvm.Id, !gvm.EditLink)));
+
+        // Clipboard + lifecycle go through the same set commands as the keys (a group carries
+        // its children); paste lands right after this track.
+        var clipboard = MenuKit.ClipboardGroup(() => CopyTracksToClipboard(one), () => CutTracks(one),
+            () => PasteTracksAfter(trackId), () => DuplicateTracks(one), _engine.HasTrackClipboard());
+
+        MenuKit.AddGroups(flyout.Items,
+            new Control[] { MenuKit.Header(vm?.Name ?? "", TrackBrush(EffectiveColorIndex(_engine, trackId)), TrackBadge(trackId)) },
+            new Control[] { TrackColourRow(one), TrackHeightRow(one) },
+            new Control?[] { rename, showInModular, recInput, midiInput, midiFrom }.OfType<Control>(),
+            FreezeMenuItems?.Invoke(trackId),
+            create,
+            clipboard,
+            new Control[] { MenuKit.Danger(Loc.T("common.delete"), GlyphKind.Trash, () => DeleteTracks(one), MenuKit.DeleteKey) });
+        return flyout;
+    }
+
+    // Compact record-input selector for an audio track header: an input (In 1, In 3/4…), Master,
+    // or another track / send. Reflects and writes the track's stored input source.
+    private Control BuildInputCombo(int trackId, MonitorChip? monitor = null)
+    {
+        var picks = new List<RecordInputPick>();
+        var sources = new List<(string, int)>();
+        void Add(string name, RecordInputPick pick) { sources.Add((name, picks.Count)); picks.Add(pick); }
+        // Every switched-on input of the device, then the pairs (specs/086).
+        foreach (var (pick, _, shortName) in RecordInputPick.HardwareEntries(_engine, trackId)) Add(shortName, pick);
+        Add(Loc.T("common.master"), RecordInputPick.Track(-1));
+        foreach (var v in _tracks) if (v.Id != trackId) Add(v.Name.Length > 0 ? v.Name : Loc.F("common.track_n", v.Id), RecordInputPick.Track(v.Id));
+        foreach (var v in _returns) Add(v.Name.Length > 0 ? v.Name : Loc.F("common.return_n", v.Id), RecordInputPick.Track(v.Id));
+        var cur = _engine is null ? new RecordInputPick(0, InputPick.Mono(0)) : RecordInputPick.Of(_engine, trackId);
+        int sel = picks.FindIndex(p => p.Matches(cur));
+        monitor?.SetSource(sel >= 0 ? cur.Source : 0);
+        return InPicker(sources, Math.Max(0, sel), k =>
+        {
+            if (_engine is null) return;
+            picks[k].ApplyTo(_engine, trackId);
+            monitor?.SetSource(picks[k].Source);
+        });
+    }
+
+    // Input-monitor chip (Monitor "In"): while lit, the audio track plays whatever arrives on
+    // its input — hardware, another track or a return — live through its devices and fader,
+    // in place of its clips. Master can't be monitored (it would feed back), so the chip
+    // fades out and explains itself while Master is the selected input.
+    private sealed class MonitorChip
+    {
+        public required Border Chip { get; init; }
+        public required Action<int> SetSource { get; init; }
+    }
+
+    private MonitorChip MonitorToggle(int trackId)
+    {
+        bool state = _engine?.GetTrackMonitor(trackId) ?? false;
+        bool usable = true;
+        var glyph = new Glyph(GlyphKind.Headphones, 11);
+        var chip = HeaderKey(glyph);
+        void Paint()
+        {
+            // Engaged: solid orange (live) with derived ink; at rest the well. Master can't be
+            // monitored: then the key is drawn in ink 4, not faded.
+            chip.Background = Brush(state && usable ? "Brush.Accent" : "Brush.Well");
+            glyph.Foreground = Brush(!usable ? "Brush.TextDisabled" : state ? "Brush.TextOnAccent" : "Brush.TextSecondary");
+            ToolTip.SetTip(chip, usable
+                ? (state ? Loc.T("arrangement.monitoring_input_click_to_stop") : Loc.T("arrangement.monitor_input_hear_it_live"))
+                : Loc.T("arrangement.master_cant_be_monitored_it"));
+        }
+        Paint();
+        chip.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(chip).Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+            state = !state; Paint();
+            _engine?.SetTrackMonitor(trackId, state);
+        };
+        return new MonitorChip { Chip = chip, SetSource = src => { usable = src != -1; Paint(); } };
+    }
+
+    // Compact MIDI-input selector for an instrument track header: All inputs, a MIDI device, or
+    // another instrument track whose MIDI this one receives ("MIDI In"). Mirrors the
+    // record-input picker.
+    private Control BuildMidiSourceCombo(int trackId)
+    {
+        // The live input (All inputs / a device, with its channel) or the track it takes MIDI
+        // from (specs/086); the picker's values are the entries' indices.
+        if (_engine is not { } engine) return InPicker(new() { (Loc.T("midi_input.all_inputs"), 0) }, 0, _ => { });
+        var (entries, cur) = MidiInputPick.Compact(engine, trackId,
+            _tracks.Where(v => v.IsInstrument).Select(v => (v.Id, v.Name.Length > 0 ? v.Name : Loc.F("common.track_n", v.Id))));
+        var sources = entries.Select((en, i) => (en.Label, i)).ToList();
+        return InPicker(sources, cur, i =>
+        {
+            if (i >= 0 && i < entries.Count) MidiInputPick.Apply(engine, trackId, entries[i]);
+        });
+    }
+
+    // The input picker on a track header (style guide): "In" in ink 3, the source in ink 1 and
+    // a chevron, on the well, 18 high, corner 5, no border; a click opens the sources with the
+    // current one ticked. It handles its own press, so a click never reselects the track.
+    private Control InPicker(List<(string name, int src)> sources, int current, Action<int> set)
+    {
+        var value = new TextBlock
+        {
+            FontSize = NotaType.Caption, Foreground = Brush("Brush.TextPrimary"),
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        void Show() => value.Text = sources.Find(x => x.src == current).name ?? sources[0].name;
+        Show();
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 4 };
+        grid.Children.Add(new TextBlock { Text = Loc.T("arrangement.in"), FontSize = NotaType.Caption, Foreground = Brush("Brush.TextTertiary"), VerticalAlignment = VerticalAlignment.Center });
+        Grid.SetColumn(value, 1);
+        grid.Children.Add(value);
+        var chev = new Glyph(GlyphKind.ChevronDown, 7) { Foreground = Brush("Brush.TextTertiary"), VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(chev, 2);
+        grid.Children.Add(chev);
+        var box = new Border
+        {
+            Height = ChipD, CornerRadius = NotaRadius.Cell, Background = NotaPalette.Well, Padding = new Thickness(6, 0, 5, 0),
+            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center, Child = grid,
+        };
+        box.PointerEntered += (_, _) => box.Background = NotaPalette.WellTrack;
+        box.PointerExited += (_, _) => box.Background = NotaPalette.Well;
+        box.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(box).Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+            var fly = new MenuFlyout();
+            foreach (var (name, src) in sources)
+            {
+                var mi = new MenuItem { Header = name, ToggleType = MenuItemToggleType.Radio, IsChecked = src == current };
+                mi.Click += (_, _) => { current = src; Show(); set(src); };
+                fly.Items.Add(mi);
+            }
+            fly.ShowAt(box);
+        };
+        // The wheel over the closed picker steps through the sources, as a dropdown does:
+        // down picks the next one, up the previous; it stops at either end.
+        box.PointerWheelChanged += (_, e) =>
+        {
+            if (e.Delta.Y == 0 || sources.Count == 0) return;
+            e.Handled = true;
+            int at = Math.Max(0, sources.FindIndex(x => x.src == current));
+            int next = Math.Clamp(at + (e.Delta.Y < 0 ? 1 : -1), 0, sources.Count - 1);
+            if (next == at && sources[at].src == current) return;
+            current = sources[next].src;
+            Show();
+            set(current);
+        };
+        ToolTip.SetTip(box, Loc.T("common.input"));
+        return box;
+    }
+
+    // Colour ▸ one submenu per base hue, each with normal / light / dark shades shown as
+    // swatches, plus Auto. Picking sets the stored palette index of every given track.
+    // Inline rename popup for a track header (Enter commits, Esc cancels).
+    private void PromptRenameTrack(Control anchor, int trackId)
+    {
+        if (_engine is null) return;
+        var box = new TextBox { Text = _engine.GetTrackName(trackId), Width = 180, FontSize = 11 };
+        var flyout = new Flyout { Content = box, Placement = PlacementMode.Bottom };
+        box.KeyDown += (_, ke) =>
+        {
+            if (ke.Key == Key.Enter) { _engine.SetTrackName(trackId, box.Text ?? ""); Refresh(); flyout.Hide(); ke.Handled = true; }
+            else if (ke.Key == Key.Escape) { flyout.Hide(); ke.Handled = true; }
+        };
+        flyout.ShowAt(anchor);
+        Dispatcher.UIThread.Post(() => { box.SelectAll(); box.Focus(); }, DispatcherPriority.Input);
+    }
+
+    // The kind tag (MIDI / Audio / Group): quiet text beside the name, 11 ink 3, not a chip.
+    // It names the row's kind, which is reference information.
+    /// <summary>A track name and its type tag on one line. The tag keeps its width and sits right
+    /// after the name; the name gets what is left and trims, so a long name never shoves the
+    /// buttons beside it out of the header (a Grid's Auto column would let it grow).</summary>
+    private sealed class NameTagPanel : Panel
+    {
+        protected override Size MeasureOverride(Size available)
+        {
+            var (name, tag) = (Children[0], Children[1]);
+            tag.Measure(Size.Infinity);
+            name.Measure(new Size(Math.Max(0, available.Width - tag.DesiredSize.Width), available.Height));
+            return new Size(name.DesiredSize.Width + tag.DesiredSize.Width, Math.Max(name.DesiredSize.Height, tag.DesiredSize.Height));
+        }
+
+        protected override Size ArrangeOverride(Size final)
+        {
+            var (name, tag) = (Children[0], Children[1]);
+            double tagW = Math.Min(tag.DesiredSize.Width, final.Width);
+            double nameW = Math.Min(name.DesiredSize.Width, final.Width - tagW);
+            name.Arrange(new Rect(0, 0, nameW, final.Height));
+            tag.Arrange(new Rect(nameW, 0, tagW, final.Height));
+            return final;
+        }
+    }
+
+    private Control TypeTag(string text) => new TextBlock
+    {
+        Text = text, FontSize = NotaType.Caption, Foreground = Brush("Brush.TextTertiary"),
+        VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 1, 0, 0),
+    };
+
+    // Nota Remote: the name of whoever plays this track from a phone, in a pill with a drawn
+    // phone outline (design 5a) — "who plays what" during a jam.
+    private Control PlayerTag(string who)
+    {
+        var phone = new Border
+        {
+            Width = 6, Height = 9, CornerRadius = NotaRadius.Fine, BorderThickness = new Thickness(1),
+            BorderBrush = Brush("Brush.TextStrong"), VerticalAlignment = VerticalAlignment.Center,
+        };
+        var name = new TextBlock
+        {
+            Text = who, FontSize = 8.5, FontWeight = FontWeight.SemiBold, Foreground = Brush("Brush.TextStrong"),
+            VerticalAlignment = VerticalAlignment.Center, MaxWidth = 70, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var pill = new Border
+        {
+            Height = 16, CornerRadius = NotaRadius.Group, Padding = new Thickness(6, 0), Margin = new Thickness(6, 0, 0, 0),
+            Background = Brush("Brush.TrackOff"), BorderBrush = Brush("Brush.BorderStrong"), BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { phone, name } },
+        };
+        ToolTip.SetTip(pill, Loc.F("arrangement.played_from_a_phone", who));
+        return pill;
+    }
+
+    // The header keys (M / S / ● / monitor), 18 × 18, corner 5, on the well with no border
+    // (style guide): on, a solid fill in the toggle's own colour (mute amber, solo blue, arm
+    // red) with derived ink. Record-arm at rest is a red disc on the well.
+    internal const double ChipD = 18;
+
+    private static Border HeaderKey(Control child) => new()
+    {
+        Width = ChipD, Height = ChipD, CornerRadius = NotaRadius.Cell, Child = child,
+        Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+    };
+
+    // onChanged(armed, modifiers): ⌘/Ctrl arms without disarming the others (#332), ⌥ bypasses a group Link (specs/076).
+    private Control ArmToggle(bool initial, Action<bool, KeyModifiers> onChanged)
+    {
+        bool state = initial;
+        var disc = new Glyph(GlyphKind.Record, 8);
+        var chip = HeaderKey(disc);
+        ToolTip.SetTip(chip, TrackArming.Tip);
+        void Paint()
+        {
+            chip.Background = state ? NotaPalette.Record : NotaPalette.Well;
+            disc.Foreground = state ? NotaPalette.RecordInk : NotaPalette.Record;
+        }
+        Paint();
+        chip.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(chip).Properties.IsLeftButtonPressed) return;
+            e.Handled = true; state = !state; Paint(); onChanged(state, e.KeyModifiers);
+        };
+        return chip;
+    }
+
+    private Control ChipToggle(string text, bool initial, SolidColorBrush onFill, Action<bool> onChanged)
+    {
+        bool state = initial;
+        var tb = new TextBlock
+        {
+            Text = text, FontSize = NotaType.KeyLetter, FontWeight = FontWeight.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        };
+        var chip = HeaderKey(tb);
+        void Paint()
+        {
+            chip.Background = state ? onFill : NotaPalette.Well;
+            tb.Foreground = state ? NotaPalette.InkOn(onFill) : NotaPalette.TextSecondary;
+        }
+        Paint();
+        chip.PointerPressed += (_, e) => { e.Handled = true; state = !state; Paint(); onChanged(state); };
+        return chip;
+    }
+
+    // ---- Return / Master pinned footer -----------------------------------
+    // A value from a control: inside its open undo gesture just set, otherwise a one-off step
+    // (specs/009); no engine (design-time) → just set.
+    private static void Change(MixGesture? undo, double value, Action<double> set)
+    {
+        if (undo is null) set(value); else undo.Change(value, set);
+    }
+
+    // The footer's rows changed height (Refresh, a footer seam drag, a menu preset).
+    private void ApplyFooterHeight()
+    {
+        double h = FooterContentHeight;
+        _footer.Height = h;
+        _footerHeaders.Height = h;
+        _footerLanes.InvalidateVisual();
+        CapFooterHeight();
+    }
+
+    // The footer may take at most half of the space it shares with the track list.
+    private void CapFooterHeight()
+    {
+        double shared = _centerArea.Bounds.Height + _footerScroller.Bounds.Height;
+        _footerScroller.MaxHeight = shared > 0 ? Math.Max(DefaultFooterRowHeight, Math.Floor(shared / 2)) : double.PositiveInfinity;
+    }
+
+    // Footer header cards (one per return, then the master) and their seam grips. A seam drag
+    // moves the existing cards and grips instead of rebuilding them — rebuilding would drop the
+    // grip that holds the pointer — and swaps in a fresh card only when a row crosses a tier.
+    private readonly List<(Control card, HeaderTier tier)> _footerCards = new();
+    private readonly List<Border> _footerGrips = new();
+    private readonly Dictionary<int, PanBar> _footerPans = new();
+
+    private void RebuildFooterHeaders()
+    {
+        _footerHeaders.Children.Clear();
+        _footerMeters.Clear();
+        _footerFaders.Clear();
+        _footerDb.Clear();
+        _footerPans.Clear();
+        _footerCards.Clear();
+        _footerGrips.Clear();
+        int rows = _returns.Count + 1;
+        for (int i = 0; i < rows; i++)
+        {
+            var card = BuildFooterCard(i);
+            _footerCards.Add((card, TierFor(FooterRowHeight(i))));
+            Canvas.SetLeft(card, 0);
+            Canvas.SetTop(card, FooterRowTop(i));
+            _footerHeaders.Children.Add(card);
+        }
+        for (int i = 0; i < rows; i++)
+        {
+            var grip = FooterSeamGrip(i);
+            _footerGrips.Add(grip);
+            _footerHeaders.Children.Add(grip);
+        }
+        PlaceFooterGrips();
+        _footerHeaders.Children.Add(_footerDropRing);   // browser drop target (kept invisible until a drag)
+    }
+
+    // Footer row i: a return (its bus volume) or, last, the master (the transport's master volume).
+    private Control BuildFooterCard(int i)
+    {
+        double h = FooterRowHeight(i);
+        if (i < _returns.Count)
+        {
+            var r = _returns[i];
+            int id = r.Id;
+            var card = BuildSlimRow(r.Name, r.ColorIndex, id, "Brush.SurfaceCard", r.Volume, h,
+                v => _engine?.SetTrackVolume(id, (float)v), out var meter, out var fader, out var db, ret: r);
+            _footerMeters[id] = meter;
+            _footerFaders[id] = fader;
+            _footerDb[id] = db;
+            return card;
+        }
+        // Master row: selectable (opens the master effect chain) via the reserved id.
+        int masterId = _engine?.MasterTrackId ?? -1;
+        string masterName = _engine is { } me2 && me2.GetTrackName(masterId) is { Length: > 0 } mn ? mn : Loc.T("common.master");
+        return BuildSlimRow(masterName, -1, masterId, "Brush.SurfaceRaised", GetMasterVolume?.Invoke() ?? 1f, h,
+            v => SetMasterVolume?.Invoke((float)v), out _masterRowMeter, out _masterRowFader, out _masterRowDb,
+            masterSpine: true);
+    }
+
+    private void PlaceFooterGrips()
+    {
+        for (int i = 0; i < _footerGrips.Count; i++)
+        {
+            _footerGrips[i].Width = _headerW;
+            Canvas.SetLeft(_footerGrips[i], 0);
+            Canvas.SetTop(_footerGrips[i], FooterRowTop(i + 1) - SeamGrabPx / 2);
+        }
+    }
+
+    // During a footer seam drag: move and resize the cards in place; a card whose height
+    // crossed a layout tier is rebuilt on its own.
+    private void RelayoutFooterLive()
+    {
+        RebuildFooterGeometry();
+        var children = _footerHeaders.Children;
+        for (int i = 0; i < _footerCards.Count; i++)
+        {
+            var (card, built) = _footerCards[i];
+            double h = FooterRowHeight(i);
+            if (built != TierFor(h))
+            {
+                int at = children.IndexOf(card);
+                var fresh = BuildFooterCard(i);
+                if (at >= 0) children[at] = fresh; else children.Insert(0, fresh);
+                Canvas.SetLeft(fresh, 0);
+                _footerCards[i] = (fresh, TierFor(h));
+                card = fresh;
+            }
+            Canvas.SetTop(card, FooterRowTop(i));
+            card.Height = h;
+        }
+        PlaceFooterGrips();
+        ApplyFooterHeight();
+    }
+
+    // A footer row: name and volume read-out with the same vertical level meter as a track
+    // header on the right, laid out by the row's height (specs/045) — compact puts name, fader
+    // and read-out on one line; standard stacks the fader under the name (a return adds its mute);
+    // large adds a return's pan. A return's fader and pan write automation like a track's.
+    private Control BuildSlimRow(string title, int colorIndex, int trackId, string bgKey, double volume, double height,
+        Action<double> setVolume, out MeterBar meter, out MiniFader fader, out TextBlock db, bool masterSpine = false,
+        TrackVM? ret = null)
+    {
+        var tier = TierFor(height);
+        var spineBrush = masterSpine ? NotaPalette.Master : ClipColors(colorIndex).content;
+        var name = new TextBlock
+        {
+            Text = title, FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Brush("Brush.TextPrimary"),
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var dbText = new TextBlock
+        {
+            Text = VolumeDbText(volume), FontSize = 9, Classes = { "Mono" }, Foreground = Brush("Brush.TextTertiary"),
+            VerticalAlignment = VerticalAlignment.Center, Width = 30, TextAlignment = TextAlignment.Right,
+            Margin = new Thickness(6, 0, 0, 0),
+        };
+        db = dbText;
+        fader = new MiniFader(volume) { VerticalAlignment = VerticalAlignment.Center, Default = 1.0, Text = VolumeDbText };
+        // One undo step per drag / reset (specs/009): the master row targets the master volume.
+        var undo = _engine is { } ue ? new MixGesture(ue, masterSpine ? MixTarget.Master : MixTarget.Volume(trackId)) : null;
+        fader.GestureBegin += () => undo?.Begin();
+        if (ret is not null)
+        {
+            fader.GestureBegin += () => _engine?.BeginAutomationWrite(trackId, AutomationTarget.Volume, -1, -1, "");
+            fader.GestureEnd   += () => _engine?.EndAutomationWrite(trackId, AutomationTarget.Volume, -1, -1, "");
+        }
+        fader.GestureEnd   += () => undo?.End();
+        // The dB read-out follows the drag, and double-clicking it types a value (as the bar does).
+        fader.ValueChanged += v => { Change(undo, v, setVolume); dbText.Text = VolumeDbText(v); };
+        ValueEntry.Attach(fader, fader.EntryField(Loc.T("common.volume"), VolumeDbText), dbText);
+
+        Control? mute = ret is null ? null
+            : ChipToggle("M", ret.Muted, NotaPalette.Mute, v => { ret.Muted = v; _engine?.SetTrackMute(trackId, v); });
+
+        // Room for the controls beside the name: card minus spine, padding and meter.
+        double contentW = HeaderW - 3 - 16 - 11;
+        Control rowContent;
+        if (tier == HeaderTier.Compact)
+        {
+            // One line: name · fader · dB. A narrow column shrinks the fader, then drops it.
+            double faderW = Math.Clamp(contentW - 56 - 36, 0, 96);
+            var line = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto") };
+            Grid.SetColumn(name, 0);
+            line.Children.Add(name);
+            if (faderW >= 28)
+            {
+                fader.Width = faderW;
+                fader.Margin = new Thickness(6, 0, 0, 0);
+                Grid.SetColumn(fader, 1);
+                line.Children.Add(fader);
+            }
+            Grid.SetColumn(dbText, 2);
+            line.Children.Add(dbText);
+            rowContent = line;
+        }
+        else
+        {
+            var nameRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto") };
+            Grid.SetColumn(name, 0);
+            nameRow.Children.Add(name);
+            if (mute is not null)
+            {
+                mute.Margin = new Thickness(6, 0, 0, 0);
+                Grid.SetColumn(mute, 1);
+                nameRow.Children.Add(mute);
+            }
+            Grid.SetColumn(dbText, 2);
+            nameRow.Children.Add(dbText);
+            var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 6 };
+            stack.Children.Add(nameRow);
+            stack.Children.Add(fader);
+            if (tier == HeaderTier.Large && ret is not null)
+            {
+                var pan = new PanBar(ret.Pan) { VerticalAlignment = VerticalAlignment.Center };
+                var panUndo = _engine is { } pe ? new MixGesture(pe, MixTarget.Pan(trackId)) : null;
+                pan.GestureBegin += () => panUndo?.Begin();
+                Action<double> setPan = p => _engine?.SetTrackPan(trackId, (float)p);
+                pan.PanChanged  += p => Change(panUndo, p, setPan);
+                pan.GestureBegin += () => _engine?.BeginAutomationWrite(trackId, AutomationTarget.Pan, -1, -1, "");
+                pan.GestureEnd   += () => _engine?.EndAutomationWrite(trackId, AutomationTarget.Pan, -1, -1, "");
+                pan.GestureEnd   += () => panUndo?.End();
+                ValueEntry.Attach(pan, pan.EntryField(Loc.T("common.pan")));
+                _footerPans[trackId] = pan;
+                stack.Children.Add(pan);
+            }
+            rowContent = stack;
+        }
+
+        meter = new MeterBar
+        {
+            VerticalAlignment = VerticalAlignment.Stretch, Width = 8,
+            Margin = tier == HeaderTier.Compact ? new Thickness(0, 4, 3, 4) : new Thickness(0, 6, 3, 6),
+        };
+        DockPanel.SetDock(meter, Dock.Right);
+        var body = new DockPanel
+        {
+            LastChildFill = true,
+            Children = { meter, new Border { Padding = tier == HeaderTier.Compact ? new Thickness(8, 0) : new Thickness(8, 4), Child = rowContent } },
+        };
+
+        var spine = new Border { Width = 3, Background = spineBrush };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("3,*") };
+        Grid.SetColumn(spine, 0);
+        Grid.SetColumn(body, 1);
+        grid.Children.Add(spine);
+        grid.Children.Add(body);
+
+        bool sel = trackId > 0 && (trackId == SelTrackId || (ret is not null && _selTracks.Contains(trackId)));
+        if (sel) spine.Background = NotaPalette.Accent;   // selected: accent stripe, name stays primary
+        var card = new Border
+        {
+            Width = HeaderW, Height = height, ClipToBounds = true,
+            Background = sel ? SelHeaderBg : Brush(bgKey),
+            BorderBrush = Brush("Brush.BorderDefault"),
+            BorderThickness = CardBorder,
+            Child = grid,
+        };
+        if (trackId > 0)
+            card.PointerPressed += (_, e) =>
+            {
+                if (e.GetCurrentPoint(card).Properties.IsRightButtonPressed) { ShowFooterMenu(card, trackId); return; }
+                // Double-click a return or the master → its devices, as on a track header (#308).
+                if (e.ClickCount == 2 && e.GetCurrentPoint(card).Properties.IsLeftButtonPressed)
+                {
+                    if (SelTrackId != trackId) Select(trackId, -1);
+                    TrackDevicesRequested?.Invoke(trackId);
+                    e.Handled = true;
+                    return;
+                }
+                if (ret is not null && (e.KeyModifiers & KeyModifiers.Shift) != 0) { SelectReturnRange(trackId); e.Handled = true; return; }
+                if (ret is not null && (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Meta)) != 0)
+                {
+                    ToggleReturnInSelection(trackId); e.Handled = true; return;
+                }
+                Select(trackId, -1);
+            };
+        return card;
+    }
+
+    // Context menu for a send/return or the master row: rename, colour and height (the same
+    // edits regular tracks get; returns/master have no clips to copy/duplicate), and Delete for
+    // a return (the master stays).
+    private void ShowFooterMenu(Control anchor, int trackId)
+    {
+        if (_engine is null) return;
+        var flyout = new MenuFlyout();
+        flyout.FlyoutPresenterClasses.Add("rows");
+        bool isReturn = _returns.Any(r => r.Id == trackId);
+        string name = _engine.GetTrackName(trackId);
+        MenuKit.AddGroups(flyout.Items,
+            new Control[] { MenuKit.Header(name.Length > 0 ? name : isReturn ? Loc.T("common.return") : Loc.T("common.master"),
+                                           TrackBrush(EffectiveColorIndex(_engine, trackId)), isReturn ? Loc.T("common.return") : Loc.T("common.master")) },
+            new Control[] { TrackColourRow(new[] { trackId }) },
+            new Control[] { FooterHeightRow(isReturn ? _returns.FindIndex(r => r.Id == trackId) : _returns.Count) },
+            isReturn
+                ? new Control[] { MenuKit.Item(Loc.T("common.rename"), GlyphKind.Edit, () => PromptRenameTrack(anchor, trackId)), ShowInModularItem(trackId) }
+                : new Control[] { MenuKit.Item(Loc.T("common.rename"), GlyphKind.Edit, () => PromptRenameTrack(anchor, trackId)) },
+            isReturn ? new Control[] { MenuKit.Danger(Loc.T("common.delete"), GlyphKind.Trash, () => DeleteTracks(new[] { trackId }), MenuKit.DeleteKey) } : null);
+        flyout.ShowAt(anchor, showAtPointer: true);
+    }
+
+    /// <summary>A volume as the header read-outs print it: dB with one decimal, "−∞" at silence.</summary>
+    private static string VolumeDbText(double v)
+        => v <= 0.0011 ? "−∞" : AudioMath.LinToDb(v).ToString("0.0", NotaNum.Culture);
+
+    private static IBrush Brush(string key) => (IBrush?)NotaPalette.ByKey(key) ?? NotaPalette.TextPrimary;
+
+    // Small bordered "−"/"+" zoom chip (HANDOFF 1b ruler: 11px, bordered, radius 4).
+    // Zoom out / in: bare 22px icon keys (shell controls stay flat; the hover grey shows them).
+    private static Button ZoomChip(string text)
+    {
+        var b = new Button
+        {
+            Content = text, Width = 22, Height = 22, MinWidth = 0, FontSize = 13,
+            Padding = new Thickness(0), Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+        };
+        b.BindResource(Button.ForegroundProperty, "Brush.TextSecondary");
+        ToolTip.SetTip(b, text == "+" ? Loc.T("arrangement.zoom_in") : Loc.T("arrangement.zoom_out"));
+        return b;
+    }
+
+    // Header-column chrome (the panel grey + right divider), as wide as the header column.
+    private Border HeaderPanel(Control? child)
+    {
+        var b = new Border { Width = HeaderW, BorderThickness = ColumnDivider, Child = child };
+        _headerColumnParts.Add(b);   // follows the header-column width
+        _columnDividers.Add(b);
+        b.BindResource(Border.BackgroundProperty, "Brush.Panel");
+        b.BindResource(Border.BorderBrushProperty, "Brush.BorderDefault");
+        return b;
+    }
+
+    // Segment shaping (M9-D, #591): the shared AutomationCurve, mirroring native AutomationLane::shape.
+    internal static double Shape(double t, float curve)
+        => AutomationCurve.Shape(t, curve);
+
+    // ---- data colours (mirror the tokens in NotaTheme.axaml) --
+    private static readonly IBrush LaneBgA = NotaPalette.BgApp;    // lanes on the ground
+    private static readonly IBrush LaneBgB = NotaPalette.LaneB; // Brush.LaneB
+    private static readonly IBrush ChromeBg = NotaPalette.BgSunken; // Brush.BgSunken
+    private static readonly IPen BeatPen = new Pen(NotaPalette.GridBeat, 1); // Brush.GridBeat
+    private static readonly IPen BarPen = new Pen(NotaPalette.GridBar, 1);   // Brush.GridBar
+    // Phrase lines (specs/092): a step above the bar line, a neutral grey moved from the bar
+    // line toward the tertiary text — derived, so it follows every theme (user themes too) without
+    // a token of its own, and never the accent.
+    private static readonly IPen PhrasePen = new Pen(NotaPalette.Derived(
+        () => SliderTrack.Mix(NotaPalette.GridBar.Color, NotaPalette.TextTertiary.Color, 0.35)), 1);
+    private static readonly IPen SubBeatPen = new Pen(NotaPalette.GridSubBeat, 1);   // finer than a beat
+    // Playhead: a 1px accent line with a 7×5 flag on the ruler, no glow (almanac § timeline).
+    // The brush is the palette slot itself — a SolidColorBrush built from its Color froze the
+    // playhead in one theme.
+    private static readonly IBrush PlayheadBrush = NotaPalette.Accent;
+    private static readonly IPen PlayheadPen = new Pen(PlayheadBrush, 1);
+    // Selection edges a clip with 1px brass — a state never thickens a border to 2px.
+    private static readonly IPen ClipSelBorder = new Pen(NotaPalette.TextPrimary, 1.5);
+    private static readonly IBrush EdgeHighlight = NotaPalette.MarkerHot; // resize-edge affordance
+    private static readonly IBrush InactiveVeil = NotaPalette.Wash(NotaPalette.Veil, 0xB0); // deactivated-clip scrim
+    private static readonly IBrush RulerText = NotaPalette.TextSecondary; // Brush.TextSecondary
+    // Drag position tooltip (req 2.9): dark pill + bright text near the cursor.
+    private static readonly IBrush TooltipBg = NotaPalette.Wash(NotaPalette.TooltipBg, 0xDC);
+    private static readonly IBrush TooltipText = NotaPalette.TooltipText;
+    // Selected-track highlight: a faint neutral lift on the lane row — no edge lines, so it
+    // never fights the grid; the header's accent edge is what marks the selection.
+    private static readonly IBrush SelWash = NotaPalette.Wash(NotaPalette.TextPrimary, 0x0D); // a neutral lift; the header's accent edge marks the selection
+    // A group's lane is chrome between its children, not another lane to scan.
+    internal static readonly IBrush GroupLaneBg = NotaPalette.Wash(NotaPalette.BgSunken, 0xE0);
+    // Plate behind a clip's name so it survives a dense waveform without a full-width strip.
+    internal static readonly IBrush LabelPlate = NotaPalette.Wash(NotaPalette.BgSunken, 0x99);
+    // Browser drag-over: the lane the drop would land on glows (bright accent wash + edge).
+    private static readonly IBrush DropWash = NotaPalette.Wash(NotaPalette.AccentBright, 0x28);
+    private static readonly IBrush DropEdge = NotaPalette.Wash(NotaPalette.AccentBright, 0xC0);
+    private static readonly IPen DropEdgePen = new Pen(DropEdge, 2);
+    internal int DropTrackIndex = -1;   // -1 = no drag over; set by OnLaneDragOver, drawn by LaneControl
+    // In-progress audio take (M-fix): audio clips only materialise on stop, so a
+    // translucent red region grows from the take start to the playhead as feedback.
+    private static readonly IBrush RecFill = NotaPalette.Wash(NotaPalette.Record, 0x33);
+    private static readonly IPen   RecBorder = new Pen(NotaPalette.Wash(NotaPalette.Record, 0xC0), 1.5);
+    private static readonly IBrush RecText = NotaPalette.Record;   // a take being recorded: the record red
+    // Live capture waveform inside the growing take region — a brighter red so it
+    // reads clearly against the translucent RecFill.
+    private static readonly IBrush RecWave = NotaPalette.Wash(NotaPalette.Record, 0xE0);
+    // Marquee rubber-band (multi-select): accent wash + accent border.
+    private static readonly IBrush MarqueeFill = NotaPalette.Wash(NotaPalette.Marker, 0x28);
+    private static readonly IPen   MarqueePen = new Pen(NotaPalette.Wash(NotaPalette.Marker, 0xC0), 1);
+
+    // Loop region: the transport-accent hue (AccentBright #F0C060). A solid brace
+    // fills the ruler strip; a faint wash + edge lines mark the span over the lanes.
+    private static readonly IBrush LoopBrace = NotaPalette.Wash(NotaPalette.AccentBright, 0x66);
+    private static readonly IBrush LoopBand = NotaPalette.Wash(NotaPalette.AccentBright, 0x14);
+    private static readonly IPen   LoopEdge = new Pen(NotaPalette.Wash(NotaPalette.AccentBright, 0xA0), 1);
+    private static readonly IPen   LoopEdgeHot = new Pen(NotaPalette.AccentBright, 2);
+    private static readonly IBrush ReadoutText = NotaPalette.TextPrimary;
+    // A switched-off loop keeps its brace on the ruler, in neutral grey (the accent is for what's live).
+    private static readonly IBrush LoopBraceOff = NotaPalette.Wash(NotaPalette.TextTertiary, 0x38);
+    private static readonly IPen   LoopEdgeOff = new Pen(NotaPalette.Wash(NotaPalette.TextTertiary, 0x80), 1);
+    // Automation overlay (M9-A3): a scrim mutes the clip content, a dashed line marks
+    // the flat baseline of an empty lane.
+    private static readonly IBrush AutoScrim = NotaPalette.Wash(NotaPalette.BgSunken, 0xC0);
+    private static readonly IPen AutoBasePen = new Pen(NotaPalette.TextTertiary, 1)
+        { DashStyle = new DashStyle(new double[] { 3, 3 }, 0) };
+    // Write-arm REC button (M9-C): red dot + "REC", lit when armed.
+    // Hover feedback (M9-D): brass-accent brighter line + point ring under the cursor.
+    private static readonly IPen   AutoHoverPen = new Pen(PlayheadBrush, 2.6);
+    private static readonly IPen   AutoHoverRing = new Pen(PlayheadBrush, 1.5);
+    // Automation range selection (Phase 2): teal band + edges over the picked time span,
+    // distinct from the brass loop band so the two never read as the same thing.
+    private static readonly IBrush AutoSelBand = NotaPalette.Wash(NotaPalette.Ink("#4CC2B0"), 0x30);
+    private static readonly IPen   AutoSelEdge = new Pen(NotaPalette.Wash(NotaPalette.Ink("#4CC2B0"), 0xC0), 1);
+    private static readonly IBrush SelHeaderBg = NotaPalette.SelHeaderBg; // warm accent-tinted raised surface
+    // Freeze (M7): cool ice tint for a frozen track's header + its snowflake glyph.
+    private static readonly IBrush FrozenHeaderBg = NotaPalette.FrozenHeaderBg;
+    private static readonly IBrush FrozenAccent   = NotaPalette.Frozen;
+
+    // Track palette (mirror Brush.Track1..8 + ReturnA/B), each base offered in 3 shades
+    // (normal / lighter / darker) so a colour index is base*Shades + shade. Return buses
+    // sit at ReturnColorBase..; clips derive fill @30%, border @50%, strip @20%, content full.
+    internal const int PaletteShades = 3;
+    internal static readonly int PaletteBases = NotaPalette.TrackColors.Length;   // 9
+    internal static readonly int ReturnColorBase = PaletteBases * PaletteShades;  // 27
+    // The order new tracks take the nine bases, so each contrasts with the one before (style
+    // guide): green, blue, amber, violet, rose, teal, slate, olive, sky. The tenth goes back to
+    // green, which contrasts with sky. Slots are Brush.Track1..9 as stored in projects.
+    private static readonly int[] AutoOrder = { 0, 3, 4, 5, 6, 1, 8, 7, 2 };
+    /// <summary>Auto colour index (shade 0) for the Nth non-return track.</summary>
+    internal static int AutoTrackColorIndex(int nth) => AutoOrder[nth % AutoOrder.Length] * PaletteShades;
+    /// <summary>Colour index for a return bus (0/1).</summary>
+    internal static int ReturnColorIndex(int returnIdx) => ReturnColorBase + (Math.Max(0, returnIdx) % NotaPalette.ReturnColors.Length);
+
+    /// <summary>The engine's track indices in the order the arrangement lists them: regular
+    /// tracks first, then the returns. A new track is appended after the returns in the
+    /// engine, so views walking the raw order showed it below them (#374).</summary>
+    internal static IEnumerable<int> DisplayOrder(IAudioEngine eng)
+    {
+        int n = eng.TrackCount;
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < n; i++)
+                if (eng.TryGetTrackInfo(i, out var ti) && ti.IsReturn == (pass == 1)) yield return i;
+    }
+
+    /// <summary>The effective palette index for a track: its stored colour if set, else its
+    /// group's hue (shaded per sibling), else the automatic colour for its position. Shared by
+    /// every view so a user-picked colour shows consistently in the arrangement, mixer and
+    /// detail — and so a grouped session reads as a handful of families rather than one
+    /// unrelated hue per track (design 1a).</summary>
+    public static int EffectiveColorIndex(IAudioEngine eng, int trackId)
+        => EffectiveColorIndex(eng, trackId, 0);
+
+    private static int EffectiveColorIndex(IAudioEngine eng, int trackId, int depth)
+    {
+        int stored = eng.GetTrackColorIndex(trackId);
+        if (stored >= 0) return stored;
+        if (depth < 8 && GroupShadeFor(eng, trackId, depth) is { } inherited) return inherited;
+        int nth = 0;
+        for (int i = 0; i < eng.TrackCount; i++)
+        {
+            if (!eng.TryGetTrackInfo(i, out var ti)) continue;
+            if (ti.IsReturn) { if (ti.Id == trackId) return ReturnColorIndex(eng.TrackReturnIndex(ti.Id)); continue; }
+            if (ti.Id == trackId) return AutoTrackColorIndex(nth);
+            nth++;
+        }
+        return 0;
+    }
+
+    // An uncoloured member of a group takes the group's base hue; siblings walk the three
+    // shades of that base so they stay apart without leaving the family. Nested groups inherit
+    // the same way (depth-guarded — a malformed parent chain must not hang the paint).
+    private static int? GroupShadeFor(IAudioEngine eng, int trackId, int depth)
+    {
+        int groupId = -1;
+        for (int i = 0; i < eng.TrackCount; i++)
+        {
+            if (!eng.TryGetTrackInfo(i, out var ti) || ti.Id != trackId) continue;
+            if (ti.IsReturn) return null;
+            groupId = ti.GroupId;
+            break;
+        }
+        if (groupId < 0) return null;
+        int parent = EffectiveColorIndex(eng, groupId, depth + 1);
+        if (parent >= ReturnColorBase) return null;
+        int nth = 0;
+        for (int i = 0; i < eng.TrackCount; i++)
+        {
+            if (!eng.TryGetTrackInfo(i, out var ti) || ti.GroupId != groupId) continue;
+            if (ti.Id == trackId) break;
+            nth++;
+        }
+        return (parent / PaletteShades) * PaletteShades + nth % PaletteShades;
+    }
+
+    private static Color Mix(Color a, Color b, double t) => Color.FromRgb(
+        (byte)(a.R + (b.R - a.R) * t), (byte)(a.G + (b.G - a.G) * t), (byte)(a.B + (b.B - a.B) * t));
+    /// <summary>The track colour for a palette index (shared with the clip editor, 1e).</summary>
+    public static Color TrackColorForIndex(int idx)
+    {
+        if (idx >= ReturnColorBase)
+            return NotaPalette.ReturnColors[(idx - ReturnColorBase) % NotaPalette.ReturnColors.Length];
+        idx = ((idx % ReturnColorBase) + ReturnColorBase) % ReturnColorBase;
+        var baseColor = NotaPalette.TrackColors[(idx / PaletteShades) % PaletteBases];
+        return (idx % PaletteShades) switch
+        {
+            1 => Mix(baseColor, NotaPalette.ShadeUp.Color, 0.24),    // lighter
+            2 => Mix(baseColor, NotaPalette.ShadeDown.Color, 0.30),  // darker
+            _ => baseColor,
+        };
+    }
+
+    // Clip brushes are alpha-derived from a track colour rather than being a slot, so they
+    // are registered as derivations: the cache survives a variant change and re-tints with it,
+    // which also keeps an already-open clip editor (handed `content`) honest.
+    private static readonly Dictionary<int, (IBrush fill, IPen border, IBrush strip, IBrush content)> _clipColors = new();
+    private static (IBrush fill, IPen border, IBrush strip, IBrush content) ClipColors(int idx)
+    {
+        if (_clipColors.TryGetValue(idx, out var v)) return v;
+        // The content ink (notes, waveform, name) keeps 3:1 on the lane: a light shade on the
+        // light theme's grey ground would otherwise wash out.
+        v = (ClipTint(idx, 0.30), new Pen(ClipTint(idx, 0.50), 1), ClipTint(idx, 0.20),
+             NotaPalette.Derived(() => NotaPalette.Legible(TrackColorForIndex(idx), NotaPalette.BgApp.Color)));
+        _clipColors[idx] = v;
+        return v;
+    }
+    private static readonly Dictionary<int, SolidColorBrush> _trackBrushes = new();
+
+    // A solid clip's title band: its track colour mixed 30 % toward black; its notes and waveform
+    // 58 % toward black (0.59, the Solid clip style). Theme-following and cached per index.
+    internal static SolidColorBrush ClipBand(int idx) => Shade(_clipBands, idx, 0.30);
+    internal static SolidColorBrush ClipInk(int idx) => Shade(_clipInks, idx, 0.58);
+    private static SolidColorBrush Shade(Dictionary<int, SolidColorBrush> cache, int idx, double t)
+    {
+        if (cache.TryGetValue(idx, out var b)) return b;
+        b = NotaPalette.Derived(() => Mix(TrackColorForIndex(idx), NotaPalette.ShadeDown.Color, t));
+        cache[idx] = b;
+        return b;
+    }
+    private static readonly Dictionary<int, SolidColorBrush> _clipBands = new(), _clipInks = new();
+
+    /// <summary>The theme-following brush for a palette index. A view that wants a track's
+    /// colour takes this; wrapping <see cref="TrackColorForIndex"/> in a new brush freezes it
+    /// in the variant that was active when the view was built.</summary>
+    public static SolidColorBrush TrackBrush(int idx)
+    {
+        if (!_trackBrushes.TryGetValue(idx, out var b)) _trackBrushes[idx] = b = NotaPalette.Derived(() => TrackColorForIndex(idx));
+        return b;
+    }
+
+    /// <summary>A palette index at a fixed alpha (a group row's 16% tint, a member's 6% wash),
+    /// cached per index and alpha so it follows the theme without a derivation per build.</summary>
+    internal static SolidColorBrush TrackTint(int idx, double a)
+    {
+        var key = (idx, (int)Math.Round(a * 1000));
+        if (!_tints.TryGetValue(key, out var b)) _tints[key] = b = ClipTint(idx, a);
+        return b;
+    }
+    private static readonly Dictionary<(int, int), SolidColorBrush> _tints = new();
+
+    /// <summary>A cached, theme-following tint of a palette index. Registers a derivation,
+    /// so only call it behind a per-index cache — never per frame; <see cref="Alpha"/> is the
+    /// throwaway form for a Render pass.</summary>
+    private static SolidColorBrush ClipTint(int idx, double a) => NotaPalette.Derived(() =>
+    {
+        var c = TrackColorForIndex(idx);
+        return Color.FromArgb((byte)(a * 255), c.R, c.G, c.B);
+    });
+
+    private static IBrush Alpha(Color c, double a) => new SolidColorBrush(Color.FromArgb((byte)(a * 255), c.R, c.G, c.B));
+
+    private double BeatToX(double beat) => TempoAxis ? SecondsToX(TempoSeconds(beat)) : (beat - _scrollBeats) * _pixelsPerBeat;
+
+    /// <summary>The vertical grid over a lane-wide canvas: one line per snap position at the
+    /// drawn step (SnapGrid.GridLines, the same set Snap() lands on), weighted phrase › bar ›
+    /// beat › sub-beat. A phrase line is always one of those lines (every bar step divides a
+    /// phrase), so it only changes the pen. Shared by the lanes and the footer rows.</summary>
+    private void DrawGrid(DrawingContext ctx, double w, double h)
+    {
+        if (_pixelsPerBeat <= 0) return;
+        double step = SnapGridState.Draw.Beats(GridBarLength);
+        double bar = TempoAxis ? TempoBarLength : _beatsPerBar > 0 ? _beatsPerBar : 4;
+        double first = XToBeat(0), last = XToBeat(w);
+        foreach (double b in SnapGrid.GridLines(first, last, step, GridBarLength))
+        {
+            double x = BeatToX(b);
+            var pen = PhraseLines.IsPhraseLine(b, _phraseBars, GridBarLength) ? PhrasePen
+                : IsWhole(b / bar) ? BarPen : IsWhole(b) ? BeatPen : SubBeatPen;
+            ctx.DrawLine(pen, new Point(x, 0), new Point(x, h));
+        }
+
+        static bool IsWhole(double v) => Math.Abs(v - Math.Round(v)) < 1e-6;
+    }
+}

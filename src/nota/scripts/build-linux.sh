@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Local Linux build of Nota: native engine (miniaudio PulseAudio/ALSA + RtMidi/ALSA
+# + VST3) + managed + smoke test. Mirrors scripts/build-win.ps1.
+#
+# Build host needs: cmake, ninja, a C++20 compiler, .NET SDK 10, and the dev
+# packages JUCE + the engine link against — on Debian/Ubuntu:
+#   sudo apt install build-essential cmake ninja-build libasound2-dev \
+#     libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+#     libfreetype6-dev libfontconfig1-dev
+# on EL8 (e.g. the manylinux_2_28 container the release builds in):
+#   dnf install gcc-toolset-14-gcc-c++ ninja-build alsa-lib-devel libX11-devel \
+#     libXext-devel libXrandr-devel libXinerama-devel libXcursor-devel \
+#     freetype-devel fontconfig-devel
+# (miniaudio runtime-links PulseAudio/ALSA via dlopen, so libpulse/libasound are
+# not needed at link time — only libasound2-dev for RtMidi.)
+#
+# Usage: scripts/build-linux.sh
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# The native engine (libnota_engine.so) can't be cross-compiled from macOS/Windows;
+# refuse early with a clear message + a container command instead of a confusing
+# compiler/link failure.
+if [ "$(uname -s)" != "Linux" ]; then
+  cat >&2 <<'MSG'
+error: build-linux.sh builds a native Linux engine and must run on Linux.
+       From macOS/Windows, run it inside a Linux container (single line — safe to paste):
+
+  docker run --rm -v "$PWD":/src -w /src mcr.microsoft.com/dotnet/sdk:10.0 bash -c 'apt-get update -qq && apt-get install -y --no-install-recommends curl ca-certificates gnupg && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y --no-install-recommends nodejs cmake ninja-build build-essential libasound2-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev libfreetype6-dev libfontconfig1-dev && scripts/build-linux.sh'
+MSG
+  exit 1
+fi
+
+NATIVE="src/native/nota.engine/build"
+
+echo "==> Building native engine (PulseAudio/ALSA + RtMidi/ALSA)"
+cmake -G Ninja -S src/native/nota.engine -B "${NATIVE}" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build "${NATIVE}"
+
+echo "==> Scanner self-test"
+"${NATIVE}/nota-scanner-selftest"
+
+echo "==> Building managed (.NET)"
+dotnet build Nota.sln -c Release --nologo
+
+echo "==> Smoke test"
+dotnet run --project tests/Nota.SmokeTest -c Release --nologo
+
+echo "==> Plugin scan check (large folders, scratch data dir)"
+NOTA_DATA_DIR="$(mktemp -d /tmp/nota-scan-scale-XXXX)" dotnet tests/Nota.SmokeTest/bin/Release/net10.0/Nota.SmokeTest.dll \
+  --scan-scale "$PWD/${NATIVE}/nota-scanworker"
+
+echo "==> Plugin scan paths check (OS defaults, scratch data dir)"
+NOTA_DATA_DIR="$(mktemp -d /tmp/nota-default-paths-XXXX)" dotnet tests/Nota.SmokeTest/bin/Release/net10.0/Nota.SmokeTest.dll \
+  --default-scan-paths
+NOTA_DATA_DIR="$(mktemp -d /tmp/nota-default-paths-up-XXXX)" dotnet tests/Nota.SmokeTest/bin/Release/net10.0/Nota.SmokeTest.dll \
+  --default-scan-paths-upgrade "$PWD/${NATIVE}/nota-scanworker"
+
+echo "==> Done. Run the app with: dotnet run --project src/managed/Nota.App"

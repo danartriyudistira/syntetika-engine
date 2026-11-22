@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System.Runtime.InteropServices;
+
+namespace Nota.Infrastructure;
+
+public sealed partial class NotaEngine
+{
+    // --- Plugin hosting spike (M3-0) ---------------------------------------
+
+    /// <summary>
+    /// Opens a JUCE test window to verify the JUCE message loop coexists with
+    /// the Avalonia run loop (M3-0 spike). Must be called from the UI thread.
+    /// </summary>
+    public static void OpenPluginHostTestWindow() => Check(NativeMethods.PluginHostOpenTestWindow());
+
+    /// <summary>
+    /// Services JUCE's message loop (plugin editor windows, hosted plugins' timers).
+    /// Needed on Linux only, where JUCE's loop isn't shared with Avalonia's; a no-op
+    /// elsewhere. Non-blocking; call from the UI thread every ~10 ms. Returns the
+    /// number of message batches dispatched.
+    /// </summary>
+    public static int PumpPluginHost() => NativeMethods.PluginHostPump();
+
+    // --- Plugin scanning & catalog (M3-1) ----------------------------------
+
+    /// <summary>
+    /// Scans installed AU/VST3 plugins out-of-process using the given worker
+    /// executable. Blocking. Returns the number of known plugins.
+    /// </summary>
+    public static int ScanPlugins(string workerPath)
+    {
+        int n = NativeMethods.PluginHostScan(workerPath);
+        if (n < 0) throw new NotaEngineException($"Plugin scan failed (code {n}).");
+        return n;
+    }
+
+    /// <summary>
+    /// <see cref="ScanPlugins(string)"/> with options: <paramref name="onlyDir"/> searches just
+    /// that folder for VST3 bundles; <paramref name="retryFailed"/> probes the remembered
+    /// failures again. Blocking.
+    /// </summary>
+    public static int ScanPlugins(string workerPath, string? onlyDir, bool retryFailed)
+    {
+        int n = NativeMethods.PluginHostScanEx(workerPath, onlyDir, retryFailed ? 1 : 0);
+        if (n < 0) throw new NotaEngineException($"Plugin scan failed (code {n}).");
+        return n;
+    }
+
+    /// <summary>Progress of the running scan (any thread), or null when none runs.</summary>
+    public static PluginScanProgress? ScanProgress
+    {
+        get
+        {
+            if (NativeMethods.PluginHostScanProgress(out int done, out int total) == 0) return null;
+            return new PluginScanProgress(done, total, Marshal.PtrToStringUTF8(NativeMethods.PluginHostScanCurrent()) ?? "");
+        }
+    }
+
+    /// <summary>Remembered failed candidates, skipped until their file changes.</summary>
+    public static int ScanFailedCount => NativeMethods.PluginHostScanFailedCount();
+
+    /// <summary>Number of plugins currently in the catalog.</summary>
+    public static int PluginCount => NativeMethods.PluginHostPluginCount();
+
+    /// <summary>Human-readable catalog entry ("Name | Format | inst|fx | Manufacturer"), or null.</summary>
+    public static string? PluginDescription(int index)
+        => Marshal.PtrToStringUTF8(NativeMethods.PluginHostPluginDesc(index));
+
+    /// <summary>Stable identifier for a catalog entry (for project save), or null (M7-6c).</summary>
+    public static string? PluginId(int index)
+        => Marshal.PtrToStringUTF8(NativeMethods.PluginHostPluginId(index));
+
+    /// <summary>Catalog index whose identifier matches, or -1 if the plugin isn't installed.</summary>
+    public static int PluginIndexOfId(string identifier)
+        => NativeMethods.PluginHostIndexOfId(identifier);
+
+    /// <summary>Adds an extra plugin search directory (persisted; used on the next scan).</summary>
+    public static void AddScanPath(string dir) => Check(NativeMethods.PluginHostAddScanPath(dir));
+
+    /// <summary>Removes the extra scan directory at <paramref name="index"/>.</summary>
+    public static void RemoveScanPath(int index) => Check(NativeMethods.PluginHostRemoveScanPath(index));
+
+    /// <summary>Number of user-added scan directories.</summary>
+    public static int ScanPathCount => NativeMethods.PluginHostScanPathCount();
+
+    /// <summary>The extra scan directory at <paramref name="index"/>, or null.</summary>
+    public static string? ScanPath(int index)
+        => Marshal.PtrToStringUTF8(NativeMethods.PluginHostScanPath(index));
+
+    /// <summary>Number of OS-standard default scan folders for <paramref name="format"/>
+    /// ("VST3" today; 0 for unknown formats). Read live from the format's own
+    /// standard locations — the same set the scan searches.</summary>
+    public static int DefaultScanPathCount(string format)
+        => NativeMethods.PluginHostDefaultScanPathCount(format);
+
+    /// <summary>Absolute OS-standard default scan folder <paramref name="index"/> for
+    /// <paramref name="format"/>, or null when out of range or format unknown.</summary>
+    public static string? DefaultScanPath(string format, int index)
+        => Marshal.PtrToStringUTF8(NativeMethods.PluginHostDefaultScanPath(format, index));
+
+    /// <summary>Re-adds the missing OS-standard defaults for <paramref name="format"/>;
+    /// keeps everything else untouched. Returns how many were added.</summary>
+    public static int RestoreDefaultScanPaths(string format)
+        => NativeMethods.PluginHostRestoreDefaultScanPaths(format);
+
+    /// <summary>Whether <paramref name="dir"/> was removed by the user (startup backfill
+    /// and the store ensure skip it; an explicit add still brings it back).</summary>
+    public static bool IsScanPathRemoved(string dir)
+        => NativeMethods.PluginHostIsScanPathRemoved(dir) != 0;
+}

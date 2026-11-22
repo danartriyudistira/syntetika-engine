@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// MCP tools — presets: the shipped factory library for built-in instruments/effects (apply as a
+// new track or in place) and the user's saved presets on disk (list / apply / capture-and-save).
+
+using System.ComponentModel;
+using ModelContextProtocol.Server;
+using Nota.Application;
+
+namespace Nota.Mcp.Tools;
+
+[McpServerToolType]
+public sealed class PresetTools(
+    IAudioEngine engine, IEngineDispatch dispatch, IArrangementRefresh refresh,
+    IFactoryPresets factory, IPresetStore presetStore, IPresetLibrary presetLibrary, ISettingsService settings)
+    : EngineTools(engine, dispatch, refresh)
+{
+    private readonly IFactoryPresets _factory = factory;
+    private readonly IPresetStore _store = presetStore;
+    private readonly IPresetLibrary _library = presetLibrary;
+    private readonly ISettingsService _settings = settings;
+
+    public sealed record FactoryPreset(string Id, string DisplayName, bool IsInstrument, int BuiltinKind, bool IsMidiEffect, string Category);
+    public sealed record UserPreset(string Path, string DisplayName, string Type);
+    public sealed record PresetState(string Id, string Name, bool Modified);
+
+    [McpServerTool(Name = "list_factory_presets"), Description(
+        "List the shipped factory presets (stable id, display name, whether it's an instrument or a MIDI effect, "
+        + "the parent built-in kind, and the browser category folder — Pads, Bass, Vocals, Mastering …; \"\" = unfiled). Apply them with apply_factory_preset.")]
+    public Task<FactoryPreset[]> ListFactoryPresets() => Read(() =>
+    {
+        var all = _factory.All();
+        var list = new List<FactoryPreset>(all.Count);
+        foreach (var p in all) list.Add(new FactoryPreset(p.Id, p.DisplayName, p.IsInstrument, p.BuiltinKind, p.IsMidiEffect, p.Category));
+        return list.ToArray();
+    });
+
+    [McpServerTool(Name = "apply_factory_preset"), Description(
+        "Apply a factory preset by id. Instrument presets create a NEW track (targetTrackId ignored); "
+        + "effect/MIDI presets are added to targetTrackId. Returns \"\" on success or a warning.")]
+    public Task<string> ApplyFactoryPreset(string id, int targetTrackId = 0) => Mutate(() => _factory.Apply(E, id, targetTrackId));
+
+    [McpServerTool(Name = "apply_factory_preset_in_place"), Description(
+        "Apply a factory preset onto an EXISTING instrument/device (deviceIndex -1 = the track instrument). "
+        + "Returns \"\" on success or a warning.")]
+    public Task<string> ApplyFactoryPresetInPlace(string id, int trackId, int deviceIndex)
+        => Mutate(() =>
+        {
+            // One undo step that also names the device after the preset (specs/048).
+            var info = _factory.All().Where(p => p.Id == id).Take(1).ToList();
+            var surface = deviceIndex < 0 ? PresetSurface.Instrument
+                : info.Count > 0 && info[0].IsMidiEffect ? PresetSurface.MidiEffect : PresetSurface.Effect;
+            string name = info.Count > 0 ? info[0].DisplayName : id;
+            return Nota.Application.Editing.PresetEdit.Apply(E, trackId, surface, deviceIndex, id, name,
+                () => _factory.ApplyInPlace(E, id, trackId, deviceIndex));
+        });
+
+    [McpServerTool(Name = "read_preset_state"), Description(
+        "Which preset a device was loaded from and whether a sound parameter has changed since. "
+        + "deviceIndex -1 = the track instrument; midiEffect true for a MIDI effect. An empty name = Init / no preset.")]
+    public Task<PresetState> ReadPresetState(int trackId, int deviceIndex, bool midiEffect = false) => Read(() =>
+    {
+        var surface = deviceIndex < 0 ? PresetSurface.Instrument : midiEffect ? PresetSurface.MidiEffect : PresetSurface.Effect;
+        var tag = E.PresetTagInfo(E.DevicePresetTag(trackId, surface, deviceIndex));
+        return new PresetState(tag?.Id ?? "", tag?.Name ?? "", E.DevicePresetModified(trackId, surface, deviceIndex) == 1);
+    });
+
+    [McpServerTool(Name = "list_user_presets"), Description("List the user's saved presets from the app presets folder (path, display name, type).")]
+    public Task<UserPreset[]> ListUserPresets() => Read(() =>
+    {
+        var list = new List<UserPreset>();
+        foreach (var p in _library.List(_settings.PresetsFolder())) list.Add(new UserPreset(p.Path, p.DisplayName, p.Type));
+        return list.ToArray();
+    });
+
+    [McpServerTool(Name = "apply_user_preset"), Description("Load a saved preset file and apply it to a track. Returns \"\" on success or a warning.")]
+    public Task<string> ApplyUserPreset(string path, int targetTrackId) => Mutate(() => _store.ApplyFromFile(E, path, targetTrackId));
+
+    [McpServerTool(Name = "save_preset"), Description(
+        "Capture a track's device/instrument (deviceIndex -1 = the instrument) as a named preset in the app presets folder. "
+        + "Returns false if there was nothing to capture (e.g. a stateless built-in).")]
+    public Task<bool> SavePreset(int trackId, int deviceIndex, string displayName)
+        => Mutate(() => _store.Save(E, trackId, deviceIndex, displayName, _settings.PresetsFolder()));
+}

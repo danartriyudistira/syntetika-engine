@@ -1,0 +1,509 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
+using Nota.Application;
+using Nota.Application.Editing;
+using Nota.Presentation;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public sealed partial class ArrangementView
+{
+    // ---- ruler ------------------------------------------------------------
+    private sealed class RulerControl : Control
+    {
+        private readonly ArrangementView _o;
+        public RulerControl(ArrangementView o) { _o = o; Cursor = HandCursor; }
+
+        private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+        private static readonly Cursor EdgeCursor = new(StandardCursorType.SizeWestEast);
+        private const double EdgeGrab = 5;      // px either side of a loop edge that grabs it
+        private const double ArrowZone = 14;    // px at the end of the ruler the off-screen arrow owns
+
+        // A click scrubs the playhead; a drag draws a loop region. On the loop brace a drag
+        // moves the region, on either edge it resizes that edge alone (#125).
+        private enum Gesture { None, Pending, Draw, Move, ResizeStart, ResizeEnd, Done }
+        private Gesture _gesture;
+        private Gesture _onRelease;             // what this press becomes once it drags
+        private double _pressBeat, _pressX;
+        private double _origS, _origE;
+
+        private double BeatAt(PointerEventArgs e) => _o.XToBeat(e.GetPosition(this).X);
+
+        // Which loop edge (−1 start, +1 end, 0 none) is under x; the closer one on a short loop.
+        private int EdgeAt(double x)
+        {
+            if (!(_o._loopE > _o._loopS)) return 0;
+            double ds = Math.Abs(x - _o.BeatToX(_o._loopS)), de = Math.Abs(x - _o.BeatToX(_o._loopE));
+            if (Math.Min(ds, de) > EdgeGrab) return 0;
+            return ds <= de ? -1 : 1;
+        }
+        private bool OnBrace(double beat) => _o._loopE > _o._loopS && beat > _o._loopS && beat < _o._loopE;
+        private bool OnArrow(double x)
+        {
+            int side = _o.PlayheadOffscreen();
+            return side < 0 ? x < ArrowZone : side > 0 && x > Bounds.Width - ArrowZone;
+        }
+
+        protected override void OnPointerPressed(PointerPressedEventArgs e)
+        {
+            var pt = e.GetCurrentPoint(this);
+            if (pt.Properties.IsRightButtonPressed) { ShowMenu(); e.Handled = true; return; }
+            if (!pt.Properties.IsLeftButtonPressed) return;
+            double x = e.GetPosition(this).X;
+            _pressBeat = BeatAt(e); _pressX = x;
+            _origS = _o._loopS; _origE = _o._loopE;
+            _gesture = Gesture.Pending;
+            int edge = EdgeAt(x);
+            if (OnArrow(x)) { _o.RevealPlayhead(); _gesture = Gesture.Done; }   // the off-screen arrow (#105)
+            // Double-click on the loop brace turns the loop off / on; the region stays (#59).
+            else if (e.ClickCount == 2 && _o.ToggleLoopAt(_pressBeat)) _gesture = Gesture.Done;
+            // A click still seeks; only a drag past a few pixels becomes one of these.
+            _onRelease = edge < 0 ? Gesture.ResizeStart : edge > 0 ? Gesture.ResizeEnd
+                       : OnBrace(_pressBeat) ? Gesture.Move : Gesture.Draw;
+            e.Pointer.Capture(this); e.Handled = true;
+        }
+        protected override void OnPointerMoved(PointerEventArgs e)
+        {
+            double x = e.GetPosition(this).X;
+            if (_gesture == Gesture.None)
+            {
+                // Hover: a sideways arrow over a loop edge says it can be dragged.
+                int edge = EdgeAt(x);
+                var want = edge != 0 ? EdgeCursor : HandCursor;
+                if (Cursor != want) Cursor = want;
+                if (edge != _hotEdge) { _hotEdge = edge; InvalidateVisual(); }
+                return;
+            }
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || _gesture == Gesture.Done) return;
+            double cur = BeatAt(e);
+            if (_gesture == Gesture.Pending && Math.Abs(x - _pressX) > 4) _gesture = _onRelease;
+            bool free = (e.KeyModifiers & KeyModifiers.Alt) != 0;   // ⌥ = off the grid
+            switch (_gesture)
+            {
+                case Gesture.Draw: _o.SetLoopPreview(_pressBeat, cur); break;
+                case Gesture.Move: _o.SetLoopMovePreview(_origS, _origE, cur - _pressBeat, free); break;
+                case Gesture.ResizeStart: _o.SetLoopEdgePreview(start: true, cur, free); break;
+                case Gesture.ResizeEnd: _o.SetLoopEdgePreview(start: false, cur, free); break;
+            }
+        }
+        protected override void OnPointerReleased(PointerReleasedEventArgs e)
+        {
+            switch (_gesture)
+            {
+                case Gesture.Pending: _o.SeekTo(_pressBeat); break;   // plain click → scrub playhead
+                case Gesture.Draw: _o.CommitLoopPreview(); break;      // drag → loop region
+                case Gesture.Move or Gesture.ResizeStart or Gesture.ResizeEnd: _o.CommitLoopEdit(); break;
+            }
+            _gesture = Gesture.None;
+            Cursor = EdgeAt(e.GetPosition(this).X) != 0 ? EdgeCursor : HandCursor;
+            e.Pointer.Capture(null);
+        }
+        protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+        {
+            if (_gesture is Gesture.Draw or Gesture.Move or Gesture.ResizeStart or Gesture.ResizeEnd) _o.CancelLoopPreview();
+            _gesture = Gesture.None;
+        }
+        protected override void OnPointerExited(PointerEventArgs e)
+        {
+            if (_hotEdge != 0) { _hotEdge = 0; InvalidateVisual(); }
+        }
+        private int _hotEdge;   // the loop edge under the pointer, drawn brighter
+
+        // Right-click: the loop region's commands (#125). Clearing forgets the region — unlike
+        // turning the loop off, which keeps it for a double-click to bring back.
+        private void ShowMenu()
+        {
+            var flyout = new MenuFlyout();
+            bool has = _o._loopE > _o._loopS;
+            var toggle = new MenuItem { Header = _o._loopActive ? Loc.T("arrangement.controls.turn_loop_off") : Loc.T("arrangement.controls.turn_loop_on"), Icon = MenuKit.Icon(GlyphKind.Cycle), InputGesture = MenuKit.LoopKey };
+            toggle.Click += (_, _) => _o.SetLoopOn(!_o._loopActive);
+            var sel = new MenuItem { Header = Loc.T("arrangement.loop_selection"), Icon = MenuKit.Icon(GlyphKind.Select), IsEnabled = _o.SelectionLoopRange() is not null };
+            sel.Click += (_, _) => { if (_o.SelectionLoopRange() is { } r) _o.SetLoopRegion(r.Start, r.End); };
+            var clear = MenuKit.Danger(Loc.T("arrangement.controls.clear_loop_region"), GlyphKind.Trash, () => _o.ClearLoopRegion(), enabled: has);
+            flyout.Items.Add(toggle);
+            flyout.Items.Add(sel);
+            flyout.Items.Add(new Separator());
+            flyout.Items.Add(clear);
+            flyout.ShowAt(this, showAtPointer: true);
+        }
+
+        public override void Render(DrawingContext ctx)
+        {
+            double w = Bounds.Width, h = Bounds.Height;
+            ctx.FillRectangle(ChromeBg, new Rect(0, 0, w, h));
+
+            // Loop brace across the ruler (drawn under bars/labels/playhead). A switched-off
+            // loop keeps its region, drawn in grey, so a double-click can bring it back.
+            if (_o._loopE > _o._loopS)
+            {
+                double lx0 = _o.BeatToX(_o._loopS), lx1 = _o.BeatToX(_o._loopE);
+                if (lx1 > 0 && lx0 < w)
+                {
+                    var (fill, edge) = _o._loopActive ? (LoopBrace, LoopEdge) : (LoopBraceOff, LoopEdgeOff);
+                    double cx0 = Math.Max(0, lx0), cx1 = Math.Min(w, lx1);
+                    ctx.FillRectangle(fill, new Rect(cx0, 0, cx1 - cx0, h));
+                    if (lx0 >= 0) ctx.DrawLine(edge, new Point(lx0, 0), new Point(lx0, h));
+                    if (lx1 <= w) ctx.DrawLine(edge, new Point(lx1, 0), new Point(lx1, h));
+                    // The edge under the pointer (or being dragged) brightens: it can be grabbed.
+                    int hot = _gesture == Gesture.ResizeStart ? -1 : _gesture == Gesture.ResizeEnd ? 1 : _gesture is Gesture.None or Gesture.Pending ? _hotEdge : 0;
+                    if (hot != 0)
+                    {
+                        double hx = hot < 0 ? lx0 : lx1;
+                        if (hx >= 0 && hx <= w) ctx.DrawLine(LoopEdgeHot, new Point(hx, 0), new Point(hx, h));
+                    }
+                }
+            }
+
+            // Time display (#275): with the transport read-out on time, the ruler reads time too.
+            double bpm = _o._engine?.Bpm ?? 0;
+            if (RulerDisplay.ShowTime && bpm > 0) RenderTime(ctx, w, h, bpm);
+            else RenderBars(ctx, w, h);
+            RenderPlayheadAndReadout(ctx, w, h);
+        }
+
+        private void RenderBars(DrawingContext ctx, double w, double h)
+        {
+            // Bar numbers in mono 7. The almanac labels every 4 bars at its base scale
+            // (16px a bar); zoomed in far enough that a single bar has room, every bar is named.
+            double barLength = _o.TempoAxis ? _o.TempoBarLength : _o._beatsPerBar;
+            int firstBar = (int)Math.Floor(_o.XToBeat(0) / barLength);
+            double barPx = _o.BeatToX((firstBar + 1) * barLength) - _o.BeatToX(firstBar * barLength);
+            int labelEvery = barPx >= 40 ? 1 : 4;
+            for (int bar = firstBar; ; bar++)
+            {
+                double beat = bar * barLength;
+                double x = _o.BeatToX(beat);
+                if (x > w) break;
+                if (x < 0) continue;
+                // A phrase bar (specs/092) runs its heavier line the ruler's full height, so the
+                // phrase reads from the bar numbers down through the lanes.
+                if (PhraseLines.StartsPhrase(bar, _o._phraseBars)) ctx.DrawLine(PhrasePen, new Point(x, 0), new Point(x, h));
+                else ctx.DrawLine(BarPen, new Point(x, h - 7), new Point(x, h));
+                if (bar % labelEvery != 0) continue;
+                var ft = new NotaFormattedText((bar + 1).ToString(), CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, NotaFonts.Measure, NotaType.Axis, RulerText);
+                ctx.DrawText(ft, new Point(x + 3, 3));
+            }
+        }
+
+        // Ticks at whole time steps wide enough for their label, read m:ss[.f] like the transport.
+        private void RenderTime(DrawingContext ctx, double w, double h, double bpm)
+        {
+            double pxPerSec = _o._pixelsPerBeat * (_o.TempoAxis ? 2 : bpm / 60.0);
+            if (_charW <= 0 || _charWKey != (NotaTextSize.Step, NotaFonts.FaceStamp))   // re-measure when Text size or the face changes
+            {
+                _charWKey = (NotaTextSize.Step, NotaFonts.FaceStamp);
+                _charW = new NotaFormattedText("0000000000", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    NotaFonts.Measure, NotaType.Axis, RulerText).Width / 10;
+            }
+            double charW = _charW;
+            double stepS = RulerLabels.TimeSteps[^1];
+            foreach (var st in RulerLabels.TimeSteps)
+            {
+                int chars = st >= 1 ? 5 : st >= 0.1 ? 7 : st >= 0.01 ? 8 : 9;
+                if (st * pxPerSec >= chars * charW + 14) { stepS = st; break; }
+            }
+            double t0 = _o.TempoAxis ? _o.AxisOriginSeconds : RulerLabels.Seconds(_o._scrollBeats, bpm);
+            for (long k = Math.Max(0, (long)Math.Floor(t0 / stepS)); ; k++)
+            {
+                double t = k * stepS;
+                double x = _o.TempoAxis ? _o.SecondsToX(t) : _o.BeatToX(RulerLabels.BeatsAt(t, bpm));
+                if (x > w) break;
+                if (x < 0) continue;
+                ctx.DrawLine(BarPen, new Point(x, h - 7), new Point(x, h));
+                var ft = new NotaFormattedText(RulerLabels.Time(t, stepS, NotaNum.Culture), CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, NotaFonts.Measure, NotaType.Axis, RulerText);
+                ctx.DrawText(ft, new Point(x + 3, 3));
+            }
+        }
+        private double _charW;
+        private (int Step, int Face) _charWKey;   // the Text size step and face _charW was measured at
+
+        protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+        {
+            base.OnAttachedToVisualTree(e);
+            RulerDisplay.Changed += InvalidateVisual;
+        }
+        protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+        {
+            base.OnDetachedFromVisualTree(e);
+            RulerDisplay.Changed -= InvalidateVisual;
+        }
+
+        private void RenderPlayheadAndReadout(DrawingContext ctx, double w, double h)
+        {
+            // Playhead flag: a 7×5 brass triangle at the top of the ruler.
+            double px = _o.BeatToX(_o._displayPlayheadBeats);
+            if (px >= -5 && px <= w + 5)
+            {
+                var tri = new StreamGeometry();
+                using (var g = tri.Open())
+                {
+                    g.BeginFigure(new Point(px - 3.5, 0), true);
+                    g.LineTo(new Point(px + 3.5, 0));
+                    g.LineTo(new Point(px, 5));
+                    g.EndFigure(true);
+                }
+                ctx.DrawGeometry(PlayheadBrush, null, tri);
+            }
+
+            // Playhead off screen (#105): a small arrow at that end of the ruler; a click on
+            // it brings the playhead into view.
+            int side = _o.PlayheadOffscreen();
+            if (side != 0)
+            {
+                double ax = side < 0 ? 4 : w - 4, cy = h / 2, d = side < 0 ? 1 : -1;
+                ctx.FillRectangle(ChromeBg, new Rect(side < 0 ? 0 : w - ArrowZone, 0, ArrowZone, h));   // over a bar label
+                var arrow = new StreamGeometry();
+                using (var g = arrow.Open())
+                {
+                    g.BeginFigure(new Point(ax, cy), true);
+                    g.LineTo(new Point(ax + d * 6, cy - 4.5));
+                    g.LineTo(new Point(ax + d * 6, cy + 4.5));
+                    g.EndFigure(true);
+                }
+                ctx.DrawGeometry(PlayheadBrush, null, arrow);
+            }
+
+            // While a loop region is drawn, moved or resized: its start, end and length.
+            if (_o._loopDragging && _o._loopE > _o._loopS)
+            {
+                var ft = new NotaFormattedText(_o.LoopReadout(), CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, NotaFonts.Measure, NotaType.Axis, ReadoutText);
+                double tx = Math.Clamp(_o.BeatToX(_o._loopE) + 6, 2, Math.Max(2, w - ft.Width - 6));
+                var box = new Rect(tx - 3, 2, ft.Width + 6, h - 4);
+                ctx.FillRectangle(ChromeBg, box);
+                ctx.DrawText(ft, new Point(tx, (h - ft.Height) / 2));
+            }
+        }
+    }
+
+    // ---- pinned return/master lanes --------------------------------------
+    private sealed class FooterLaneControl : Control, IAutoRows
+    {
+        private static readonly IBrush AutomationText = NotaPalette.TextDisabled; // Brush.TextDisabled
+        private readonly ArrangementView _o;
+        private readonly AutoEditor _auto;   // return rows edit their lanes like tracks (specs/045)
+        public FooterLaneControl(ArrangementView o) { _o = o; ClipToBounds = true; _auto = new AutoEditor(o, this); }
+
+        // The return rows and, below them, the master row (specs/099), as the automation editor
+        // sees them: the master edits like any lane, its target picked from its pill.
+        Control IAutoRows.Owner => this;
+        int IAutoRows.RowAtY(double y) { int r = _o.FooterRowAt(y); return r >= 0 && r <= _o._returns.Count ? r : -1; }
+        TrackVM IAutoRows.TrackAt(int i) => i < _o._returns.Count ? _o._returns[i] : _o._masterVm;
+        int IAutoRows.IndexOf(TrackVM t) => _o.IsMaster(t) ? _o._returns.Count : _o._returns.IndexOf(t);
+        double IAutoRows.Top(int i) => _o.FooterRowTop(i);
+        double IAutoRows.Height(int i) => _o.FooterRowHeight(i);
+        bool IAutoRows.Editable(int i) => true;
+        (int lo, int hi) IAutoRows.VisibleRange => (0, _o._returns.Count);
+
+        public bool IsEditingPoint => _auto.IsEditingPoint;
+
+        private int MasterRow => _o._returns.Count;
+        private double MasterRowTop => _o.FooterRowTop(MasterRow);
+        private double MasterRowH => _o.FooterRowHeight(MasterRow);
+        private bool MasterShowsTempo => _o._automationMode && _o._masterVm.AutoTarget == AutomationTarget.Tempo;
+
+        // The Tempo lane's range labels (FR-003a): top-right is the highest tempo shown, bottom-
+        // right the lowest; clicking one edits it.
+        private Rect TempoRangeLabel(bool max, double w)
+        {
+            const double lw = 64, lh = 14;
+            return max ? new Rect(w - lw - 6, MasterRowTop + 3, lw, lh)
+                       : new Rect(w - lw - 6, MasterRowTop + MasterRowH - lh - 3, lw, lh);
+        }
+
+        private void EditTempoRange(bool max)
+        {
+            var (lo, hi) = _o.AutoRange(_o._masterVm);
+            var box = new NumericUpDown
+            {
+                Minimum = max ? (decimal)lo + 1 : (decimal)ArrangementView.TempoMin,
+                Maximum = max ? (decimal)ArrangementView.TempoMax : (decimal)hi - 1,
+                Value = (decimal)(max ? hi : lo), Increment = 1, FormatString = "0", Width = 96,
+            };
+            ToolTip.SetTip(box, max ? Loc.T("tempo.range_max") : Loc.T("tempo.range_min"));
+            box.ValueChanged += (_, _) =>
+            {
+                if (box.Value is not decimal v) return;
+                if (max) _o.SetTempoLaneRange(lo, (double)v); else _o.SetTempoLaneRange((double)v, hi);
+                InvalidateVisual();
+            };
+            var flyout = new Flyout { Content = box };
+            flyout.ShowAt(this, showAtPointer: true);
+        }
+
+        // BPM scale of the master Tempo lane: the range ends (click to change) and, while a point
+        // is dragged or hovered, its tempo next to it.
+        private void DrawTempoScale(DrawingContext ctx, double w)
+        {
+            var (lo, hi) = _o.AutoRange(_o._masterVm);
+            foreach (bool max in new[] { true, false })
+            {
+                var r = TempoRangeLabel(max, w);
+                ctx.DrawRectangle(NotaPalette.SurfaceRaised, null, r, NotaRadius.FieldValue, NotaRadius.FieldValue);
+                var ft = new NotaFormattedText(Loc.F("browser.bpm", NotaNum.Str(max ? hi : lo, "0")),
+                    CultureInfo.InvariantCulture, FlowDirection.LeftToRight, NotaFonts.SansMedium, 9, NotaPalette.TextPrimary);
+                ctx.DrawText(ft, new Point(r.Right - ft.Width - 6, r.Y + (r.Height - ft.Height) / 2));
+            }
+            if (_auto.ActivePoint(_o._masterVm) is { } p)
+            {
+                var ft = new NotaFormattedText(Loc.F("browser.bpm", NotaNum.Bpm(p.Value)),
+                    CultureInfo.InvariantCulture, FlowDirection.LeftToRight, NotaFonts.SansMedium, 9, NotaPalette.TextPrimary);
+                double top = MasterRowTop + 8, bot = MasterRowTop + MasterRowH - 8;
+                double frac = hi > lo ? Math.Clamp((p.Value - lo) / (hi - lo), 0, 1) : 0.5;
+                double x = _o.BeatToX(p.Beat) + 8, y = bot - frac * (bot - top) - ft.Height - 4;
+                var bg = new Rect(x - 3, Math.Max(MasterRowTop + 1, y) - 1, ft.Width + 6, ft.Height + 2);
+                ctx.DrawRectangle(NotaPalette.SurfaceRaised, null, bg, NotaRadius.FieldValue, NotaRadius.FieldValue);
+                ctx.DrawText(ft, new Point(x, bg.Y + 1));
+            }
+        }
+
+        // Lane side of a footer row's bottom seam (specs/045): a thin band that resizes the row,
+        // checked before automation editing so the edge never adds a point.
+        private static readonly Cursor SeamCursor = new(StandardCursorType.SizeNorthSouth);
+        private bool _seamHover;
+
+        private void SetSeamHover(bool on)
+        {
+            if (on == _seamHover) return;
+            _seamHover = on;
+            Cursor = on ? SeamCursor : Cursor.Default;
+        }
+
+        protected override void OnPointerPressed(PointerPressedEventArgs e)
+        {
+            var pt = e.GetCurrentPoint(this);
+            int seam = _o.FooterSeamAtY(pt.Position.Y);
+            if (seam >= 0 && pt.Properties.IsLeftButtonPressed)
+            {
+                e.Handled = true;
+                if (e.ClickCount == 2) { _o.ResetFooterRowHeight(seam); return; }
+                _o.BeginFooterResize(seam, e.GetPosition(_o).Y);
+                e.Pointer.Capture(this);
+                return;
+            }
+            if (!_o._automationMode) return;
+            var pos = e.GetPosition(this);
+            if (MasterShowsTempo && pt.Properties.IsLeftButtonPressed)
+                foreach (bool max in new[] { true, false })
+                    if (TempoRangeLabel(max, Bounds.Width).Contains(pos)) { e.Handled = true; EditTempoRange(max); return; }
+            _auto.AutoPointerPressed(e);
+        }
+
+        protected override void OnPointerMoved(PointerEventArgs e)
+        {
+            if (_o.IsFooterResizing) { _o.UpdateFooterResize(e.GetPosition(_o).Y); return; }
+            if (_auto is { IsActive: false })
+            {
+                bool onSeam = _o.FooterSeamAtY(e.GetPosition(this).Y) >= 0;
+                SetSeamHover(onSeam);
+                if (onSeam) { _auto.ClearHover(); return; }
+            }
+            if (_o._automationMode) _auto.AutoPointerMoved(e);
+        }
+
+        protected override void OnPointerReleased(PointerReleasedEventArgs e)
+        {
+            if (_o.IsFooterResizing) { e.Pointer.Capture(null); _o.EndFooterResize(); return; }
+            if (_o._automationMode) _auto.AutoPointerReleased(e);
+            _o.ThawTempoAxis();   // a Tempo drag held the axis still; settle it on the new map
+        }
+
+        protected override void OnPointerExited(PointerEventArgs e) { _auto.ClearHover(); SetSeamHover(false); base.OnPointerExited(e); }
+
+        // Like the track lanes, a lost capture never cancels an edit: on macOS it fires before
+        // the button-up that commits it. Esc and a lost window focus cancel through CancelGesture.
+        protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+        {
+            _o.EndFooterResize();
+            base.OnPointerCaptureLost(e);
+        }
+
+        /// <summary>A return- or master-lane edit or a row resize is live.</summary>
+        public bool IsGesturing => _auto.IsActive || _o.IsFooterResizing;
+
+        // Esc / lost window focus: drop a live edit with no model change and reload the lanes
+        // from the engine (a resize keeps the height it reached — heights are view state).
+        internal bool CancelGesture()
+        {
+            if (!IsGesturing) return false;
+            _auto.Cancel();
+            _o.EndFooterResize();
+            _o.ThawTempoAxis();
+            _o.Refresh();
+            return true;
+        }
+
+        public override void Render(DrawingContext ctx)
+        {
+            double w = Bounds.Width, h = Bounds.Height;
+            int rows = _o._returns.Count + 1; // returns + master
+
+            for (int i = 0; i < rows; i++)
+            {
+                double y = _o.FooterRowTop(i), rh = _o.FooterRowHeight(i);
+                ctx.FillRectangle(LaneBgB, new Rect(0, y, w, rh));
+                ctx.DrawLine(BeatPen, new Point(0, y + rh), new Point(w, y + rh));
+            }
+
+            // Vertical grid: the snap grid's lines at this zoom — what you see is what you snap to.
+            _o.DrawGrid(ctx, w, h);
+
+            // Return rows and the master row: their lanes, edited like a track's (specs/045, 099).
+            double my = MasterRowTop, mh = MasterRowH;
+            if (_o._automationMode)
+            {
+                _auto.DrawAutomation(ctx, w);
+                if (MasterShowsTempo) DrawTempoScale(ctx, w);
+            }
+            else
+            {
+                var ft = new NotaFormattedText(Loc.T("arrangement.controls.master_volume"), CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, Typeface.Default, 9, AutomationText);
+                ctx.DrawText(ft, new Point(12, my + (mh - ft.Height) / 2));
+            }
+
+            // Browser drag-over: the return / master the drop would land on.
+            if (_o.FooterDropRow >= 0)
+            {
+                var r = new Rect(0, _o.FooterRowTop(_o.FooterDropRow), w, _o.FooterRowHeight(_o.FooterDropRow));
+                ctx.FillRectangle(DropWash, r);
+                ctx.DrawRectangle(null, DropEdgePen, r.Deflate(1));
+            }
+
+            // Loop region wash (matches the scrolling lanes).
+            if (_o._loopActive && _o._loopE > _o._loopS)
+            {
+                double lx0 = _o.BeatToX(_o._loopS), lx1 = _o.BeatToX(_o._loopE);
+                if (lx1 > 0 && lx0 < w)
+                {
+                    double cx0 = Math.Max(0, lx0), cx1 = Math.Min(w, lx1);
+                    ctx.FillRectangle(LoopBand, new Rect(cx0, 0, cx1 - cx0, h));
+                    if (lx0 >= 0) ctx.DrawLine(LoopEdge, new Point(lx0, 0), new Point(lx0, h));
+                    if (lx1 <= w) ctx.DrawLine(LoopEdge, new Point(lx1, 0), new Point(lx1, h));
+                }
+            }
+
+            // Playhead across the footer lanes: a 1px brass line.
+            double px = _o.BeatToX(_o._displayPlayheadBeats);
+            if (px >= 0 && px <= w)
+            {
+                ctx.DrawLine(PlayheadPen, new Point(px, 0), new Point(px, h));
+            }
+        }
+    }
+}

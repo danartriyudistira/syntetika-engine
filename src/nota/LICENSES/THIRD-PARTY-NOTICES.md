@@ -1,0 +1,156 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+# Third-party notices
+
+Nota includes and/or links the third-party software listed below. Each component is the
+copyright of its respective authors and is used under the license shown. This file
+reproduces the required attribution notices; full license terms are in each project's own
+distribution. For the dependency register (versions, purpose, clearance status) see
+[`third-party.md`](third-party.md).
+
+---
+
+## JUCE
+Copyright © Raw Material Software Limited.
+Licensed under the **GNU AGPLv3** (see [`AGPL-3.0-only.txt`](AGPL-3.0-only.txt)). JUCE is
+statically linked into the plugin-hosting module; its AGPL terms extend to the combined
+work, which is why Nota as a whole is AGPLv3. <https://juce.com>
+
+## Steinberg VST3 SDK
+Copyright © 2025 Steinberg Media Technologies GmbH.
+Licensed under the **MIT License**. Bundled with JUCE for VST3 hosting. "VST" is a
+trademark of Steinberg Media Technologies GmbH — its name and logo are governed by
+Steinberg's VST trademark guidelines, separate from the code license.
+
+## Steinberg ASIO SDK
+Copyright © 2025 Steinberg Media Technologies GmbH.
+Used under the **GPL-3.0** option of its dual license (see [`GPL-3.0-only.txt`](GPL-3.0-only.txt)).
+Interface headers for ASIO driver I/O on Windows. Source:
+<https://www.steinberg.net/developers/asiosdk-open>. "ASIO" is a trademark of Steinberg
+Media Technologies GmbH.
+
+## Avalonia
+Copyright © .NET Foundation and Contributors.
+Licensed under the **MIT License**. <https://avaloniaui.net>
+
+## .NET runtime & libraries
+Copyright © .NET Foundation and Contributors.
+Licensed under the **MIT License**. <https://dotnet.microsoft.com>
+
+## Geist
+Copyright © 2023 Vercel, in collaboration with basement.studio.
+Licensed under the **SIL Open Font License, Version 1.1** (see
+[`OFL-1.1-Geist.txt`](OFL-1.1-Geist.txt)). Bundled unmodified as the UI typeface. <https://github.com/vercel/geist-font>
+
+## miniaudio
+Copyright © David Reid (mackron@gmail.com).
+Dual licensed — choice of **public domain (Unlicense)** or **MIT-0**. Used for audio
+device I/O (WASAPI / PulseAudio / ALSA). <https://miniaud.io>
+
+## RtMidi
+Copyright © 2003–2023 Gary P. Scavone.
+Licensed under the **RtMidi license** (MIT-style, with an additional request to send
+modifications upstream). Used for MIDI I/O (WinMM / ALSA).
+<https://www.music.mcgill.ca/~gary/rtmidi/>
+
+## dr_libs (dr_wav, dr_flac, dr_mp3)
+Copyright © David Reid (mackron@gmail.com).
+Dual licensed — choice of **public domain (Unlicense)** or **MIT-0**. Used for WAV / FLAC
+/ MP3 decoding. <https://github.com/mackron/dr_libs>
+
+## FLAC (libFLAC)
+Copyright © 2000–2009 Josh Coalson, 2011–2025 Xiph.Org Foundation.
+Licensed under the **BSD 3-Clause License**. Used for FLAC encoding (export).
+<https://xiph.org/flac/>
+
+## LAME
+Copyright © 1999–2011 the LAME Project.
+Licensed under the **LGPL-2.0-or-later** (see [`LGPL-2.0-or-later.txt`](LGPL-2.0-or-later.txt)).
+Used for MP3 encoding (export). <https://lame.sourceforge.io>
+
+## nlohmann/json
+Copyright © 2013 Niels Lohmann.
+Licensed under the **MIT License**. Used for the `audio.json` / `midi.json` device
+configuration files. <https://github.com/nlohmann/json>
+
+## Signalsmith Stretch
+Copyright © 2022 Geraint Luff / Signalsmith Audio Ltd.
+Licensed under the **MIT License**. Used for time-stretch / pitch-shift (clip warping).
+<https://github.com/Signalsmith-Audio/signalsmith-stretch>
+
+## Signalsmith Linear
+Copyright © 2025 Signalsmith Audio.
+Licensed under the **MIT License**. Used for FFT / linear DSP primitives.
+<https://github.com/Signalsmith-Audio/linear>
+
+## HIIR
+Copyright © Laurent de Soras.
+Licensed under the **WTFPL** (Do What The Fuck You Want To Public License). Used for
+oversampling (polyphase half-band IIR filters). <http://ldesoras.free.fr/prod.html>
+
+## Freeverb (algorithm)
+Public-domain reverb algorithm by Jezar at Dreampoint. Nota ships its **own
+implementation** of the algorithm (`src/native/nota.engine/src/Reverb.h`); no original
+code is vendored.
+
+## ONNX Runtime
+Copyright © Microsoft Corporation.
+Licensed under the **MIT License**. The managed API ships with Nota; the native library is
+downloaded with the first AI model, together with its own license and third-party
+notices. <https://github.com/microsoft/onnxruntime>
+
+## AI models (downloaded on request)
+- **htdemucs** (Demucs v4) — Copyright © Meta Platforms, Inc. and affiliates. Licensed
+  under the **MIT License**. <https://github.com/facebookresearch/demucs>
+- **basic-pitch** — Copyright © Spotify AB. Licensed under the **Apache License 2.0**.
+  <https://github.com/spotify/basic-pitch>
+
+Neither model is part of the Nota download; Settings → Downloads → AI Models fetches them
+when asked. Nota's C# code around them ports the projects' reference Python (spectrogram,
+segmenting, note decoding), under the same licenses' terms.
+
+## Apple system frameworks
+Portions © Apple Inc. On macOS, Nota calls the CoreAudio, CoreMIDI, AudioToolbox,
+AudioUnit, CoreAudioKit and GameController frameworks provided by the operating system.
+These are used under Apple's SDK terms and are **not** redistributed with Nota.
+
+## PFFFT
+
+Copyright (c) 2020  Dario Mambro ( dario.mambro@gmail.com )
+Copyright (c) 2019  Hayati Ayguen ( h_ayguen@web.de )
+Copyright (c) 2013  Julien Pommier ( pommier@modartt.com )
+
+Copyright (c) 2004 the University Corporation for Atmospheric
+Research ("UCAR"). All rights reserved. Developed by NCAR's
+Computational and Information Systems Laboratory, UCAR,
+www.cisl.ucar.edu.
+
+Redistribution and use of the Software in source and binary forms,
+with or without modification, is permitted provided that the
+following conditions are met:
+
+- Neither the names of NCAR's Computational and Information Systems
+Laboratory, the University Corporation for Atmospheric Research,
+nor the names of its sponsors or contributors may be used to
+endorse or promote products derived from this Software without
+specific prior written permission.
+
+- Redistributions of source code must retain the above copyright
+notices, this list of conditions, and the disclaimer below.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions, and the disclaimer below in the
+documentation and/or other materials provided with the
+distribution.
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE CONTRIBUTORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS WITH THE
+SOFTWARE.
+
+
+Additional source notice: Copyright (c) 2020 Hayati Ayguen.

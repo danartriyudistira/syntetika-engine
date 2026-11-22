@@ -1,0 +1,5498 @@
+//! Application state and the actions behind every UI callback.
+//!
+//! Everything runs on the UI thread: Slint callbacks mutate [`App`], and a 60 Hz timer
+//! calls [`App::frame`] to advance playback, feed video frames and render on the GPU.
+//! Decoding and media loading happen on background threads.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Instant;
+
+use openvj_audio::{Analyzer, AudioInput};
+use openvj_core::milkdrop::milk_library;
+use openvj_core::{
+    AudioSignal, Autopilot, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, ClockMessage, Composition,
+    CrossfadeCurve, CrossfadeSide, DEFAULT_CLIP_SECS, Effect, EffectRef, LayerRef, MACRO_COUNT, MAX_REACTIVITY,
+    MOD_RATES, MidiBehaviour, MidiClock, MidiEffect, MidiMessage, MidiTarget, ModInputs, ModSource, Modulation, Param,
+    ParamRef, PlayMode, Playing, RouterInput, SYNC_BEATS, Span, TapTempo, TransitionStyle, TriggerStyle, apply_midi,
+    library, move_effect,
+};
+use openvj_media::dxv::{self, DxvDecoder, DxvFormat, DxvFrame};
+use openvj_media::hap::{self, HapDecoder, HapFormat, HapFrame};
+use openvj_media::live::{self, CameraDevice, LiveSource, LiveStatus, LiveStream, SyphonServer};
+use openvj_media::{LoadedMedia, VideoDecoder, VideoInfo};
+use openvj_render::{BcFrame, BcLayout, Engine, THUMB_SIZE};
+use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+
+use crate::browser::{self, Entry};
+use crate::link::Link;
+use crate::midi::{self, MidiPorts};
+use crate::nota_bridge::{Command as NotaCommand, NotaBridge};
+use crate::player::PlayerState;
+use crate::syphon_out::{self, SyphonOutput};
+use crate::{
+    AudioLevels, BrowserItem, CellData, ColumnData, DeckData, Disc, DiscParam, EffectData, LayerData, Lib, LibChip,
+    LibSideRow, LibTile, MainWindow, MappingWindow, MediaTile, MidiLearn, MilkPack, ModNames, OutputWindow, ParamData,
+    Pl, PresetRow, Shadertoy, SynthLayer,
+};
+
+// The output mapping window's side of the app.
+#[path = "mapping_ui.rs"]
+mod mapping_ui;
+pub use mapping_ui::ScreenOutputs;
+
+const _: () = assert!(BAND_COUNT == openvj_audio::BAND_COUNT, "core and audio band counts differ");
+
+/// Where a parameter lives; must match `Scope` in state.slint. Parameters are addressed
+/// as (scope, owner, index): the owner is an effect index for the fx scopes and a layer
+/// index (or -1 for the selected one) for the layer scope.
+mod scope {
+    pub const COMP: i32 = 0;
+    pub const COMP_FX: i32 = 1;
+    pub const LAYER: i32 = 2;
+    pub const LAYER_FX: i32 = 3;
+    pub const CLIP: i32 = 4;
+    pub const GROUP: i32 = 5;
+    pub const GROUP_FX: i32 = 6;
+    pub const CLIP_FX: i32 = 7;
+    /// The fixed Transforms; the owner is ignored.
+    pub const LAYER_TF: i32 = 8;
+    pub const CLIP_TF: i32 = 9;
+    /// The selected clip's macros (Synthesis layout); the index is the macro.
+    pub const CLIP_MACRO: i32 = 10;
+    /// The selected layer's META look (Synthesis layout); the owner is ignored.
+    pub const LAYER_LOOK: i32 = 11;
+    /// The selected layer's media overlay: amount, speed, scale, fill, flips (see `OV_*`).
+    pub const OVERLAY: i32 = 12;
+    /// The selected layer's media overlay colour; the owner is ignored.
+    pub const OVERLAY_LOOK: i32 = 13;
+
+    /// Scopes whose parameters belong to an effect (a chain entry or a Transform).
+    pub fn is_effect(scope: i32) -> bool {
+        matches!(scope, COMP_FX | LAYER_FX | GROUP_FX | CLIP_FX | LAYER_TF | CLIP_TF | LAYER_LOOK | OVERLAY_LOOK)
+    }
+}
+
+/// Parameter index of an effect's dry/wet mix (its channels come first).
+const MIX_INDEX: usize = 1000;
+/// Clip scope rows of an ISF generator's channels start here.
+const ISF_PARAM_BASE: usize = 2000;
+/// Index of the speed row in the clip scope (after the generator parameters).
+const SPEED_INDEX: usize = openvj_core::PARAM_COUNT;
+/// Clip scope rows after speed: beats per pass when beat-synced, and still/generator length.
+const BEATS_INDEX: usize = SPEED_INDEX + 1;
+const DURATION_INDEX: usize = SPEED_INDEX + 2;
+/// Index of the crossfader row in the composition scope (after master, gain and release).
+const CROSSFADER_INDEX: usize = 3;
+const MAX_DURATION: f32 = 60.0;
+const MAX_SPEED: f32 = 4.0;
+const MAX_TRANSITION: f32 = 4.0;
+const MAX_RELEASE: f32 = 1.0;
+const RATE_LABELS: [&str; MOD_RATES.len()] = ["¼", "½", "1", "2", "4", "8", "16", "32", "64"];
+/// Codes sent with `param-mod-tempo` besides a rate index; must match `ModNames` in state.slint.
+const TEMPO_PHASE: i32 = 100;
+const TEMPO_RESTART: i32 = 200;
+/// Seconds a live input stays open after its last clip stops, so relaunching is instant.
+const LIVE_LINGER: f64 = 3.0;
+/// Seconds before reconnecting an input that failed (unplugged camera, app not running).
+const LIVE_RETRY: f64 = 3.0;
+/// Seconds between checks for Syphon servers starting and stopping.
+const SYPHON_POLL: f64 = 2.0;
+
+/// Load state of an image or video clip.
+enum Media {
+    Loading,
+    Ready { video: Option<VideoInfo>, detail: String },
+    Failed(String),
+}
+
+/// The input or file last clicked in the browser, shown highlighted. Dragging it onto a
+/// slot places it.
+#[derive(Clone, PartialEq)]
+enum Picked {
+    File(PathBuf),
+    Input(ClipSource),
+}
+
+/// What is being dragged onto a slot, a layer or an effect chain.
+enum Dragged {
+    /// A generator, MilkDrop preset or saved preset, by library id.
+    Library(String),
+    /// An effect, by library id.
+    Effect(String),
+    /// A camera, Syphon server, Layer Router or media file.
+    Source(ClipSource),
+    /// The clip in a slot (layer, column).
+    Clip(usize, usize),
+    /// Files dragged in from the Finder.
+    Files(Vec<PathBuf>),
+}
+
+/// An open camera or Syphon stream, shared by every clip that uses it.
+struct LiveInput {
+    stream: LiveStream,
+    /// When the last clip using it stopped playing and was deselected.
+    idle_since: Option<f64>,
+}
+
+fn live_source(source: &ClipSource) -> Option<LiveSource> {
+    match source {
+        ClipSource::Camera { device, device_id } => {
+            Some(LiveSource::Camera { name: device.clone(), id: device_id.clone() })
+        }
+        ClipSource::Syphon { app, server } => Some(LiveSource::Syphon { app: app.clone(), server: server.clone() }),
+        _ => None,
+    }
+}
+
+type LoadResult = (ClipId, Result<LoadedMedia, String>);
+
+/// A running video decoder.
+enum Player {
+    /// An FFmpeg process piping RGBA frames.
+    Ffmpeg(VideoDecoder),
+    /// DXV frames read straight from the file and uploaded block-compressed.
+    Dxv(DxvDecoder),
+    /// HAP frames read straight from the file and uploaded block-compressed.
+    Hap(HapDecoder),
+}
+
+fn bc_frame(f: &DxvFrame) -> BcFrame<'_> {
+    BcFrame {
+        layout: match f.format {
+            DxvFormat::Dxt1 => BcLayout::Bc1Opaque,
+            DxvFormat::Dxt5 => BcLayout::Bc3Premultiplied,
+            DxvFormat::YCoCg => BcLayout::YCoCg,
+            DxvFormat::YCoCgAlpha => BcLayout::YCoCgAlpha,
+        },
+        width: f.width,
+        height: f.height,
+        coded_width: f.coded_width,
+        coded_height: f.coded_height,
+        data: &f.texture,
+        chroma: &f.chroma,
+        chroma_height: f.chroma_height,
+    }
+}
+
+fn hap_bc_frame(f: &HapFrame) -> BcFrame<'_> {
+    BcFrame {
+        layout: match f.format {
+            HapFormat::Hap => BcLayout::Bc1Opaque,
+            HapFormat::HapAlpha => BcLayout::Bc3,
+            HapFormat::HapQ => BcLayout::ScaledYCoCg,
+            HapFormat::HapQAlpha => BcLayout::ScaledYCoCgAlpha,
+            HapFormat::HapR => BcLayout::Bc7,
+        },
+        width: f.width,
+        height: f.height,
+        coded_width: f.coded_width,
+        coded_height: f.coded_height,
+        data: &f.texture,
+        chroma: &f.alpha,
+        chroma_height: if f.alpha.is_empty() { 0 } else { f.coded_height },
+    }
+}
+
+pub struct App {
+    pub comp: Composition,
+    engine: Engine,
+    /// Every source and effect with the VJ's statuses, tags and crates, and its thumbnails.
+    pub library: crate::library::AppLibrary,
+    /// Smoothed time between frames, in seconds; thumbnails pause while it is over budget.
+    frame_time: f32,
+    syphon_out: SyphonOutput,
+    clock: Instant,
+    tap: TapTempo,
+    beat_clock: BeatClock,
+    link: Link,
+    /// CLOCK: the tempo follows MIDI clock instead of BPM, TAP or Link.
+    clock_on: bool,
+    midi_clock: MidiClock,
+    /// The input the clock is following; another input's clock is ignored until it goes quiet.
+    clock_port: Option<String>,
+    /// Beat and audio levels for this frame.
+    inputs: ModInputs,
+    last_frame: f64,
+
+    analyzer: Analyzer,
+    audio: Option<AudioInput>,
+    /// "Default input" followed by the device names, once enumerated.
+    audio_devices: Vec<String>,
+    audio_device: usize,
+    audio_status: String,
+
+    midi: Option<MidiPorts>,
+    /// Port names when the ports were last opened, to notice controllers being plugged in.
+    midi_port_list: Vec<String>,
+    midi_scan_at: f64,
+    midi_status: String,
+    /// The last message received, for checking a controller is talking to openVJ.
+    midi_last: String,
+    midi_dirty: bool,
+    /// MIDI map mode (Cmd/Ctrl+M) and the id of the control picked in it.
+    learn_on: bool,
+    learn_id: String,
+    /// Bumped when mappings change, so the UI's labels refresh.
+    learn_rev: i32,
+    clock_dirty: bool,
+    /// Where things in the last imported `.avc` ended up, for resolving MIDI presets.
+    /// Cleared when another composition is opened.
+    resolume_refs: Option<openvj_resolume::ResolumeRefs>,
+
+    /// Selected slot (layer, column). Drives the preview monitor and clip properties.
+    selected: Option<(usize, usize)>,
+    selected_layer: usize,
+    picked: Option<Picked>,
+    /// Files being dragged in from the Finder (src/finder_drop.rs).
+    finder_files: Vec<PathBuf>,
+    last_column: Option<usize>,
+    file: Option<PathBuf>,
+    status: String,
+    escape_at: Option<f64>,
+    pub output_open: bool,
+    /// Properties tab to switch to on the next sync.
+    tab_request: Option<i32>,
+
+    browser_dir: PathBuf,
+    browser_entries: Vec<Entry>,
+
+    thumbs: HashMap<ClipId, Image>,
+    media: HashMap<ClipId, Media>,
+    /// Running decoders, keyed by clip, with the launch time they were opened for.
+    decoders: HashMap<ClipId, (f64, Player)>,
+    /// The beat at the last frame, to move media overlays on by the beats since.
+    last_beat: Option<f64>,
+    /// Synthesis media browser, and thumbnails of its files by path.
+    media_browser: crate::media_browser::MediaBrowser,
+    media_thumbs: HashMap<PathBuf, Image>,
+    media_dirty: bool,
+    /// The browser was listed once (it lists again on refresh or a chip change).
+    media_listed: bool,
+    media_tiles: Rc<VecModel<MediaTile>>,
+    overlay_params: Rc<VecModel<ParamData>>,
+    overlay_look: EffectModels,
+    live: HashMap<LiveSource, LiveInput>,
+    /// Inputs that failed, and when to try them again.
+    live_retry: HashMap<LiveSource, f64>,
+    cameras: Vec<CameraDevice>,
+    syphon_servers: Vec<SyphonServer>,
+    syphon_polled: f64,
+    load_tx: Sender<LoadResult>,
+    load_rx: Receiver<LoadResult>,
+
+    // UI models, kept so rows can be updated in place (replacing them would reset
+    // widgets mid-drag).
+    layers_model: Rc<VecModel<LayerData>>,
+    cell_models: Vec<Rc<VecModel<CellData>>>,
+    columns_model: Rc<VecModel<ColumnData>>,
+    decks_model: Rc<VecModel<DeckData>>,
+    lib_tiles: Rc<VecModel<LibTile>>,
+    lib_chips: Rc<VecModel<LibChip>>,
+    /// The library grid needs building again (items, filters or statuses changed).
+    library_dirty: bool,
+    /// The search box should take the keyboard.
+    lib_focus_search: bool,
+    /// The keyboard should go back to the window's shortcuts.
+    lib_release_keys: bool,
+    /// The browser tab showing (0 Sources, 1 Files, 2 Effects).
+    browser_tab: i32,
+    /// A browser tab the library asked for (its sidebar's Effects or a source kind).
+    lib_tab_request: Option<i32>,
+    /// The layout showing (see `Layouts` in ui/layouts.slint).
+    layout: i32,
+    /// The Discover layout (see discover.rs).
+    discover: crate::discover::DiscoverState,
+    /// Synthesis group tools: locks and undo per section.
+    synth: crate::synth_controls::Groups,
+    discover_dirty: bool,
+    disc_params: Rc<VecModel<DiscParam>>,
+    disc_packs: Rc<VecModel<LibChip>>,
+    disc_crates: Rc<VecModel<LibChip>>,
+    disc_next: Rc<VecModel<LibTile>>,
+    inputs_model: Rc<VecModel<BrowserItem>>,
+    files_model: Rc<VecModel<BrowserItem>>,
+    bands_model: Rc<VecModel<f32>>,
+    comp_params: Rc<VecModel<ParamData>>,
+    audio_params: Rc<VecModel<ParamData>>,
+    layer_params: Rc<VecModel<ParamData>>,
+    clip_params: Rc<VecModel<ParamData>>,
+    /// The selected clip's macros, for the Synthesis layout.
+    macro_params: Rc<VecModel<ParamData>>,
+    macro_counts: Rc<VecModel<i32>>,
+    group_params: Rc<VecModel<ParamData>>,
+    comp_fx: EffectModels,
+    layer_fx: EffectModels,
+    group_fx: EffectModels,
+    clip_fx: EffectModels,
+    layer_tf: EffectModels,
+    /// The selected layer's META look, as a one-effect chain.
+    layer_look: EffectModels,
+    clip_tf: EffectModels,
+
+    grid_dirty: bool,
+    props_dirty: bool,
+    /// [`EffectLibrary::generation`] the Effects tab shows.
+    effects_generation: Option<u64>,
+    /// Ids of the ISF generators in the Sources tab, after the built-ins, in row order.
+    /// The community pack download as last shown (see [`crate::milk_pack`]).
+    milk_pack_shown: crate::milk_pack::Progress,
+    /// [`MilkLibrary::generation`](openvj_core::milkdrop::MilkLibrary) the MilkDrop tab shows.
+    milk_generation: Option<u64>,
+    browser_dirty: bool,
+    images_dirty: bool,
+    /// The output window's picture must be fetched again after the next mapped frame.
+    mapping_dirty: bool,
+    /// The output mapping (screens, slices, masks) the output window shows.
+    mapping: crate::mapping::Mapping,
+    mapping_ui: slint::Weak<MappingWindow>,
+    pub mapping_window_open: bool,
+    /// The mapping window needs redrawing (outlines, handles, corner table).
+    mapping_view_dirty: bool,
+
+    frames: u32,
+    fps_since: Instant,
+    /// Diagnostics: worst frame delta and worst render call in the current second.
+    dbg_max_dt: f64,
+    dbg_max_render_ms: f64,
+
+    /// The Player layout's playlist and Automix (see player.rs).
+    player: PlayerState,
+    /// Thumbnail ids of the playlist's presets, in row order.
+    player_thumbs: Vec<String>,
+
+    /// Syntetika Engine: Nota's transport + launches (None when running standalone).
+    nota: Option<NotaBridge>,
+    /// Launches waiting for their beat, from the Nota bridge.
+    nota_queue: Vec<(f64, NotaCommand)>,
+    /// Smoothed local beat while following Nota (a PLL, not a hard sync each frame).
+    nota_beat: Option<f64>,
+    /// Largest PLL correction applied this second (diagnostics).
+    nota_slew_max: f64,
+    /// Effects whose pipelines are compiled ahead of their first visible frame, one per frame.
+    prewarm: Vec<openvj_core::Effect>,
+    /// NotA track uid per layer, bottom of the mix first (Syntetika Engine layout mirror).
+    layout_uids: Vec<String>,
+    /// Last viz state sent to NotA's OpenVJ tab (to spot edits made in openVJ itself).
+    viz_last: String,
+    /// When the viz state was last polled.
+    viz_at: f64,
+}
+
+impl App {
+    pub fn new(engine: Engine, comp: Composition) -> Self {
+        let (load_tx, load_rx) = mpsc::channel();
+        let browser_dir = browser::default_dir();
+        let syphon_out = SyphonOutput::new(engine.device(), engine.queue());
+        let mut app = Self {
+            comp: Composition::default(),
+            engine,
+            syphon_out,
+            clock: Instant::now(),
+            tap: TapTempo::default(),
+            beat_clock: BeatClock::new(comp.bpm),
+            link: Link::new(comp.bpm),
+            clock_on: false,
+            midi_clock: MidiClock::new(),
+            clock_port: None,
+            inputs: ModInputs::default(),
+            last_frame: 0.0,
+            analyzer: Analyzer::new(48_000),
+            audio: None,
+            audio_devices: vec!["Default input".into()],
+            audio_device: 0,
+            audio_status: "Off. Turn it on to drive mapped parameters from the FFT bands.".into(),
+            midi: None,
+            midi_port_list: Vec::new(),
+            midi_scan_at: 0.0,
+            midi_status: "Off".into(),
+            midi_last: String::new(),
+            midi_dirty: true,
+            learn_on: false,
+            learn_id: String::new(),
+            learn_rev: 0,
+            clock_dirty: true,
+            resolume_refs: None,
+            selected: None,
+            selected_layer: 0,
+            picked: None,
+            finder_files: Vec::new(),
+            last_column: None,
+            file: None,
+            status: String::new(),
+            escape_at: None,
+            output_open: false,
+            mapping_dirty: true,
+            mapping: crate::mapping::Mapping::load(),
+            mapping_ui: slint::Weak::default(),
+            mapping_window_open: false,
+            mapping_view_dirty: true,
+            tab_request: None,
+            browser_entries: browser::list(&browser_dir),
+            browser_dir,
+            thumbs: HashMap::new(),
+            media: HashMap::new(),
+            decoders: HashMap::new(),
+            last_beat: None,
+            media_browser: crate::media_browser::MediaBrowser::load(),
+            media_thumbs: HashMap::new(),
+            media_dirty: true,
+            media_listed: false,
+            media_tiles: Rc::new(VecModel::default()),
+            overlay_params: Rc::new(VecModel::default()),
+            overlay_look: EffectModels::default(),
+            live: HashMap::new(),
+            live_retry: HashMap::new(),
+            cameras: live::list_cameras(),
+            syphon_servers: live::list_syphon_servers(),
+            syphon_polled: 0.0,
+            load_tx,
+            load_rx,
+            layers_model: Rc::new(VecModel::default()),
+            cell_models: Vec::new(),
+            columns_model: Rc::new(VecModel::default()),
+            decks_model: Rc::new(VecModel::default()),
+            lib_tiles: Rc::new(VecModel::default()),
+            lib_chips: Rc::new(VecModel::default()),
+            library_dirty: true,
+            lib_focus_search: false,
+            lib_release_keys: false,
+            browser_tab: 0,
+            lib_tab_request: None,
+            layout: 0,
+            discover: Default::default(),
+            synth: Default::default(),
+            discover_dirty: true,
+            disc_params: Rc::new(VecModel::default()),
+            disc_packs: Rc::new(VecModel::default()),
+            disc_crates: Rc::new(VecModel::default()),
+            disc_next: Rc::new(VecModel::default()),
+            inputs_model: Rc::new(VecModel::default()),
+            files_model: Rc::new(VecModel::default()),
+            bands_model: Rc::new(VecModel::from(vec![0.0; BAND_COUNT])),
+            comp_params: Rc::new(VecModel::default()),
+            audio_params: Rc::new(VecModel::default()),
+            layer_params: Rc::new(VecModel::default()),
+            clip_params: Rc::new(VecModel::default()),
+            macro_params: Rc::new(VecModel::default()),
+            macro_counts: Rc::new(VecModel::default()),
+            group_params: Rc::new(VecModel::default()),
+            comp_fx: EffectModels::default(),
+            layer_fx: EffectModels::default(),
+            group_fx: EffectModels::default(),
+            clip_fx: EffectModels { restartable: true, ..Default::default() },
+            layer_tf: EffectModels::default(),
+            layer_look: EffectModels::default(),
+            clip_tf: EffectModels { restartable: true, ..Default::default() },
+            grid_dirty: true,
+            props_dirty: true,
+            effects_generation: None,
+            milk_generation: None,
+            milk_pack_shown: crate::milk_pack::Progress::Idle,
+            browser_dirty: true,
+            images_dirty: true,
+            frames: 0,
+            fps_since: Instant::now(),
+            dbg_max_dt: 0.0,
+            dbg_max_render_ms: 0.0,
+            player: PlayerState::default(),
+            player_thumbs: Vec::new(),
+            library: crate::library::AppLibrary::load(),
+            frame_time: 0.0,
+            nota: None,
+            nota_queue: Vec::new(),
+            nota_beat: None,
+            nota_slew_max: 0.0,
+            prewarm: Vec::new(),
+            layout_uids: Vec::new(),
+            viz_last: String::new(),
+            viz_at: 0.0,
+        };
+        app.set_composition(comp, None);
+        app.open_midi();
+        if crate::prefs::flag("midi_clock") {
+            app.set_clock(true);
+        }
+        app
+    }
+
+    /// Binds the long-lived models to the window. Call once.
+    pub fn attach(&self, ui: &MainWindow) {
+        ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+        ui.set_layers(ModelRc::from(self.layers_model.clone()));
+        ui.set_columns(ModelRc::from(self.columns_model.clone()));
+        ui.set_decks(ModelRc::from(self.decks_model.clone()));
+        let lib = ui.global::<Lib>();
+        lib.set_tiles(ModelRc::from(self.lib_tiles.clone()));
+        lib.set_chips(ModelRc::from(self.lib_chips.clone()));
+        let disc = ui.global::<Disc>();
+        disc.set_params(ModelRc::from(self.disc_params.clone()));
+        disc.set_packs(ModelRc::from(self.disc_packs.clone()));
+        disc.set_crates(ModelRc::from(self.disc_crates.clone()));
+        disc.set_up_next(ModelRc::from(self.disc_next.clone()));
+        let kinds: Vec<SharedString> = crate::library::SOURCE_KINDS.iter().map(|k| k.0.into()).collect();
+        lib.set_kind_names(ModelRc::new(VecModel::from(kinds)));
+        ui.set_inputs(ModelRc::from(self.inputs_model.clone()));
+        ui.set_files(ModelRc::from(self.files_model.clone()));
+        let modes: Vec<SharedString> = BlendMode::ALL.iter().map(|m| m.name().into()).collect();
+        ui.set_blend_modes(ModelRc::new(VecModel::from(modes)));
+        ui.set_comp_params(ModelRc::from(self.comp_params.clone()));
+        ui.set_audio_params(ModelRc::from(self.audio_params.clone()));
+        ui.set_layer_params(ModelRc::from(self.layer_params.clone()));
+        ui.set_clip_params(ModelRc::from(self.clip_params.clone()));
+        ui.set_macro_params(ModelRc::from(self.macro_params.clone()));
+        ui.set_macro_counts(ModelRc::from(self.macro_counts.clone()));
+        ui.set_comp_effects(ModelRc::from(self.comp_fx.effects.clone()));
+        ui.set_layer_effects(ModelRc::from(self.layer_fx.effects.clone()));
+        ui.set_group_params(ModelRc::from(self.group_params.clone()));
+        ui.set_group_effects(ModelRc::from(self.group_fx.effects.clone()));
+        ui.set_clip_effects(ModelRc::from(self.clip_fx.effects.clone()));
+        ui.set_layer_transform(ModelRc::from(self.layer_tf.effects.clone()));
+        ui.set_layer_look(ModelRc::from(self.layer_look.effects.clone()));
+        ui.set_overlay_params(ModelRc::from(self.overlay_params.clone()));
+        ui.set_media_items(ModelRc::from(self.media_tiles.clone()));
+        ui.set_overlay_look(ModelRc::from(self.overlay_look.effects.clone()));
+        ui.set_clip_transform(ModelRc::from(self.clip_tf.effects.clone()));
+        let names =
+            |v: Vec<&str>| ModelRc::new(VecModel::from(v.into_iter().map(SharedString::from).collect::<Vec<_>>()));
+        ui.set_play_modes(names(PlayMode::ALL.iter().map(|m| m.name()).collect()));
+        ui.set_autopilot_modes(names(Autopilot::ALL.iter().map(|m| m.name()).collect()));
+        ui.set_trigger_styles(names(TriggerStyle::ALL.iter().map(|m| m.name()).collect()));
+        ui.set_crossfade_curves(names(CrossfadeCurve::ALL.iter().map(|c| c.name()).collect()));
+        ui.set_link_available(Link::AVAILABLE);
+        ui.set_syphon_available(syphon_out::AVAILABLE);
+
+        let names = ui.global::<ModNames>();
+        let sources: Vec<SharedString> = ModSource::ALL.iter().map(|s| s.name().into()).collect();
+        names.set_sources(ModelRc::new(VecModel::from(sources)));
+        names.set_first_tempo(ModSource::FIRST_TEMPO as i32);
+        let rates: Vec<SharedString> = RATE_LABELS.iter().map(|r| (*r).into()).collect();
+        names.set_rates(ModelRc::new(VecModel::from(rates)));
+        let levels = ui.global::<AudioLevels>();
+        levels.set_bands(ModelRc::from(self.bands_model.clone()));
+        let band_names: Vec<SharedString> = openvj_audio::BAND_NAMES.iter().map(|n| (*n).into()).collect();
+        levels.set_band_names(ModelRc::new(VecModel::from(band_names)));
+    }
+
+    pub fn now(&self) -> f64 {
+        self.clock.elapsed().as_secs_f64()
+    }
+
+    fn set_status(&mut self, msg: impl Into<String>) {
+        self.status = msg.into();
+        self.props_dirty = true;
+    }
+
+    // ---------------------------------------------------------------- composition
+
+    pub fn set_composition(&mut self, comp: Composition, file: Option<PathBuf>) {
+        self.decoders.clear();
+        self.live_retry.clear();
+        self.thumbs.clear();
+        self.media.clear();
+        self.comp = comp;
+        self.file = file;
+        self.prewarm = Self::effect_queue(&self.comp);
+        self.resolume_refs = None;
+        self.midi_dirty = true;
+        self.selected = None;
+        self.selected_layer = 0;
+        self.last_column = None;
+        self.engine.resize(self.comp.width, self.comp.height);
+        self.engine.retain_clips(&HashSet::new());
+        let media: Vec<_> = self
+            .comp
+            .every_clip()
+            .filter_map(|c| {
+                Some((c.id, c.source.media_path()?.to_owned(), matches!(c.source, ClipSource::Video { .. })))
+            })
+            .collect();
+        for (id, path, is_video) in media {
+            self.start_load(id, path, is_video);
+        }
+        self.grid_dirty = true;
+        self.props_dirty = true;
+        self.images_dirty = true;
+    }
+
+    /// Starts an empty composition. MIDI mappings carry over, since they belong to the
+    /// controller more than to the set.
+    /// Follow Nota's transport and clip launches (Syntetika Engine).
+    pub fn set_nota_bridge(&mut self, bridge: NotaBridge) {
+        self.nota = Some(bridge);
+        // Performance mode: the DAW is the UI. Live thumbnails refresh by reading back from
+        // the GPU every 1/15 s and stall the frame, so they become static (painted once);
+        // the Preview and the output keep rendering normally.
+        self.engine.set_live_thumbnails(false);
+        eprintln!("openVJ: following Nota's clock");
+    }
+
+    /// Drain bridge commands, then apply the ones whose beat has arrived. Launches are
+    /// scheduled by absolute beat, so packet jitter never moves the cut.
+    fn nota_tick(&mut self, now: f64, beat: f64) {
+        // Structural and selection messages are not musical events: apply them on arrival so
+        // they never wait on (or get stuck behind) a transport beat.
+        let commands = self.nota.as_ref().map(|b| b.poll()).unwrap_or_default();
+        for cmd in commands {
+            match cmd {
+                NotaCommand::Layout { tracks, scenes } => self.apply_layout(tracks, scenes),
+                NotaCommand::Select { layer, col } => self.apply_select(layer, col),
+                NotaCommand::StopLayer { layer } => {
+                    self.comp.clear_layer(layer, now);
+                    self.grid_dirty = true;
+                    eprintln!("openVJ: NOTA stop layer {layer}");
+                }
+                NotaCommand::StopAll => {
+                    self.comp.clear_all(now);
+                    self.grid_dirty = true;
+                    eprintln!("openVJ: NOTA stop all");
+                }
+                NotaCommand::VizGet { layer, col, seq } => self.send_viz_state(layer, col, seq),
+                NotaCommand::VizSet { layer, col, group, key, value } => {
+                    crate::viz::set(&mut self.comp, layer, col, &group, &key, value);
+                    self.send_viz_state(layer, col, 0);
+                }
+                NotaCommand::VizPlayback { layer, col, speed, sync, play_mode, trigger } => {
+                    crate::viz::set_playback(
+                        &mut self.comp, layer, col, speed, sync, play_mode.as_deref(), trigger.as_deref(),
+                    );
+                    self.send_viz_state(layer, col, 0);
+                }
+                NotaCommand::VizFx { layer, col, op, a, b, id, value } => {
+                    crate::viz::fx_op(&mut self.comp, layer, col, &op, a, b, &id, value);
+                    self.send_viz_state(layer, col, 0);
+                }
+                NotaCommand::VizAssign { layer, col, kind, id } => {
+                    if crate::viz::assign(&mut self.comp, layer, col, &kind, &id) {
+                        self.selected = Some((layer, col));
+                        self.selected_layer = layer;
+                    }
+                    self.send_viz_state(layer, col, 0);
+                }
+                NotaCommand::VizClear { layer, col } => {
+                    crate::viz::clear(&mut self.comp, layer, col);
+                    self.send_viz_state(layer, col, 0);
+                }
+                NotaCommand::VizSave { path, uids } => self.viz_save(&path, uids),
+                NotaCommand::VizLoad { path } => self.viz_load(&path),
+                NotaCommand::VizLayer { layer, opacity, blend, bypass } => {
+                    if let Some(l) = self.comp.layers.get_mut(layer) {
+                        if let Some(o) = opacity { l.opacity = o.clamp(0.0, 1.0); }
+                        if let Some(b) = blend.as_deref().and_then(crate::viz::blend_by_name) { l.blend = b; }
+                        if let Some(x) = bypass { l.bypass = x; }
+                    }
+                    self.grid_dirty = true;
+                    // Echo the layer the edit belongs to; openVJ's selection may be elsewhere.
+                    let col = self.selected.filter(|(l, _)| *l == layer).map_or(0, |(_, c)| c);
+                    self.send_viz_state(layer, col, 0);
+                }
+                NotaCommand::VizCatalog { kind, query, seq } => {
+                    let body = crate::viz::catalog(&kind, &query);
+                    let line = serde_json::json!({
+                        "t": "vizCatalog", "seq": seq, "kind": kind, "items": body["items"],
+                    })
+                    .to_string();
+                    if let Some(bridge) = &self.nota {
+                        bridge.send(&line);
+                    }
+                }
+                launch => {
+                    let at = match &launch {
+                        NotaCommand::Scene { at_beat, .. } | NotaCommand::Slot { at_beat, .. } => *at_beat,
+                        _ => beat,
+                    };
+                    self.nota_queue.push((at, launch));
+                }
+            }
+        }
+        if self.nota_queue.is_empty() {
+            return;
+        }
+        let mut i = 0;
+        while i < self.nota_queue.len() {
+            let at_beat = self.nota_queue[i].0;
+            // A non-finite target (bad packet) must not wedge the queue forever.
+            if !at_beat.is_finite() || at_beat <= beat + 1e-9 {
+                let (at_beat, cmd) = self.nota_queue.remove(i);
+                let drift_ms = (beat - at_beat) * 60_000.0 / f64::from(self.comp.bpm.max(1.0));
+                match cmd {
+                    NotaCommand::Scene { col, .. } => {
+                        self.comp.trigger_column(col, now);
+                        eprintln!("openVJ: NOTA scene col={col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
+                    }
+                    NotaCommand::Slot { layer, col, .. } => {
+                        self.comp.trigger(layer, col, now);
+                        eprintln!("openVJ: NOTA clip {layer}:{col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
+                    }
+                    // Only launches are queued by beat; the rest are handled on arrival.
+                    _ => {}
+                }
+                self.grid_dirty = true;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Every distinct effect pipeline this composition can show, deduped by id+version.
+    fn effect_queue(comp: &Composition) -> Vec<openvj_core::Effect> {
+        use openvj_core::{ClipSource, Effect};
+        let mut queue = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut add = |fx: &Effect, queue: &mut Vec<Effect>| {
+            if let Some(ty) = fx.ty() {
+                if seen.insert((ty.id().to_owned(), ty.version)) {
+                    queue.push(fx.clone());
+                }
+            }
+        };
+        for fx in &comp.effects {
+            add(fx, &mut queue);
+        }
+        for layer in &comp.layers {
+            add(&layer.transform, &mut queue);
+            add(&layer.look, &mut queue);
+            for fx in &layer.effects {
+                add(fx, &mut queue);
+            }
+            for clip in layer.clips.iter().flatten().chain(layer.held.iter()) {
+                if let ClipSource::Isf { generator } = &clip.source {
+                    add(generator, &mut queue);
+                }
+                add(&clip.transform, &mut queue);
+                for fx in &clip.effects {
+                    add(fx, &mut queue);
+                }
+            }
+        }
+        queue
+    }
+
+    /// Compile one queued pipeline per frame, after the frame is presented, so a loaded
+    /// composition has no first-launch hitch.
+    fn prewarm_tick(&mut self) {
+        let Some(fx) = self.prewarm.pop() else { return };
+        let started = Instant::now();
+        let name = fx.ty().map(|t| t.id().to_owned()).unwrap_or_default();
+        self.engine.prewarm_effect(&fx);
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        if ms > 20.0 {
+            eprintln!("openVJ: prewarm {name} took {ms:.0}ms");
+        }
+    }
+
+    /// Reconciles the composition with NotA's track/scene structure.
+    ///
+    /// One layer per playable track (uid-keyed, so reordering moves a track's visuals with
+    /// it), removed tracks lose their layer for good, and there is one column per scene.
+    /// NotA sends the list top-to-bottom; openVJ layer 0 is the bottom of the mix.
+    fn apply_layout(&mut self, tracks: Vec<crate::nota_bridge::LayoutTrack>, scenes: Vec<String>) {
+        let target: Vec<String> = tracks.iter().rev().map(|t| t.uid.clone()).collect();
+
+        // Drop layers whose track is gone (top-down so indices stay valid).
+        let mut i = self.comp.layers.len();
+        while i > 0 {
+            i -= 1;
+            let keep = self.layout_uids.get(i).is_some_and(|uid| target.iter().any(|t| t == uid));
+            if !keep {
+                self.comp.remove_layer(i);
+                if i < self.layout_uids.len() {
+                    self.layout_uids.remove(i);
+                }
+            }
+        }
+
+        // Place every track's layer at its position, adding the ones NotA has but openVJ not.
+        for (pos, uid) in target.iter().enumerate() {
+            match self.layout_uids.iter().position(|u| u == uid) {
+                Some(cur) => {
+                    if cur != pos {
+                        self.comp.move_layer(cur, pos);
+                        let u = self.layout_uids.remove(cur);
+                        self.layout_uids.insert(pos.min(self.layout_uids.len()), u);
+                    }
+                }
+                None => {
+                    let idx = self.comp.add_layer();
+                    if idx != pos {
+                        self.comp.move_layer(idx, pos);
+                    }
+                    self.layout_uids.insert(pos.min(self.layout_uids.len()), uid.clone());
+                }
+            }
+        }
+
+        // Names, top-to-bottom in the snapshot becomes top-to-bottom in the stack.
+        for (pos, t) in tracks.iter().rev().enumerate() {
+            if let Some(layer) = self.comp.layers.get_mut(pos) {
+                layer.name = t.name.clone();
+            }
+        }
+
+        // A layer left over from before the mirror (openVJ needs at least one) is a stray.
+        // `remove_layer` refuses to drop the last layer, so stop there: an empty track list
+        // must leave one transparent layer, not spin forever.
+        while self.comp.layers.len() > target.len() && self.comp.layers.len() > 1 {
+            let last = self.comp.layers.len() - 1;
+            self.comp.remove_layer(last);
+            if self.comp.layers.len() == last {
+                break; // safety: removal refused, never loop forever
+            }
+            if last < self.layout_uids.len() {
+                self.layout_uids.remove(last);
+            }
+        }
+
+        // One column per scene.
+        while self.comp.columns.len() < scenes.len() {
+            self.comp.add_column();
+        }
+        while self.comp.columns.len() > scenes.len() {
+            let last = self.comp.columns.len() - 1;
+            self.comp.remove_column(last);
+        }
+        for (i, name) in scenes.iter().enumerate() {
+            if let Some(col) = self.comp.columns.get_mut(i) {
+                col.name = name.clone();
+            }
+        }
+
+        self.grid_dirty = true;
+        eprintln!(
+            "openVJ: NOTA layout -> {} layers / {} columns (target {} tracks / {} scenes)",
+            self.comp.layers.len(),
+            self.comp.columns.len(),
+            target.len(),
+            scenes.len()
+        );
+        eprintln!(
+            "openVJ: NOTA layers bottom->top: {:?}",
+            self.layout_uids.iter().map(|u| &u[..u.len().min(6)]).collect::<Vec<_>>()
+        );
+    }
+
+    /// Mirrors NotA's selected slot. Out-of-range ids (a layout change mid-flight) are ignored.
+    fn apply_select(&mut self, layer: usize, col: usize) {
+        if layer >= self.comp.layers.len() || col >= self.comp.columns.len() {
+            return;
+        }
+        self.selected = Some((layer, col));
+        self.selected_layer = layer;
+        self.props_dirty = true;
+        self.grid_dirty = true;
+        if self.comp.clip(layer, col).is_some() {
+            self.tab_request = Some(2);   // Clip tab
+        }
+        eprintln!("openVJ: NOTA select {layer}:{col}");
+    }
+
+    /// Sends one slot's viz state (and remembers it as the last one sent).
+    fn send_viz_state(&mut self, layer: usize, col: usize, seq: u64) {
+        let mut value = crate::viz::state(&self.comp, layer, col);
+        let base = value.to_string();
+        value["t"] = serde_json::json!("vizState");
+        value["seq"] = serde_json::json!(seq);
+        let line = value.to_string();
+        self.viz_last = base;
+        if let Some(bridge) = &self.nota {
+            bridge.send(&line);
+        }
+    }
+
+    /// Writes the composition + its track identity map into the project bundle.
+    fn viz_save(&mut self, path: &str, uids: Vec<String>) {
+        if path.is_empty() {
+            return;
+        }
+        let doc = serde_json::json!({
+            "version": 1,
+            "layout_uids": uids,
+            "composition": self.comp,
+        });
+        let text = match serde_json::to_string_pretty(&doc) {
+            Ok(t) => t,
+            Err(e) => { eprintln!("openVJ: viz save failed: {e}"); return; }
+        };
+        let target = std::path::Path::new(path);
+        if let Some(dir) = target.parent()
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            eprintln!("openVJ: viz save mkdir failed: {e}");
+            return;
+        }
+        let tmp = target.with_extension("json.tmp");
+        match std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, target)) {
+            Ok(()) => eprintln!("openVJ: viz saved to {path}"),
+            Err(e) => eprintln!("openVJ: viz save failed: {e}"),
+        }
+    }
+
+    /// Restores a project's visual composition. Layers are re-attached to NotA tracks by uid,
+    /// so the layout reconcile keeps their clips instead of rebuilding empty layers.
+    fn viz_load(&mut self, path: &str) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => { eprintln!("openVJ: no saved visuals at {path}"); return; }
+        };
+        let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+            eprintln!("openVJ: viz file is not valid JSON");
+            return;
+        };
+        let Some(comp) = doc.get("composition").cloned() else { return };
+        match serde_json::from_value::<Composition>(comp) {
+            Ok(comp) => {
+                let (w, h) = (comp.width, comp.height);
+                self.comp = comp;
+                self.layout_uids = doc
+                    .get("layout_uids")
+                    .and_then(|u| u.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                    .unwrap_or_default();
+                self.selected = None;
+                self.prewarm = Self::effect_queue(&self.comp);
+                self.grid_dirty = true;
+                self.props_dirty = true;
+                let size = self.engine.size();
+                if size != (w, h) {
+                    self.engine.resize(w, h);
+                }
+                eprintln!(
+                    "openVJ: viz loaded from {path} ({} layers / {} columns)",
+                    self.comp.layers.len(),
+                    self.comp.columns.len()
+                );
+            }
+            Err(e) => eprintln!("openVJ: viz load failed: {e}"),
+        }
+    }
+
+    /// Polls the selected slot's state so edits made in openVJ's own UI reach NotA too.
+    fn viz_poll(&mut self, now: f64) {
+        if self.nota.is_none() || now - self.viz_at < 0.25 {
+            return;
+        }
+        self.viz_at = now;
+        let Some((layer, col)) = self.selected else { return };
+        let current = crate::viz::state(&self.comp, layer, col).to_string();
+        if current == self.viz_last {
+            return;
+        }
+        let mut value: serde_json::Value = serde_json::from_str(&current).unwrap_or_default();
+        value["t"] = serde_json::json!("vizState");
+        value["seq"] = serde_json::json!(0);
+        let line = value.to_string();
+        self.viz_last = current;
+        if let Some(bridge) = &self.nota {
+            bridge.send(&line);
+        }
+    }
+
+    pub fn new_composition(&mut self) {
+        let midi = std::mem::take(&mut self.comp.midi);
+        let mut comp = Composition::default();
+        comp.midi = midi;
+        self.set_composition(comp, None);
+        self.set_status("New composition");
+    }
+
+    pub fn save(&mut self, path: &Path) {
+        let result = self
+            .comp
+            .to_json()
+            .map_err(|e| e.to_string())
+            .and_then(|json| std::fs::write(path, json).map_err(|e| e.to_string()));
+        match result {
+            Ok(()) => {
+                self.file = Some(path.to_owned());
+                self.set_status(format!("Saved {}", path.display()));
+            }
+            Err(e) => self.set_status(format!("Could not save: {e}")),
+        }
+    }
+
+    pub fn file(&self) -> Option<PathBuf> {
+        self.file.clone()
+    }
+
+    pub fn open(&mut self, path: &Path) {
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("avc")) {
+            return self.import_resolume(path);
+        }
+        let comp = std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|s| Composition::from_json(&s));
+        match comp {
+            Ok(comp) => {
+                self.set_composition(comp, Some(path.to_owned()));
+                self.set_status(format!("Opened {}", path.display()));
+            }
+            Err(e) => self.set_status(format!("Could not open {}: {e}", path.display())),
+        }
+    }
+
+    /// Opens a Resolume `.avc` as a new, unsaved composition, so saving never overwrites the
+    /// Resolume file.
+    fn import_resolume(&mut self, path: &Path) {
+        match openvj_resolume::import_file(path) {
+            Ok(imported) => {
+                let report = imported.report;
+                for note in &report.notes {
+                    eprintln!("resolume import: {note}");
+                }
+                let mut comp = imported.composition;
+                let midi_msg = load_midi_preset_for(&mut comp, path, &imported.refs);
+                self.set_composition(comp, None);
+                self.resolume_refs = Some(imported.refs);
+                let missing = self.missing_media();
+                let mut msg = format!("Imported {} from Resolume: {}", path.display(), report.summary());
+                if let Some(m) = midi_msg {
+                    msg += &format!(". {m}");
+                }
+                if missing > 0 {
+                    msg +=
+                        &format!(". {missing} media file{} not found, use Find media to locate them", plural(missing));
+                }
+                self.set_status(msg);
+            }
+            Err(e) => self.set_status(format!("Could not import {}: {e}", path.display())),
+        }
+    }
+
+    /// Clips whose media file doesn't exist on this machine.
+    pub fn missing_media(&self) -> usize {
+        self.comp.every_clip().filter_map(|c| c.source.media_path()).filter(|p| !p.exists()).count()
+    }
+
+    /// Points clips with missing media at files with the same name somewhere under `dir`.
+    pub fn relink_media(&mut self, dir: &Path) {
+        let before: HashMap<ClipId, PathBuf> =
+            self.comp.every_clip().filter_map(|c| Some((c.id, c.source.media_path()?.to_owned()))).collect();
+        let result = openvj_resolume::relink_missing(&mut self.comp, &[dir.to_owned()]);
+        let changed: Vec<_> = self
+            .comp
+            .every_clip()
+            .filter_map(|c| {
+                let path = c.source.media_path()?;
+                (before.get(&c.id).map(PathBuf::as_path) != Some(path))
+                    .then(|| (c.id, path.to_owned(), matches!(c.source, ClipSource::Video { .. })))
+            })
+            .collect();
+        for (id, path, is_video) in changed {
+            self.decoders.remove(&id);
+            self.start_load(id, path, is_video);
+        }
+        let still = result.missing.len();
+        self.set_status(format!(
+            "Found {} media file{} in {}{}",
+            result.relinked,
+            plural(result.relinked),
+            dir.display(),
+            if still > 0 { format!(", {still} still missing") } else { String::new() }
+        ));
+        self.grid_dirty = true;
+    }
+
+    /// Drops thumbnails, textures and decoders of clips that were removed.
+    fn collect_garbage(&mut self) {
+        // Clips in closed decks stay loaded so switching back is instant.
+        let alive: HashSet<ClipId> = self
+            .comp
+            .every_clip()
+            .chain(self.comp.all_clips())
+            .chain(self.comp.overlay_clips())
+            .map(|c| c.id)
+            .collect();
+        self.thumbs.retain(|id, _| alive.contains(id));
+        self.media.retain(|id, _| alive.contains(id));
+        self.decoders.retain(|id, _| alive.contains(id));
+        self.engine.retain_clips(&alive);
+    }
+
+    // ---------------------------------------------------------------- clips & media
+
+    fn place(&mut self, layer: usize, col: usize, source: ClipSource) {
+        let media = source.media_path().map(|p| (p.to_owned(), matches!(source, ClipSource::Video { .. })));
+        let Some(id) = self.comp.set_clip(layer, col, source) else { return };
+        if let Some((path, is_video)) = media {
+            self.start_load(id, path, is_video);
+        }
+        self.collect_garbage();
+        self.selected = Some((layer, col));
+        self.selected_layer = layer;
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    fn start_load(&mut self, id: ClipId, path: PathBuf, is_video: bool) {
+        self.media.insert(id, Media::Loading);
+        let tx = self.load_tx.clone();
+        let max = (self.comp.width, self.comp.height);
+        std::thread::spawn(move || {
+            let result = openvj_media::load_media(&path, is_video, max, THUMB_SIZE).map_err(|e| format!("{e:#}"));
+            let _ = tx.send((id, result));
+        });
+    }
+
+    fn poll_loads(&mut self) {
+        while let Ok((id, result)) = self.load_rx.try_recv() {
+            if !self.media.contains_key(&id) {
+                continue; // Clip was removed while loading.
+            }
+            match result {
+                Ok(m) => {
+                    self.engine.set_media_frame(id, m.frame.width, m.frame.height, &m.frame.rgba);
+                    // Playback modes need the video's length; the file knows it best.
+                    if let Some(secs) = m.video.and_then(|v| v.duration).filter(|d| *d > 0.0) {
+                        for clip in self.comp.every_clip_mut().filter(|c| c.id == id) {
+                            clip.media_secs = Some(secs);
+                        }
+                        for o in self.comp.layers.iter_mut().filter_map(|l| l.overlay.as_mut()) {
+                            if o.clip.id == id {
+                                o.clip.media_secs = Some(secs);
+                            }
+                        }
+                    }
+                    let thumb =
+                        SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&m.thumb.rgba, m.thumb.width, m.thumb.height);
+                    self.thumbs.insert(id, Image::from_rgba8(thumb));
+                    let detail = match m.video {
+                        Some(v) => {
+                            let dur = v.duration.map(|d| format!(" · {d:.1} s")).unwrap_or_default();
+                            let codec = m.codec.map(|c| format!(" · {c}")).unwrap_or_default();
+                            format!("{}×{} · {:.2} fps{dur}{codec}", v.width, v.height, v.fps)
+                        }
+                        None => format!("{}×{} image", m.frame.width, m.frame.height),
+                    };
+                    self.media.insert(id, Media::Ready { video: m.video, detail });
+                }
+                Err(e) => {
+                    self.set_status(format!("Could not load media: {e}"));
+                    self.media.insert(id, Media::Failed(e));
+                }
+            }
+            self.grid_dirty = true;
+            self.props_dirty = true;
+        }
+    }
+
+    /// Keeps one decoder per live video clip and uploads frames as clip time advances.
+    fn update_videos(&mut self, now: f64, beat: f64) {
+        let mut live: HashMap<ClipId, (Playing, usize)> = HashMap::new();
+        for (li, layer) in self.comp.layers.iter().enumerate() {
+            for p in layer.active.into_iter().chain(layer.fade.and_then(|f| f.from)) {
+                live.insert(p.clip_id, (p, li));
+            }
+        }
+        // Media overlays play on their own transport; their decoders are marked started at -1.
+        let overlays: HashMap<ClipId, usize> = self
+            .comp
+            .layers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, l)| l.overlay.as_ref().filter(|o| o.visible()).map(|o| (o.clip.id, i)))
+            .collect();
+        self.decoders.retain(|id, (started, _)| {
+            overlays.contains_key(id) && *started < 0.0 || live.get(id).map(|l| l.0.started_at) == Some(*started)
+        });
+        let jobs: Vec<(ClipId, f64, usize, Option<Playing>)> = live
+            .into_iter()
+            .map(|(id, (p, li))| (id, p.started_at, li, Some(p)))
+            .chain(overlays.into_iter().map(|(id, li)| (id, -1.0, li, None)))
+            .collect();
+
+        for (id, started, li, playing) in jobs {
+            let layer = &self.comp.layers[li];
+            // Look up through the layer so clips held over from another deck keep playing.
+            let (clip, time) = match playing {
+                Some(p) => {
+                    let Some(clip) = layer.clip_by_id(id) else { continue };
+                    (clip, p.time(clip, now, beat).secs)
+                }
+                None => {
+                    let Some(o) = layer.overlay.as_ref() else { continue };
+                    (&o.clip, o.time().secs)
+                }
+            };
+            let ClipSource::Video { path } = &clip.source else { continue };
+            let Some(Media::Ready { video: Some(info), .. }) = self.media.get(&id) else { continue };
+            if !self.decoders.contains_key(&id) {
+                match self.open_player(path, *info) {
+                    Ok(player) => {
+                        self.decoders.insert(id, (started, player));
+                    }
+                    Err(e) => {
+                        let msg = format!("{e:#}");
+                        self.set_status(format!("Could not play video: {msg}"));
+                        self.media.insert(id, Media::Failed(msg));
+                        self.grid_dirty = true;
+                        continue;
+                    }
+                }
+            }
+            match &mut self.decoders.get_mut(&id).expect("decoder just ensured").1 {
+                Player::Ffmpeg(dec) => {
+                    let (w, h) = (dec.width, dec.height);
+                    if let Some(frame) = dec.frame_at(time) {
+                        self.engine.set_media_frame(id, w, h, frame);
+                    }
+                }
+                Player::Dxv(dec) => {
+                    if let Some(frame) = dec.frame_at(time) {
+                        self.engine.set_media_bc(id, &bc_frame(&frame));
+                    }
+                }
+                Player::Hap(dec) => {
+                    if let Some(frame) = dec.frame_at(time) {
+                        self.engine.set_media_bc(id, &hap_bc_frame(&frame));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Opens camera and Syphon inputs while a clip using them plays or is selected, and
+    /// uploads their newest frames to every clip that shows them.
+    fn update_live(&mut self, now: f64) {
+        let mut shown: HashSet<ClipId> = self.selected_clip_id().into_iter().collect();
+        for layer in &self.comp.layers {
+            shown.extend(layer.active.into_iter().chain(layer.fade.and_then(|f| f.from)).map(|p| p.clip_id));
+        }
+        let mut clips: HashMap<LiveSource, Vec<ClipId>> = HashMap::new();
+        let mut wanted: HashSet<LiveSource> = HashSet::new();
+        for o in self.comp.layers.iter().filter_map(|l| l.overlay.as_ref()).filter(|o| o.visible()) {
+            shown.insert(o.clip.id);
+        }
+        for clip in self.comp.all_clips().chain(self.comp.overlay_clips()) {
+            let Some(source) = live_source(&clip.source) else { continue };
+            if shown.contains(&clip.id) {
+                wanted.insert(source.clone());
+            }
+            clips.entry(source).or_default().push(clip.id);
+        }
+
+        self.live.retain(|source, input| {
+            if wanted.contains(source) {
+                input.idle_since = None;
+                return true;
+            }
+            now - *input.idle_since.get_or_insert(now) < LIVE_LINGER
+        });
+        let (w, h) = (self.comp.width, self.comp.height);
+        for source in wanted {
+            if !self.live.contains_key(&source) && self.live_retry.get(&source).is_none_or(|t| now >= *t) {
+                self.live_retry.remove(&source);
+                self.live
+                    .insert(source.clone(), LiveInput { stream: LiveStream::open(&source, w, h), idle_since: None });
+            }
+        }
+
+        let mut failed = Vec::new();
+        for (source, input) in &self.live {
+            let ids = clips.get(source).map(Vec::as_slice).unwrap_or_default();
+            let status = input.stream.status();
+            for id in ids {
+                let changed = match (&status, self.media.get(id)) {
+                    (LiveStatus::Connecting, Some(Media::Loading | Media::Ready { .. })) => false,
+                    (LiveStatus::Running { detail }, Some(Media::Ready { detail: d, .. })) => d != detail,
+                    (LiveStatus::Failed(e), Some(Media::Failed(f))) => e != f,
+                    _ => true,
+                };
+                if !changed {
+                    continue;
+                }
+                let media = match &status {
+                    LiveStatus::Connecting => Media::Loading,
+                    LiveStatus::Running { detail } => Media::Ready { video: None, detail: detail.clone() },
+                    LiveStatus::Failed(e) => Media::Failed(e.clone()),
+                };
+                self.media.insert(*id, media);
+                self.grid_dirty = true;
+                self.props_dirty = true;
+            }
+            if let LiveStatus::Failed(e) = &status {
+                if !self.status.ends_with(e.as_str()) {
+                    self.status = format!("Live input: {e}");
+                    self.props_dirty = true;
+                }
+                failed.push(source.clone());
+            }
+            if let Some(frame) = input.stream.take_frame() {
+                for id in ids {
+                    self.engine.set_media_frame(*id, frame.width, frame.height, &frame.rgba);
+                }
+            }
+        }
+        for source in failed {
+            self.live.remove(&source);
+            self.live_retry.insert(source, now + LIVE_RETRY);
+        }
+
+        if now - self.syphon_polled >= SYPHON_POLL {
+            self.syphon_polled = now;
+            let servers = live::list_syphon_servers();
+            if servers != self.syphon_servers {
+                self.syphon_servers = servers;
+                self.browser_dirty = true;
+            }
+        }
+    }
+
+    fn selected_clip_id(&self) -> Option<ClipId> {
+        self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id)
+    }
+
+    /// DXV and HAP play on the GPU directly when it can sample BC textures; everything else,
+    /// and any DXV or HAP file our decoders reject, goes through FFmpeg.
+    fn open_player(&self, path: &Path, info: VideoInfo) -> anyhow::Result<Player> {
+        if self.engine.supports_bc() {
+            match DxvDecoder::open(path) {
+                Ok(dec) => return Ok(Player::Dxv(dec)),
+                Err(e) if dxv::is_dxv(path) => {
+                    eprintln!("openVJ: playing {} through FFmpeg: {e:#}", path.display());
+                }
+                Err(_) => {}
+            }
+            match HapDecoder::open(path) {
+                Ok(dec) => return Ok(Player::Hap(dec)),
+                Err(e) if hap::is_hap(path) => {
+                    eprintln!("openVJ: playing {} through FFmpeg: {e:#}", path.display());
+                }
+                Err(_) => {}
+            }
+        }
+        let dec = VideoDecoder::open_with_info(path, info, self.comp.width, self.comp.height)?;
+        Ok(Player::Ffmpeg(dec))
+    }
+
+    // ---------------------------------------------------------------- frame loop
+
+    pub fn frame(&mut self, ui: &MainWindow, out: &OutputWindow) {
+        let now = self.now();
+        let dt = (now - self.last_frame).clamp(0.0, 0.25) as f32;
+        self.last_frame = now;
+        let beat = self.update_tempo(now, dt as f64);
+        self.nota_tick(now, beat);
+        self.viz_poll(now);
+        let live = self.comp.live_clip_ids();
+        self.comp.tick(now, beat);
+        if self.comp.live_clip_ids() != live {
+            self.grid_dirty = true; // A play-once clip ended.
+        }
+        self.poll_loads();
+        let dbeats = self.last_beat.map_or(0.0, |b| (beat - b).max(0.0));
+        self.last_beat = Some(beat);
+        for o in self.comp.layers.iter_mut().filter_map(|l| l.overlay.as_mut()) {
+            o.advance(dt as f64, dbeats);
+        }
+        self.update_videos(now, beat);
+        self.update_live(now);
+        self.update_midi(now);
+        self.inputs = self.update_audio(beat, dt);
+        let inputs = self.inputs;
+        self.player.listen(&inputs, self.comp.bpm, dt, now, beat);
+        for clip in self.comp.layers.iter_mut().flat_map(|l| l.clips.iter_mut().flatten().chain(l.held.iter_mut())) {
+            clip.apply_macros(&inputs);
+        }
+        let preview = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id);
+        self.syphon_out.before_render(&mut self.engine);
+        // While Automix plays, the Player's own composition goes to the output instead.
+        let render_started = Instant::now();
+        match self.player.frame(&self.comp, now, beat, self.comp.bpm, &self.inputs) {
+            Some(shown) => self.engine.render(shown, now, &self.inputs, None),
+            None => self.engine.render(&self.comp, now, &self.inputs, preview),
+        }
+        let render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
+        self.dbg_max_render_ms = self.dbg_max_render_ms.max(render_ms);
+        if render_ms > 50.0 {
+            let active: Vec<String> = self
+                .comp
+                .layers
+                .iter()
+                .enumerate()
+                .filter_map(|(i, l)| l.active.map(|p| (i, p.clip_id)))
+                .filter_map(|(i, id)| {
+                    self.comp
+                        .layers
+                        .get(i)?
+                        .clip_by_id(id)
+                        .map(|c| format!("{i}:{}", c.source.kind_label()))
+                })
+                .collect();
+            eprintln!(
+                "openVJ: slow render {render_ms:.0}ms passes={} active={active:?}",
+                self.engine.last_pass_count()
+            );
+        }
+        if (self.output_open || self.mapping_window_open)
+            && let Some(setup) = &self.mapping.setup
+        {
+            self.engine.map_output(setup, self.mapping.test_card);
+            if std::mem::take(&mut self.mapping_dirty) {
+                self.images_dirty = true;
+            }
+        }
+        self.syphon_out.after_render(&self.engine);
+        ui.set_syphon_on(self.syphon_out.is_enabled());
+        ui.set_syphon_receiving(self.syphon_out.is_receiving());
+        ui.set_syphon_error(self.syphon_out.error().unwrap_or_default().into());
+        // Event inputs (such as Acuarela's Reset) fire for one frame.
+        for fx in self
+            .comp
+            .effects
+            .iter_mut()
+            .chain(self.comp.layers.iter_mut().flat_map(|l| l.effects.iter_mut()))
+            .chain(self.comp.groups.iter_mut().flat_map(|g| g.effects.iter_mut()))
+        {
+            fx.clear_events();
+        }
+        for clip in self.comp.layers.iter_mut().flat_map(|l| l.clips.iter_mut().flatten()) {
+            clip.effects.iter_mut().for_each(Effect::clear_events);
+        }
+
+        self.update_effect_library(ui);
+        self.update_milk_library(ui);
+        self.update_milk_pack(ui);
+        self.update_library(dt);
+        if self.escape_at.is_some_and(|t| now - t > 0.8) {
+            self.escape_at = None;
+            self.props_dirty = true;
+        }
+        ui.set_beat(self.inputs.beat.rem_euclid(1024.0) as f32);
+        ui.set_link_on(self.link.is_enabled());
+        ui.set_link_peers(self.link.peers() as i32);
+        let waiting = self.clock_on && self.midi_clock.is_waiting(now);
+        if self.clock_dirty || waiting != ui.get_clock_waiting() {
+            self.clock_dirty = false;
+            ui.set_clock_on(self.clock_on);
+            ui.set_clock_waiting(waiting);
+            ui.set_clock_port(self.clock_port.clone().unwrap_or_default().into());
+        }
+        self.frames += 1;
+        self.dbg_max_dt = self.dbg_max_dt.max(dt as f64 * 1000.0);
+        let elapsed = self.fps_since.elapsed().as_secs_f64();
+        if elapsed >= 1.0 {
+            let fps = self.frames as f64 / elapsed;
+            eprintln!(
+                "openVJ: fps={fps:.1} max_dt={:.1}ms max_render={:.1}ms bridge={} slew={:.4} beat",
+                self.dbg_max_dt, self.dbg_max_render_ms, self.nota.is_some(), self.nota_slew_max
+            );
+            ui.set_fps(format!("{fps:.0} fps").into());
+            self.frames = 0;
+            self.fps_since = Instant::now();
+            self.dbg_max_dt = 0.0;
+            self.dbg_max_render_ms = 0.0;
+            self.nota_slew_max = 0.0;
+        }
+        self.sync(ui, out);
+        ui.window().request_redraw();
+        if self.output_open {
+            out.window().request_redraw();
+        }
+        self.prewarm_tick();
+    }
+
+    /// Pushes whatever changed since the last call to the UI.
+    pub fn sync(&mut self, ui: &MainWindow, out: &OutputWindow) {
+        if self.mapping_window_open && (self.images_dirty || self.mapping_view_dirty) {
+            self.sync_mapping_window(self.images_dirty);
+        }
+        if self.images_dirty {
+            self.images_dirty = false;
+            let output = Image::try_from(self.engine.output().texture.clone()).expect("output texture is importable");
+            let preview =
+                Image::try_from(self.engine.preview().texture.clone()).expect("preview texture is importable");
+            let mapped = self
+                .mapping
+                .setup
+                .as_ref()
+                .and(self.engine.screen(0))
+                .map(|t| Image::try_from(t.texture.clone()).expect("screen texture is importable"));
+            out.set_frame(mapped.unwrap_or_else(|| output.clone()));
+            ui.set_output_image(output);
+            ui.set_preview_image(preview);
+            ui.set_comp_info(format!("{}×{}", self.comp.width, self.comp.height).into());
+        }
+        self.poll_media_thumbs();
+        if self.layout == SYNTHESIS_LAYOUT {
+            self.sync_overlay_transport(ui);
+        }
+        if self.grid_dirty || self.media_dirty {
+            let browser = std::mem::take(&mut self.media_dirty);
+            self.sync_media(ui, browser);
+        }
+        if self.grid_dirty {
+            self.grid_dirty = false;
+            self.sync_grid(ui);
+            self.sync_synth_layers(ui);
+            self.sync_synth_groups(ui);
+        } else {
+            self.sync_live_opacity();
+        }
+        if self.props_dirty {
+            self.props_dirty = false;
+            self.sync_props(ui);
+        }
+        if self.midi_dirty {
+            self.midi_dirty = false;
+            self.sync_midi(ui);
+        }
+        if self.browser_dirty {
+            self.browser_dirty = false;
+            self.sync_browser(ui);
+        }
+        if self.library_dirty {
+            self.library_dirty = false;
+            self.sync_library(ui);
+        }
+        if self.discover_dirty {
+            self.discover_dirty = false;
+            self.sync_discover(ui);
+        }
+        if std::mem::take(&mut self.lib_focus_search) {
+            let lib = ui.global::<Lib>();
+            lib.set_focus_search(lib.get_focus_search() + 1);
+        }
+        if let Some(tab) = self.lib_tab_request.take() {
+            ui.set_browser_tab(tab);
+        }
+        if std::mem::take(&mut self.lib_release_keys) {
+            ui.invoke_focus_keys();
+        }
+        self.sync_params(ui);
+        if let Some(tab) = self.tab_request.take() {
+            ui.set_props_tab(tab);
+        }
+        if let Err(e) = self.player.autosave() {
+            self.set_status(format!("Could not save the playlist: {e}"));
+        }
+        if self.player.refresh_folder() {
+            self.player.dirty = true;
+        }
+        if std::mem::take(&mut self.player.dirty) {
+            self.sync_player(ui);
+        }
+        self.sync_player_time(ui);
+        let selected = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.name.clone());
+        ui.set_selected_clip_name(selected.unwrap_or_default().into());
+    }
+
+    /// Beat position for this frame, from Ableton Link when it's on.
+    fn update_tempo(&mut self, now: f64, dt: f64) -> f64 {
+        // Syntetika Engine: Nota is the master clock while its bridge is streaming.
+        //
+        // Nota's position reads in steps (its implied BPM between packets varies wildly), so a
+        // hard sync each frame would make every beat-synced visual jitter. Instead this is a
+        // small PLL: advance a local beat at Nota's tempo and pull it toward the measured beat
+        // by a few percent per frame; only a jump bigger than a sixteenth snaps (seek/loop).
+        if let Some(sample) = self.nota.as_ref().and_then(|b| b.clock()) {
+            let age = sample.at.elapsed().as_secs_f64();
+            if age < 0.5 {
+                let target = sample.beat + openvj_core::beats(age, sample.bpm);
+                let predicted = if sample.playing {
+                    self.nota_beat.unwrap_or(target) + openvj_core::beats(dt, sample.bpm)
+                } else {
+                    target
+                };
+                let error = target - predicted;
+                let beat = if !sample.playing || error.abs() > 0.25 {
+                    target
+                } else {
+                    predicted + error * 0.08
+                };
+                self.nota_slew_max = self.nota_slew_max.max((beat - predicted).abs());
+                self.nota_beat = Some(beat);
+                let shown = (sample.bpm * 10.0).round() / 10.0;
+                if shown != self.comp.bpm {
+                    self.comp.bpm = shown;
+                    self.grid_dirty = true;
+                }
+                self.beat_clock.sync(now, beat, sample.bpm);
+                return beat;
+            }
+            // No packets for half a second: free-run at the last tempo.
+            self.nota_beat = None;
+        }
+        let clock = if self.clock_on { self.midi_clock.bpm().zip(self.midi_clock.beat_at(now)) } else { None };
+        if let Some((bpm, beat)) = clock {
+            let shown = (bpm * 10.0).round() / 10.0;
+            if shown != self.comp.bpm {
+                self.comp.bpm = shown;
+                self.grid_dirty = true;
+            }
+            self.beat_clock.sync(now, beat, bpm);
+        } else if self.link.is_enabled() {
+            let (beat, bpm) = self.link.capture();
+            let shown = (bpm * 10.0).round() / 10.0;
+            if shown != self.comp.bpm {
+                self.comp.bpm = shown;
+                self.grid_dirty = true;
+            }
+            self.beat_clock.sync(now, beat, bpm);
+        } else {
+            self.beat_clock.set_bpm(now, self.comp.bpm);
+        }
+        self.beat_clock.beat_at(now)
+    }
+
+    /// Band levels for this frame (zero while the input is off).
+    /// Analyses this frame's audio (scaled by the composition's Reactivity) and hands the
+    /// spectrum to the engine.
+    fn update_audio(&mut self, beat: f64, dt: f32) -> ModInputs {
+        let Some(input) = &self.audio else {
+            self.engine.set_spectrum(None);
+            return ModInputs { beat, ..Default::default() };
+        };
+        let samples = input.drain_into(&mut self.analyzer);
+        self.engine.set_audio_samples(&samples, input.sample_rate(), self.comp.reactivity);
+        self.analyzer.gain = self.comp.reactivity;
+        let l = self.analyzer.analyze(dt);
+        self.engine.set_spectrum(Some(self.analyzer.spectrum()));
+        let signal = |f: openvj_audio::Features| AudioSignal {
+            level: f.level,
+            hits: f.hits,
+            presence: f.presence,
+            clock: f.clock,
+        };
+        ModInputs {
+            beat,
+            bands: l.bands,
+            band_signals: l.band_features.map(signal),
+            overall: signal(l.overall),
+            launch_beat: 0.0,
+        }
+    }
+
+    /// Parameter rows change every frame while modulated, so they are rebuilt each sync
+    /// (only rows that changed are pushed to the UI).
+    fn sync_params(&mut self, ui: &MainWindow) {
+        let inputs = self.inputs;
+        let levels = ui.global::<AudioLevels>();
+        for (i, v) in inputs.bands.iter().enumerate() {
+            if self.bands_model.row_data(i) != Some(*v) {
+                self.bands_model.set_row_data(i, *v);
+            }
+        }
+        levels.set_level(self.analyzer.levels().level);
+
+        let comp = &self.comp;
+        let xf = comp.crossfader;
+        update_model(
+            &self.comp_params,
+            vec![
+                param_row(0, "Master", &Param { value: comp.master, modulation: comp.master_mod }, 1.0, &inputs, pct),
+                param_row(
+                    CROSSFADER_INDEX,
+                    "Crossfader",
+                    &Param { value: xf.position, modulation: xf.position_mod },
+                    0.5,
+                    &inputs,
+                    crossfade_label,
+                ),
+            ],
+        );
+        ui.set_live_master(comp.master_value(&inputs));
+        ui.set_crossfader(xf.position);
+        ui.set_live_crossfader(xf.position_value(&inputs));
+        let reactivity = comp.reactivity;
+        let release = self.analyzer.release;
+        update_model(
+            &self.audio_params,
+            vec![
+                fixed_row(
+                    1,
+                    "Reactivity",
+                    reactivity / MAX_REACTIVITY,
+                    1.0 / MAX_REACTIVITY,
+                    format!("{:.0}%", reactivity * 100.0),
+                ),
+                fixed_row(
+                    2,
+                    "Release",
+                    release / MAX_RELEASE,
+                    openvj_audio::DEFAULT_RELEASE / MAX_RELEASE,
+                    format!("{:.0} ms", release * 1000.0),
+                ),
+            ],
+        );
+        self.comp_fx.update(&comp.effects, &inputs);
+
+        match comp.layers.get(self.selected_layer) {
+            Some(layer) => {
+                let opacity = Param { value: layer.opacity, modulation: layer.opacity_mod };
+                let t = layer.transition_secs;
+                update_model(
+                    &self.layer_params,
+                    vec![
+                        param_row(0, "Opacity", &opacity, 1.0, &inputs, pct),
+                        fixed_row(1, "Transition", t / MAX_TRANSITION, 0.0, format!("{t:.1} s")),
+                    ],
+                );
+                self.layer_fx.update(&layer.effects, &inputs);
+                self.layer_tf.update(std::slice::from_ref(&layer.transform), &inputs);
+                self.layer_look.update(std::slice::from_ref(&layer.look), &inputs);
+                match &layer.overlay {
+                    Some(o) => {
+                        let speed = o.clip.speed;
+                        let flag = |i, name: &str, on: bool| fixed_row(i, name, on as u8 as f32, 0.0, String::new());
+                        update_model(
+                            &self.overlay_params,
+                            vec![
+                                param_row(OV_AMOUNT, "Amount", &o.amount, 1.0, &inputs, pct),
+                                fixed_row(
+                                    OV_SPEED,
+                                    "Speed",
+                                    speed / MAX_SPEED,
+                                    1.0 / MAX_SPEED,
+                                    format!("{speed:.2}×"),
+                                ),
+                                param_row(
+                                    OV_SCALE,
+                                    "Scale",
+                                    &o.scale,
+                                    1.0 / openvj_core::OVERLAY_MAX_SCALE,
+                                    &inputs,
+                                    |v| format!("{:.0}%", v * openvj_core::OVERLAY_MAX_SCALE * 100.0),
+                                ),
+                                fixed_row(OV_FILL, "Fit or Fill", o.fill as u8 as f32, 1.0, String::new()),
+                                flag(OV_FLIP_V, "Vert Flip", o.flip_v),
+                                flag(OV_FLIP_H, "Hor Flip", o.flip_h),
+                            ],
+                        );
+                        self.overlay_look.update(std::slice::from_ref(&o.look), &inputs);
+                    }
+                    None => {
+                        update_model(&self.overlay_params, Vec::new());
+                        self.overlay_look.update(&[], &inputs);
+                    }
+                }
+            }
+            None => {
+                update_model(&self.layer_params, Vec::new());
+                self.layer_fx.update(&[], &inputs);
+                self.layer_tf.update(&[], &inputs);
+                self.layer_look.update(&[], &inputs);
+                update_model(&self.overlay_params, Vec::new());
+                self.overlay_look.update(&[], &inputs);
+            }
+        }
+
+        match comp.layers.get(self.selected_layer).and_then(|l| comp.group_of(l)) {
+            Some(group) => {
+                let opacity = Param { value: group.opacity, modulation: group.opacity_mod };
+                update_model(&self.group_params, vec![param_row(0, "Opacity", &opacity, 1.0, &inputs, pct)]);
+                self.group_fx.update(&group.effects, &inputs);
+            }
+            None => {
+                update_model(&self.group_params, Vec::new());
+                self.group_fx.update(&[], &inputs);
+            }
+        }
+
+        let mut rows = Vec::new();
+        let clip = self.selected.and_then(|(l, c)| comp.clip(l, c));
+        let mark = |e: usize, i: usize| {
+            clip.and_then(|c| clip_param_ref(c, scope::CLIP_FX, e as i32, i).and_then(|r| c.macro_of(&r)))
+                .map_or(-1, |m| m as i32)
+        };
+        self.clip_fx.update_marked(clip.map_or(&[][..], |c| &c.effects), &inputs, &mark);
+        self.clip_tf.update(clip.map_or(&[][..], |c| std::slice::from_ref(&c.transform)), &inputs);
+        if let Some(clip) = clip {
+            if let ClipSource::Generator { kind } = clip.source {
+                for (i, spec) in kind.params().iter().enumerate() {
+                    let p = Param { value: clip.params[i], modulation: clip.mods[i] };
+                    rows.push(param_row(i, spec.name, &p, spec.default, &inputs, pct));
+                }
+            }
+            if let ClipSource::Milkdrop { .. } = clip.source {
+                let i = openvj_core::MILK_SENSITIVITY;
+                let p = Param { value: clip.params[i], modulation: clip.mods[i] };
+                rows.push(param_row(i, "Sensitivity", &p, 0.5, &inputs, |v| format!("{:.0}%", v * 200.0)));
+            }
+            if let ClipSource::Isf { generator } = &clip.source
+                && let Some(ty) = generator.ty()
+            {
+                for (i, ch) in ty.channels.iter().enumerate() {
+                    let input = ty.input(ch);
+                    let p = generator.param(&ch.key).copied().unwrap_or(Param::new(ch.default));
+                    let display = |v| input.display(ch.component, v);
+                    rows.push(param_row(ISF_PARAM_BASE + i, &ch.label, &p, ch.default, &inputs, display));
+                }
+            }
+            if !clip.source.is_live() {
+                match clip.sync_beats {
+                    Some(beats) => {
+                        let i = beat_choice(beats);
+                        let last = (SYNC_BEATS.len() - 1) as f32;
+                        let label = if beats == 1.0 { "1 beat".to_owned() } else { format!("{beats} beats") };
+                        let reset = beat_choice(4.0) as f32 / last;
+                        rows.push(fixed_row(BEATS_INDEX, "Beats", i as f32 / last, reset, label));
+                    }
+                    None => {
+                        let speed = clip.speed;
+                        let label = format!("{speed:.2}×");
+                        rows.push(fixed_row(SPEED_INDEX, "Speed", speed / MAX_SPEED, 1.0 / MAX_SPEED, label));
+                    }
+                }
+            }
+            if !matches!(clip.source, ClipSource::Video { .. }) && !clip.source.is_live() {
+                let d = clip.duration.unwrap_or(DEFAULT_CLIP_SECS);
+                let reset = DEFAULT_CLIP_SECS / MAX_DURATION;
+                rows.push(fixed_row(DURATION_INDEX, "Duration", d / MAX_DURATION, reset, format!("{d:.1} s")));
+            }
+        }
+        for row in rows.iter_mut().filter(|r| r.modulatable) {
+            row.restartable = true;
+        }
+        if let Some(clip) = clip {
+            for row in &mut rows {
+                row.macro_index = clip_param_ref(clip, scope::CLIP, 0, row.index as usize)
+                    .and_then(|r| clip.macro_of(&r))
+                    .map_or(-1, |m| m as i32);
+            }
+        }
+        update_model(&self.clip_params, rows);
+        let macros: Vec<ParamData> = match clip {
+            Some(clip) => (0..MACRO_COUNT)
+                .map(|i| {
+                    let m = clip.macros.get(i).cloned().unwrap_or_default();
+                    let name = if m.name.is_empty() { format!("Macro {}", i + 1) } else { m.name.clone() };
+                    param_row(i, &name, &m.value, 0.0, &inputs, pct)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        update_model(&self.macro_params, macros);
+        let counts: Vec<i32> = (0..MACRO_COUNT)
+            .map(|i| clip.and_then(|c| c.macros.get(i)).map_or(0, |m| m.targets.len() as i32))
+            .collect();
+        update_model(&self.macro_counts, counts);
+    }
+
+    /// Modulated layer opacity moves every frame. Only those fields are pushed, so the
+    /// grid isn't rebuilt at frame rate (that rebuild formats every cell's strings).
+    fn sync_live_opacity(&self) {
+        let n = self.comp.layers.len();
+        if self.layers_model.row_count() != n {
+            return;
+        }
+        for (li, layer) in self.comp.layers.iter().enumerate() {
+            if !layer.opacity_mod.is_active() {
+                continue;
+            }
+            let row = n - 1 - li;
+            let live = layer.opacity_value(&self.inputs);
+            if let Some(mut data) = self.layers_model.row_data(row)
+                && data.live_opacity != live
+            {
+                data.live_opacity = live;
+                self.layers_model.set_row_data(row, data);
+            }
+        }
+    }
+
+    fn sync_grid(&mut self, ui: &MainWindow) {
+        // Generator and live input thumbnails are GPU textures; create their images once.
+        let gen_ids: Vec<ClipId> =
+            self.comp.all_clips().filter(|c| c.source.is_generator() || c.source.is_live()).map(|c| c.id).collect();
+        for id in gen_ids {
+            if !self.thumbs.contains_key(&id) {
+                let texture = self.engine.thumb(id).texture.clone();
+                self.thumbs.insert(id, Image::try_from(texture).expect("thumb texture is importable"));
+            }
+        }
+
+        let columns: Vec<ColumnData> = self
+            .comp
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| ColumnData { name: c.name.as_str().into(), active: self.last_column == Some(i) })
+            .collect();
+        update_model(&self.columns_model, columns);
+        let decks: Vec<DeckData> = self
+            .comp
+            .decks
+            .iter()
+            .enumerate()
+            .map(|(i, d)| DeckData { name: d.name.as_str().into(), active: i == self.comp.current_deck })
+            .collect();
+        update_model(&self.decks_model, decks);
+
+        let n = self.comp.layers.len();
+        self.cell_models.resize_with(n, || Rc::new(VecModel::default()));
+        let mut rows = Vec::with_capacity(n);
+        // Display the top of the mix first.
+        for (row, li) in (0..n).rev().enumerate() {
+            let layer = &self.comp.layers[li];
+            let playing = layer.playing_column();
+            let cells: Vec<CellData> = layer
+                .clips
+                .iter()
+                .enumerate()
+                .map(|(ci, clip)| {
+                    let selected = self.selected == Some((li, ci));
+                    let Some(clip) = clip else { return CellData { selected, ..Default::default() } };
+                    let thumb = self.thumbs.get(&clip.id).cloned();
+                    let media = self.media.get(&clip.id);
+                    CellData {
+                        name: clip.name.as_str().into(),
+                        kind: clip.source.kind_label().into(),
+                        has_thumb: thumb.is_some(),
+                        thumb: thumb.unwrap_or_default(),
+                        filled: true,
+                        playing: playing == Some(ci),
+                        selected,
+                        loading: matches!(media, Some(Media::Loading)),
+                        error: matches!(media, Some(Media::Failed(_))),
+                        modulated: clip.mods.iter().any(Modulation::is_active),
+                    }
+                })
+                .collect();
+            update_model(&self.cell_models[row], cells);
+            rows.push(LayerData {
+                index: li as i32,
+                name: layer.name.as_str().into(),
+                opacity: layer.opacity,
+                live_opacity: layer.opacity_value(&self.inputs),
+                blend: layer.blend.shader_id() as i32,
+                bypass: layer.bypass,
+                solo: layer.solo,
+                selected: li == self.selected_layer,
+                live: layer.active.is_some(),
+                fx_count: layer.effects.len() as i32,
+                side: match layer.crossfade {
+                    CrossfadeSide::None => SharedString::default(),
+                    side => side.label().into(),
+                },
+                group: self.comp.group_of(layer).map(|g| g.name.as_str().into()).unwrap_or_default(),
+                cells: ModelRc::from(self.cell_models[row].clone()),
+            });
+        }
+        update_model(&self.layers_model, rows);
+
+        if let Some(layer) = self.comp.layers.get(self.selected_layer) {
+            ui.set_layer_blend_value(layer.blend.shader_id() as i32);
+        }
+        ui.set_master(self.comp.master);
+        ui.set_bpm(self.comp.bpm);
+        ui.set_comp_name(self.comp_title().into());
+        ui.set_output_open(self.output_open);
+        ui.set_mapping_status(self.mapping.status().into());
+        ui.set_mapped(self.mapping.setup.is_some());
+        ui.set_test_card(self.mapping.test_card);
+        ui.set_missing_media(self.missing_media() as i32);
+    }
+
+    fn comp_title(&self) -> String {
+        let file = self.file.as_ref().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().into_owned());
+        file.unwrap_or_else(|| self.comp.name.clone())
+    }
+
+    fn sync_props(&mut self, ui: &MainWindow) {
+        let clip = self.selected.and_then(|(l, c)| self.comp.clip(l, c));
+        ui.set_clip_valid(clip.is_some());
+        let source_url = match clip.map(|c| &c.source) {
+            Some(ClipSource::Isf { generator }) => generator.ty().map(|t| t.def.source.clone()).unwrap_or_default(),
+            _ => String::new(),
+        };
+        ui.set_clip_source_url(if source_url.starts_with("https://") { source_url.into() } else { "".into() });
+        if let Some(clip) = clip {
+            let kind = clip.source.kind_label();
+            let (l, c) = self.selected.unwrap();
+            let kind_name = match kind {
+                "gen" => "generator",
+                other => other,
+            };
+            ui.set_clip_title(format!("{} · {kind_name} · layer {} / column {}", clip.name, l + 1, c + 1).into());
+            ui.set_clip_kind(kind.into());
+            ui.set_clip_name(clip.name.as_str().into());
+            let detail = match (&clip.source, self.media.get(&clip.id)) {
+                (ClipSource::Generator { kind }, _) => kind.description().to_owned(),
+                (ClipSource::Isf { generator }, _) => match generator.ty() {
+                    Some(t) => t.def.description.clone(),
+                    None => format!("⚠ ISF generator \"{}\" isn't installed", generator.kind),
+                },
+                (ClipSource::Milkdrop { preset }, _) => {
+                    match (milk_library().resolve(preset), self.engine.milk_error(clip.id)) {
+                        (None, _) => format!("⚠ MilkDrop preset \"{preset}\" isn't in the MilkDrop folder"),
+                        (Some(_), Some(e)) => format!("⚠ {e}"),
+                        (Some(p), None) if p.category.is_empty() => "MilkDrop preset".to_owned(),
+                        (Some(p), None) => format!("MilkDrop preset · {}", p.category),
+                    }
+                }
+                (_, Some(Media::Ready { detail, .. })) => detail.clone(),
+                (_, Some(Media::Failed(e))) => format!("⚠ {e}"),
+                (source, None) if source.is_live() => "connects when the clip plays or is selected".to_owned(),
+                (source, Some(Media::Loading)) if source.is_live() => "connecting…".to_owned(),
+                (_, _) => "loading…".to_owned(),
+            };
+            ui.set_clip_detail(detail.into());
+            let path = match &clip.source {
+                ClipSource::Camera { device, .. } => format!("Camera: {device}"),
+                ClipSource::Syphon { .. } => format!("Syphon: {}", clip.source.live_name().unwrap_or_default()),
+                source => source.media_path().map(|p| browser::short_path(p, 44)).unwrap_or_default(),
+            };
+            ui.set_clip_path(path.into());
+            ui.set_preview_label(clip.name.as_str().into());
+            ui.set_clip_play_mode(clip.play_mode.index() as i32);
+            ui.set_clip_autopilot(clip.autopilot.index() as i32);
+            let inputs = RouterInput::all(&self.comp);
+            let current = match clip.source {
+                ClipSource::Router { input } => inputs.iter().position(|i| *i == input).map_or(0, |i| i as i32),
+                _ => -1,
+            };
+            let labels: Vec<SharedString> = inputs.iter().map(|i| i.label(&self.comp).into()).collect();
+            ui.set_router_inputs(ModelRc::new(VecModel::from(labels)));
+            ui.set_clip_router_input(current);
+            ui.set_clip_trigger(clip.trigger.index() as i32);
+            ui.set_clip_synced(clip.sync_beats.is_some());
+        } else {
+            ui.set_preview_label(SharedString::default());
+        }
+
+        let layer = self.comp.layers.get(self.selected_layer);
+        ui.set_layer_valid(layer.is_some());
+        if let Some(layer) = layer {
+            ui.set_layer_title(format!("{} of {}", self.selected_layer + 1, self.comp.layers.len()).into());
+            ui.set_layer_name(layer.name.as_str().into());
+            ui.set_layer_blend_value(layer.blend.shader_id() as i32);
+            ui.set_layer_side(match layer.crossfade {
+                CrossfadeSide::None => SharedString::default(),
+                side => side.label().into(),
+            });
+        }
+        let mut choices: Vec<SharedString> = vec!["No group".into()];
+        choices.extend(self.comp.groups.iter().map(|g| SharedString::from(g.name.as_str())));
+        choices.push("New group".into());
+        ui.set_group_choices(ModelRc::new(VecModel::from(choices)));
+        let group = layer.and_then(|l| l.group);
+        ui.set_layer_group_choice(group.map_or(0, |g| g as i32 + 1));
+        let group = group.and_then(|g| self.comp.groups.get(g).map(|x| (g, x)));
+        ui.set_group_valid(group.is_some());
+        if let Some((g, group)) = group {
+            ui.set_group_name(group.name.as_str().into());
+            let n = self.comp.group_members(g).len();
+            ui.set_group_title(format!("{n} layer{}", plural(n)).into());
+            ui.set_group_blend_value(group.blend.shader_id() as i32);
+            ui.set_group_bypass(group.bypass);
+            ui.set_group_solo(group.solo);
+        } else if ui.get_props_tab() == 3 {
+            ui.set_props_tab(1);
+        }
+        ui.set_crossfade_curve(self.comp.crossfader.curve.index() as i32);
+
+        ui.set_audio_on(self.audio.is_some());
+        let devices: Vec<SharedString> = self.audio_devices.iter().map(|d| d.as_str().into()).collect();
+        ui.set_audio_devices(ModelRc::new(VecModel::from(devices)));
+        ui.set_audio_device_index(self.audio_device as i32);
+        ui.set_audio_status(self.audio_status.as_str().into());
+
+        let status = if self.escape_at.is_some() {
+            "Press Esc again to clear all layers".to_owned()
+        } else {
+            self.status.clone()
+        };
+        ui.set_status(status.into());
+    }
+
+    fn sync_browser(&mut self, ui: &MainWindow) {
+        let inputs: Vec<BrowserItem> = self
+            .input_sources()
+            .into_iter()
+            .map(|source| BrowserItem {
+                name: source.live_name().unwrap_or_else(|| source.default_name()).into(),
+                detail: match source {
+                    ClipSource::Camera { .. } => "camera",
+                    ClipSource::Router { .. } => "another layer, group or the composition",
+                    _ => "Syphon",
+                }
+                .into(),
+                kind: source.kind_label().into(),
+                picked: self.picked == Some(Picked::Input(source)),
+            })
+            .collect();
+        update_model(&self.inputs_model, inputs);
+        let hint = match (live::CAMERA_SUPPORTED, live::SYPHON_SUPPORTED) {
+            (true, true) => {
+                "No cameras or Syphon servers found. Start the app that sends Syphon (e.g. Synesthesia) or plug in a camera, then Refresh."
+            }
+            (true, false) => "No cameras found. Plug one in and press Refresh. (Syphon is macOS only.)",
+            (false, true) => "No Syphon servers found. This build has no camera support.",
+            (false, false) => "This build has no camera or Syphon support.",
+        };
+        ui.set_inputs_hint(hint.into());
+        let files: Vec<BrowserItem> = self
+            .browser_entries
+            .iter()
+            .map(|e| BrowserItem {
+                name: e.name.as_str().into(),
+                detail: e.detail.as_str().into(),
+                kind: e.kind().into(),
+                picked: self.picked == Some(Picked::File(e.path.clone())),
+            })
+            .collect();
+        update_model(&self.files_model, files);
+        ui.set_browser_path(browser::short_path(&self.browser_dir, 56).into());
+    }
+
+    // ---------------------------------------------------------------- grid actions
+
+    pub fn cell_clicked(&mut self, layer: usize, col: usize) {
+        self.stop_audition();
+        let now = self.now();
+        // Piano clips launched on the press already (cell_pressed).
+        if self.comp.clip(layer, col).is_some_and(|c| c.trigger != TriggerStyle::Piano) {
+            self.stop_automix_for_mixer();
+            self.comp.trigger(layer, col, now);
+            self.last_column = None;
+        }
+        self.selected = Some((layer, col));
+        self.selected_layer = layer;
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    /// The mouse went down on a slot: a Piano clip starts playing now, until it's let go.
+    pub fn cell_pressed(&mut self, layer: usize, col: usize) {
+        if self.comp.clip(layer, col).is_none_or(|c| c.trigger != TriggerStyle::Piano) {
+            return;
+        }
+        self.stop_automix_for_mixer();
+        let now = self.now();
+        self.comp.trigger(layer, col, now);
+        self.last_column = None;
+        self.grid_dirty = true;
+    }
+
+    /// The mouse was let go after pressing a slot: a Piano clip stops.
+    pub fn cell_released(&mut self, layer: usize, col: usize) {
+        let now = self.now();
+        self.comp.release(layer, col, now);
+        self.grid_dirty = true;
+    }
+
+    pub fn cell_right_clicked(&mut self, layer: usize, col: usize) {
+        self.stop_audition();
+        self.tab_request = Some(2);
+        self.selected = Some((layer, col));
+        self.selected_layer = layer;
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    pub fn column_clicked(&mut self, col: usize) {
+        self.stop_automix_for_mixer();
+        let now = self.now();
+        self.comp.trigger_column(col, now);
+        self.last_column = Some(col);
+        self.grid_dirty = true;
+    }
+
+    pub fn clear_all(&mut self) {
+        let now = self.now();
+        self.comp.clear_all(now);
+        self.last_column = None;
+        self.grid_dirty = true;
+    }
+
+    /// `-1` means the selected layer.
+    fn layer_index(&self, layer: i32) -> Option<usize> {
+        let i = if layer < 0 { self.selected_layer } else { layer as usize };
+        (i < self.comp.layers.len()).then_some(i)
+    }
+
+    pub fn select_layer(&mut self, layer: i32) {
+        if let Some(l) = self.layer_index(layer) {
+            self.selected_layer = l;
+            self.tab_request = Some(1);
+            self.grid_dirty = true;
+            self.props_dirty = true;
+        }
+    }
+
+    pub fn layer_opacity(&mut self, layer: i32, v: f32) {
+        if let Some(l) = self.layer_index(layer) {
+            self.comp.layers[l].opacity = v.clamp(0.0, 1.0);
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn layer_blend(&mut self, layer: i32, mode: i32) {
+        if let Some(l) = self.layer_index(layer) {
+            self.comp.layers[l].blend = BlendMode::from_index(mode.max(0) as usize);
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn layer_bypass(&mut self, layer: i32) {
+        if let Some(l) = self.layer_index(layer) {
+            self.comp.layers[l].bypass ^= true;
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn layer_solo(&mut self, layer: i32) {
+        if let Some(l) = self.layer_index(layer) {
+            self.comp.layers[l].solo ^= true;
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn layer_clear(&mut self, layer: i32) {
+        if let Some(l) = self.layer_index(layer) {
+            let now = self.now();
+            self.comp.clear_layer(l, now);
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn layer_renamed(&mut self, name: &str) {
+        if let Some(l) = self.layer_index(-1) {
+            self.comp.layers[l].name = name.trim().to_owned();
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn add_layer(&mut self) {
+        self.selected_layer = self.comp.add_layer();
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    pub fn remove_layer(&mut self) {
+        if self.comp.layers.len() <= 1 {
+            self.set_status("A composition needs at least one layer");
+            return;
+        }
+        self.comp.remove_layer(self.selected_layer);
+        self.selected_layer = self.selected_layer.min(self.comp.layers.len() - 1);
+        self.selected = None;
+        self.collect_garbage();
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    pub fn add_column(&mut self) {
+        self.comp.add_column();
+        self.grid_dirty = true;
+    }
+
+    // ---------------------------------------------------------------- decks
+
+    /// Shows another deck. What's playing keeps playing.
+    pub fn deck_clicked(&mut self, index: usize) {
+        if index == self.comp.current_deck {
+            return;
+        }
+        self.comp.switch_deck(index);
+        self.after_deck_change();
+    }
+
+    pub fn deck_add(&mut self) {
+        self.comp.add_deck();
+        self.after_deck_change();
+    }
+
+    pub fn deck_renamed(&mut self, index: usize, name: &str) {
+        self.comp.rename_deck(index, name);
+        self.grid_dirty = true;
+    }
+
+    pub fn deck_remove(&mut self, index: usize) {
+        self.comp.remove_deck(index);
+        self.after_deck_change();
+        self.collect_garbage();
+    }
+
+    fn after_deck_change(&mut self) {
+        self.selected = None;
+        self.last_column = None;
+        self.grid_dirty = true;
+        self.props_dirty = true;
+        self.set_status(format!("Deck: {}", self.comp.deck_name()));
+    }
+
+    // ---------------------------------------------------------------- clip properties
+
+    pub fn clip_renamed(&mut self, name: &str) {
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
+            clip.name = name.trim().to_owned();
+            self.grid_dirty = true;
+            self.props_dirty = true;
+        }
+    }
+
+    pub fn clip_restart(&mut self) {
+        if let Some((l, c)) = self.selected {
+            let now = self.now();
+            self.comp.trigger(l, c, now);
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn clip_play_mode(&mut self, mode: usize) {
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
+            clip.play_mode = PlayMode::from_index(mode);
+            self.props_dirty = true;
+        }
+    }
+
+    pub fn clip_autopilot(&mut self, mode: usize) {
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
+            clip.autopilot = Autopilot::from_index(mode);
+            self.props_dirty = true;
+        }
+    }
+
+    /// Points the selected Layer Router clip at another input (in [`RouterInput::all`] order).
+    pub fn clip_router_input(&mut self, index: usize) {
+        let Some(input) = RouterInput::all(&self.comp).get(index).copied() else { return };
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c))
+            && let ClipSource::Router { input: current } = &mut clip.source
+        {
+            *current = input;
+            self.props_dirty = true;
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn clip_trigger(&mut self, style: usize) {
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
+            clip.trigger = TriggerStyle::from_index(style);
+            self.props_dirty = true;
+        }
+    }
+
+    /// Switches the selected clip between its own speed and beat sync.
+    pub fn clip_synced(&mut self, synced: bool) {
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
+            clip.sync_beats = synced.then_some(clip.sync_beats.unwrap_or(4.0));
+            self.props_dirty = true;
+        }
+    }
+
+    pub fn layer_side(&mut self, i: usize) {
+        if let Some(l) = self.layer_index(-1) {
+            self.comp.layers[l].crossfade = CrossfadeSide::ALL.get(i).copied().unwrap_or_default();
+            self.grid_dirty = true;
+            self.props_dirty = true;
+        }
+    }
+
+    /// Picks the selected layer's group: 0 none, then the groups, then a new group.
+    pub fn layer_group(&mut self, choice: usize) {
+        let Some(l) = self.layer_index(-1) else { return };
+        let groups = self.comp.groups.len();
+        let selected_clip = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id);
+        let name = self.comp.layers[l].name.clone();
+        let msg = match choice {
+            0 => {
+                self.selected_layer = self.comp.set_layer_group(l, None);
+                format!("{name} left its group")
+            }
+            g if g <= groups => {
+                self.selected_layer = self.comp.set_layer_group(l, Some(g - 1));
+                format!("{name} joined {}", self.comp.groups[g - 1].name)
+            }
+            _ => {
+                self.comp.set_layer_group(l, None);
+                let g = self.comp.group_layers(&[l]);
+                self.tab_request = Some(3);
+                format!("Made {} for {name}", g.map(|g| self.comp.groups[g].name.clone()).unwrap_or_default())
+            }
+        };
+        // Joining a group can move the layer; keep the same clip selected.
+        self.selected = selected_clip.and_then(|id| self.comp.find_clip(id));
+        self.set_status(msg);
+        self.grid_dirty = true;
+    }
+
+    fn selected_group_mut(&mut self) -> Option<&mut openvj_core::LayerGroup> {
+        let g = self.comp.layers.get(self.selected_layer)?.group?;
+        self.comp.groups.get_mut(g)
+    }
+
+    pub fn group_renamed(&mut self, name: &str) {
+        if let Some(g) = self.selected_group_mut()
+            && !name.trim().is_empty()
+        {
+            g.name = name.trim().to_owned();
+        }
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    pub fn group_blend(&mut self, mode: i32) {
+        if let Some(g) = self.selected_group_mut() {
+            g.blend = BlendMode::from_index(mode.max(0) as usize);
+        }
+        self.props_dirty = true;
+    }
+
+    pub fn group_bypass(&mut self) {
+        if let Some(g) = self.selected_group_mut() {
+            g.bypass ^= true;
+        }
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    pub fn group_solo(&mut self) {
+        if let Some(g) = self.selected_group_mut() {
+            g.solo ^= true;
+        }
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    /// Dissolves the selected layer's group; its layers stay where they are.
+    pub fn group_ungroup(&mut self) {
+        let Some(g) = self.comp.layers.get(self.selected_layer).and_then(|l| l.group) else { return };
+        let name = self.comp.groups[g].name.clone();
+        for l in self.comp.group_members(g) {
+            self.comp.layers[l].group = None;
+        }
+        self.comp.set_layer_group(self.selected_layer, None); // Drops the now-empty group.
+        self.set_status(format!("Ungrouped {name}"));
+        self.grid_dirty = true;
+    }
+
+    pub fn crossfade_curve(&mut self, i: usize) {
+        self.comp.crossfader.curve = CrossfadeCurve::from_index(i);
+        self.props_dirty = true;
+    }
+
+    pub fn clip_remove(&mut self) {
+        if let Some((l, c)) = self.selected
+            && self.comp.remove_clip(l, c).is_some()
+        {
+            self.collect_garbage();
+            self.grid_dirty = true;
+            self.props_dirty = true;
+        }
+    }
+
+    // ---------------------------------------------------------------- browser
+
+    /// The Layer Router, cameras, then Syphon servers, as clip sources for the browser.
+    fn input_sources(&self) -> Vec<ClipSource> {
+        let router = std::iter::once(ClipSource::Router { input: RouterInput::Composition });
+        let cameras =
+            self.cameras.iter().map(|c| ClipSource::Camera { device: c.name.clone(), device_id: c.id.clone() });
+        let servers =
+            self.syphon_servers.iter().map(|s| ClipSource::Syphon { app: s.app.clone(), server: s.server.clone() });
+        router.chain(cameras).chain(servers).collect()
+    }
+
+    pub fn input_clicked(&mut self, i: usize) {
+        if let Some(source) = self.input_sources().into_iter().nth(i) {
+            let name = source.live_name().unwrap_or_else(|| source.default_name());
+            self.set_status(format!("Drag {name} onto a slot to place it"));
+            self.pick(Picked::Input(source));
+        }
+    }
+
+    pub fn input_double_clicked(&mut self, i: usize) {
+        if let Some(source) = self.input_sources().into_iter().nth(i) {
+            self.place_in_selection(source);
+        }
+    }
+
+    pub fn refresh_inputs(&mut self) {
+        self.cameras = live::list_cameras();
+        self.syphon_servers = live::list_syphon_servers();
+        self.syphon_polled = self.now();
+        self.live_retry.clear();
+        self.browser_dirty = true;
+        let (c, s) = (self.cameras.len(), self.syphon_servers.len());
+        self.set_status(format!("Found {c} camera{} and {s} Syphon server{}", plural(c), plural(s)));
+    }
+
+    fn pick(&mut self, picked: Picked) {
+        self.picked = Some(picked);
+        self.browser_dirty = true;
+    }
+
+    /// Places straight into the selected slot, or the first empty slot of the selected layer.
+    fn place_in_selection(&mut self, source: ClipSource) {
+        let target = self.selected.or_else(|| {
+            let layer = self.comp.layers.get(self.selected_layer)?;
+            layer.clips.iter().position(Option::is_none).map(|c| (self.selected_layer, c))
+        });
+        match target {
+            Some((l, c)) => self.place(l, c, source),
+            None => self.set_status("Select a slot first (right-click a cell)"),
+        }
+    }
+
+    pub fn file_clicked(&mut self, i: usize) {
+        let Some(entry) = self.browser_entries.get(i).cloned() else { return };
+        if entry.source.is_none() {
+            self.set_browser_dir(entry.path);
+        } else {
+            self.pick(Picked::File(entry.path));
+        }
+    }
+
+    pub fn file_double_clicked(&mut self, i: usize) {
+        if let Some(source) = self.browser_entries.get(i).and_then(|e| e.source.clone()) {
+            self.place_in_selection(source);
+        }
+    }
+
+    pub fn browser_up(&mut self) {
+        if let Some(parent) = self.browser_dir.parent().map(Path::to_owned) {
+            self.set_browser_dir(parent);
+        }
+    }
+
+    pub fn set_browser_dir(&mut self, dir: PathBuf) {
+        self.browser_entries = browser::list(&dir);
+        self.browser_dir = dir;
+        self.browser_dirty = true;
+    }
+
+    // ---------------------------------------------------------------- transport & keys
+
+    pub fn tap(&mut self) {
+        let now = self.now();
+        if self.clock_on {
+            return;
+        }
+        if let Some(bpm) = self.tap.tap(now) {
+            self.set_bpm((bpm * 10.0).round() / 10.0);
+        }
+    }
+
+    pub fn nudge_bpm(&mut self, delta: f32) {
+        if self.clock_on {
+            return;
+        }
+        self.set_bpm((self.comp.bpm + delta).clamp(20.0, 300.0).round());
+    }
+
+    fn set_bpm(&mut self, bpm: f32) {
+        self.comp.bpm = bpm;
+        if self.link.is_enabled() {
+            self.link.set_tempo(bpm);
+        }
+        self.grid_dirty = true;
+    }
+
+    pub fn syphon_toggle(&mut self) {
+        let on = !self.syphon_out.is_enabled();
+        self.syphon_out.set_enabled(on);
+        self.set_status(if on {
+            "Syphon output on: other apps can pick openVJ as a source"
+        } else {
+            "Syphon output off"
+        });
+    }
+
+    pub fn link_toggle(&mut self) {
+        if !Link::AVAILABLE {
+            self.set_status("This build has no Ableton Link support (built without the `link` feature)");
+            return;
+        }
+        let on = !self.link.is_enabled();
+        if on && self.clock_on {
+            self.set_clock(false);
+            crate::prefs::set_flag("midi_clock", false);
+        }
+        self.link.set_enabled(on, self.comp.bpm);
+        self.set_status(if on {
+            "Ableton Link on: tempo and beat follow the Link session"
+        } else {
+            "Ableton Link off"
+        });
+    }
+
+    // ---------------------------------------------------------------- audio
+
+    pub fn audio_toggle(&mut self) {
+        if self.audio.take().is_some() {
+            self.analyzer.reset();
+            self.audio_status = "Off".into();
+            self.set_status("Audio input off");
+        } else {
+            self.open_audio();
+        }
+    }
+
+    /// Picks an entry of the device list (0 = the system default).
+    pub fn audio_pick(&mut self, i: usize) {
+        self.audio_device = i.min(self.audio_devices.len().saturating_sub(1));
+        self.audio = None;
+        self.open_audio();
+    }
+
+    fn open_audio(&mut self) {
+        // Enumerate lazily: some hosts are slow to list devices or ask for permission.
+        if self.audio_devices.len() == 1 {
+            self.audio_devices.extend(openvj_audio::input_device_names());
+        }
+        let name = (self.audio_device > 0).then(|| self.audio_devices.get(self.audio_device).cloned()).flatten();
+        match AudioInput::open(name.as_deref()) {
+            Ok(input) => {
+                let release = self.analyzer.release;
+                self.analyzer = Analyzer::new(input.sample_rate());
+                self.analyzer.release = release;
+                self.audio_status = format!("{} · {} Hz", input.name(), input.sample_rate());
+                self.set_status(format!("Audio input: {}", input.name()));
+                self.audio = Some(input);
+            }
+            Err(e) => {
+                self.audio_status = format!("⚠ {e:#}");
+                self.set_status(format!("Could not open audio input: {e:#}"));
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- MIDI
+
+    pub fn midi_toggle(&mut self) {
+        if self.midi.take().is_some() {
+            self.midi_status = "Off".into();
+            self.midi_dirty = true;
+        } else {
+            self.open_midi();
+        }
+    }
+
+    /// (Re)connects to every MIDI input.
+    fn open_midi(&mut self) {
+        self.midi = None;
+        let (ports, errors) = MidiPorts::open_all();
+        for e in &errors {
+            eprintln!("midi: {e}");
+        }
+        self.midi_port_list = ports.names().map(str::to_owned).collect();
+        self.midi_status = if ports.is_empty() {
+            "On · no MIDI inputs found yet".into()
+        } else {
+            format!("On · {}", self.midi_port_list.join(", "))
+        };
+        self.midi_scan_at = self.now();
+        self.midi = Some(ports);
+        self.midi_dirty = true;
+    }
+
+    /// Applies incoming MIDI to the composition. Runs once per frame.
+    fn update_midi(&mut self, now: f64) {
+        if self.midi.is_none() {
+            return;
+        }
+        // Pick up controllers plugged in (or out) while running.
+        if now - self.midi_scan_at > 2.0 {
+            self.midi_scan_at = now;
+            match midi::port_names() {
+                Some(names) if names != self.midi_port_list => self.open_midi(),
+                Some(_) => {}
+                // No MIDI service at all: stop asking until MIDI is switched off and on.
+                None => self.midi_scan_at = f64::INFINITY,
+            }
+        }
+        let Some(ports) = &self.midi else { return };
+        let connected: Vec<String> = ports.names().map(str::to_owned).collect();
+        let messages: Vec<(String, Instant, Vec<u8>)> =
+            ports.drain().into_iter().map(|(p, at, m)| (p.to_owned(), at, m)).collect();
+        for (port, at, bytes) in messages {
+            if let Some(clock) = ClockMessage::parse(&bytes) {
+                self.clock_message(&port, clock, at.saturating_duration_since(self.clock).as_secs_f64());
+                continue;
+            }
+            let Some(msg) = MidiMessage::parse(&bytes) else { continue };
+            if self.learn_on {
+                self.learn_message(msg, &port);
+                continue;
+            }
+            let actions = self.comp.midi.handle_from(msg, &port, &connected);
+            self.midi_last =
+                format!("{port}: {}{}", message_label(msg), if actions.is_empty() { " · not mapped" } else { "" });
+            self.midi_dirty = true;
+            for action in actions {
+                match apply_midi(&mut self.comp, action, now, self.selected_layer) {
+                    MidiEffect::Changed => {
+                        if matches!(action.target, openvj_core::MidiTarget::Tempo) {
+                            self.set_bpm(self.comp.bpm);
+                        }
+                        self.grid_dirty = true;
+                    }
+                    MidiEffect::SelectLayer(l) => self.select_layer(l as i32),
+                    MidiEffect::TapTempo => self.tap(),
+                    MidiEffect::OpenDeck(d) => self.deck_clicked(d),
+                    MidiEffect::StepColumn { forward } => {
+                        let n = self.comp.columns.len();
+                        let col = match self.last_column {
+                            Some(c) if forward => (c + 1) % n,
+                            Some(c) => (c + n - 1) % n,
+                            None => 0,
+                        };
+                        self.column_clicked(col);
+                    }
+                    MidiEffect::ResyncTempo => {
+                        if !self.link.is_enabled() && !self.clock_on {
+                            self.beat_clock.sync(now, 0.0, self.comp.bpm);
+                        }
+                    }
+                    MidiEffect::Ignored => {}
+                }
+            }
+        }
+    }
+
+    /// Feeds a MIDI clock message that arrived at `t` (app seconds) from `port`.
+    fn clock_message(&mut self, port: &str, msg: ClockMessage, t: f64) {
+        if !self.clock_on {
+            return;
+        }
+        // Follow one input at a time: the first that sends clock, until it goes quiet.
+        let quiet = self.midi_clock.is_waiting(t) && msg == ClockMessage::Pulse;
+        match &self.clock_port {
+            Some(p) if p != port && !quiet => return,
+            Some(p) if p == port => {}
+            _ => {
+                self.clock_port = Some(port.to_owned());
+                self.clock_dirty = true;
+                self.set_status(format!("MIDI clock from {port}"));
+            }
+        }
+        self.midi_clock.message(msg, t);
+    }
+
+    pub fn clock_toggle(&mut self) {
+        self.set_clock(!self.clock_on);
+        crate::prefs::set_flag("midi_clock", self.clock_on);
+    }
+
+    fn set_clock(&mut self, on: bool) {
+        self.clock_on = on;
+        self.midi_clock = MidiClock::new();
+        self.clock_port = None;
+        self.clock_dirty = true;
+        if !on {
+            self.set_status("MIDI clock off");
+            return;
+        }
+        if self.link.is_enabled() {
+            self.link.set_enabled(false, self.comp.bpm);
+        }
+        if self.midi.is_none() {
+            self.open_midi();
+        }
+        self.set_status("MIDI clock on: tempo and beat follow the first MIDI input that sends clock");
+    }
+
+    /// Loads a Resolume MIDI shortcut preset into the composition, replacing its mappings.
+    pub fn midi_import(&mut self, path: &Path) {
+        match openvj_resolume::import_midi_preset_file(path, &self.comp, self.resolume_refs.as_ref()) {
+            Ok(imported) => {
+                for note in &imported.notes {
+                    eprintln!("midi import: {note}");
+                }
+                let msg = format!("Imported MIDI preset {}: {}", imported.map.name, imported.summary());
+                self.comp.midi = imported.map;
+                self.set_status(msg);
+                self.midi_dirty = true;
+            }
+            Err(e) => self.set_status(format!("Could not import {}: {e}", path.display())),
+        }
+    }
+
+    pub fn midi_clear(&mut self) {
+        self.comp.midi = Default::default();
+        self.midi_dirty = true;
+        self.set_status("MIDI mappings cleared");
+    }
+
+    // ---------------------------------------------------------------- MIDI map mode
+
+    pub fn learn_toggle(&mut self) {
+        self.learn_on = !self.learn_on;
+        self.learn_id.clear();
+        self.midi_dirty = true;
+        if self.learn_on && self.midi.is_none() {
+            self.open_midi();
+        }
+        self.set_status(if self.learn_on {
+            "MIDI map mode: click a control, then move a knob or press a pad. Esc or Cmd/Ctrl+M to finish."
+        } else {
+            "MIDI map mode off"
+        });
+    }
+
+    pub fn learn_pick(&mut self, id: &str) {
+        if self.learn_target(id).is_some() {
+            self.learn_id = id.to_owned();
+            self.midi_dirty = true;
+        }
+    }
+
+    /// While map mode is on, a pressed pad or moved knob maps itself to the picked control.
+    fn learn_message(&mut self, msg: MidiMessage, port: &str) {
+        self.midi_last = format!("{port}: {}", message_label(msg));
+        self.midi_dirty = true;
+        let learnable = matches!(msg, MidiMessage::ControlChange { .. }) || msg.is_press();
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        if !learnable {
+            return;
+        }
+        let control = msg.control();
+        if self.comp.midi.mapping_for(target).is_some_and(|m| m.control == control) {
+            return;
+        }
+        self.comp.midi.learn(control, Some(port), target);
+        self.learn_rev += 1;
+        let what = describe_target(&self.comp, target);
+        self.set_status(format!("Mapped {} to {what}", control.label()));
+    }
+
+    pub fn learn_forget(&mut self) {
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        if self.comp.midi.forget(target) {
+            self.learn_rev += 1;
+            self.midi_dirty = true;
+            self.set_status(format!("Removed the mapping of {}", describe_target(&self.comp, target)));
+        }
+    }
+
+    pub fn learn_behaviour(&mut self, i: i32) {
+        const ALL: [MidiBehaviour; 4] =
+            [MidiBehaviour::Fader, MidiBehaviour::Toggle, MidiBehaviour::Press, MidiBehaviour::Hold];
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        let (Some(m), Some(&b)) = (self.comp.midi.mapping_for_mut(target), ALL.get(i.max(0) as usize)) else { return };
+        m.behaviour = b;
+        self.midi_dirty = true;
+    }
+
+    pub fn learn_range(&mut self, min: f32, max: f32) {
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        let Some(m) = self.comp.midi.mapping_for_mut(target) else { return };
+        (m.min, m.max) = (min.clamp(0.0, 1.0), max.clamp(0.0, 1.0));
+        self.midi_dirty = true;
+    }
+
+    /// The target of a map-mode control id (see `MidiSpot` in ui/controls.slint). Grid and
+    /// toolbar controls use [`MidiTarget::ui_id`]s; parameter rows use `p:scope:owner:index`
+    /// (and `p:scope:effect:bypass`), resolved here against the selected layer.
+    pub fn learn_target(&self, id: &str) -> Option<MidiTarget> {
+        let n_layers = self.comp.layers.len();
+        let Some(rest) = id.strip_prefix("p:") else {
+            let t = MidiTarget::from_ui_id(id)?;
+            let ok = match t {
+                MidiTarget::LayerOpacity { layer: LayerRef::Index(l) }
+                | MidiTarget::LayerBypass { layer: LayerRef::Index(l) }
+                | MidiTarget::LayerSolo { layer: LayerRef::Index(l) }
+                | MidiTarget::LayerClear { layer: LayerRef::Index(l) } => l < n_layers,
+                MidiTarget::ClipLaunch { layer, column } => self.comp.clip(layer, column).is_some(),
+                MidiTarget::ColumnLaunch { column } => column < self.comp.columns.len(),
+                _ => true,
+            };
+            return ok.then_some(t);
+        };
+        let parts: Vec<&str> = rest.split(':').collect();
+        let [scope, owner, index] = parts[..] else { return None };
+        let (scope, owner): (i32, i32) = (scope.parse().ok()?, owner.parse().ok()?);
+        let layer = (self.selected_layer < n_layers).then_some(self.selected_layer);
+        let effect = |chain: Option<usize>| -> Option<EffectRef> {
+            let fx = match chain {
+                None => &self.comp.effects,
+                Some(l) => &self.comp.layers[l].effects,
+            };
+            let i = usize::try_from(owner).ok().filter(|&i| i < fx.len())?;
+            Some(EffectRef { layer: chain.map(LayerRef::Index), index: i })
+        };
+        let effect_target = |e: EffectRef| -> Option<MidiTarget> {
+            Some(match index {
+                "bypass" => MidiTarget::EffectBypass { effect: e },
+                i => match i.parse::<usize>().ok()? {
+                    MIX_INDEX => MidiTarget::EffectMix { effect: e },
+                    p => MidiTarget::EffectParam { effect: e, param: p },
+                },
+            })
+        };
+        match (scope, index) {
+            (scope::COMP, "0") => Some(MidiTarget::Master),
+            (scope::COMP, i) if i == CROSSFADER_INDEX.to_string() => Some(MidiTarget::Crossfader),
+            (scope::LAYER, "0") => Some(MidiTarget::LayerOpacity { layer: LayerRef::Index(layer?) }),
+            (scope::COMP_FX, _) => effect_target(effect(None)?),
+            (scope::LAYER_FX, _) => effect_target(effect(Some(layer?))?),
+            _ => None,
+        }
+    }
+
+    /// The note or CC mapped to a map-mode control, shortened for its tag ("CC 21").
+    pub fn learn_label(&self, id: &str) -> String {
+        let Some(m) = self.learn_target(id).and_then(|t| self.comp.midi.mapping_for(t)) else {
+            return String::new();
+        };
+        let c = m.control;
+        let kind = match c.kind {
+            openvj_core::MidiKind::Note => "N",
+            openvj_core::MidiKind::Cc => "CC",
+        };
+        if c.channel == 0 { format!("{kind} {}", c.number) } else { format!("{kind} {}/{}", c.number, c.channel + 1) }
+    }
+
+    fn sync_learn(&self, ui: &MainWindow) {
+        let g = ui.global::<MidiLearn>();
+        g.set_on(self.learn_on);
+        g.set_selected(self.learn_id.as_str().into());
+        g.set_revision(self.learn_rev);
+        let target = self.learn_target(&self.learn_id);
+        let mapping = target.and_then(|t| self.comp.midi.mapping_for(t));
+        let detail = match (target, mapping) {
+            (None, _) => "Click a control, then move a knob or press a pad on your controller.".to_owned(),
+            (Some(t), None) => format!("{}: move a knob or press a pad to map it.", describe_target(&self.comp, t)),
+            (Some(t), Some(m)) => {
+                let from = m.device.as_deref().map(|d| format!(" from {d}")).unwrap_or_default();
+                format!(
+                    "{} ← {}{from}. Move another control to re-map it.",
+                    describe_target(&self.comp, t),
+                    m.control.label()
+                )
+            }
+        };
+        g.set_detail(detail.into());
+        g.set_has_mapping(mapping.is_some());
+        let shaped = target.is_some_and(|t| t.is_ranged() || t.is_switch());
+        g.set_has_behaviour(mapping.is_some() && shaped);
+        g.set_ranged(target.is_some_and(|t| t.is_ranged()));
+        if let Some(m) = mapping {
+            g.set_behaviour(m.behaviour as i32);
+            g.set_min(m.min);
+            g.set_max(m.max);
+        }
+    }
+
+    fn sync_midi(&mut self, ui: &MainWindow) {
+        self.sync_learn(ui);
+        ui.set_midi_on(self.midi.is_some());
+        ui.set_midi_status(self.midi_status.as_str().into());
+        let map = &self.comp.midi;
+        let preset = if map.is_empty() {
+            "No mappings. Import a Resolume MIDI preset to control openVJ from a controller.".to_owned()
+        } else {
+            let name = if map.name.is_empty() { "Mappings" } else { map.name.as_str() };
+            let n = map.mappings.len();
+            let device = map.device.as_deref().map(|d| format!(" for {d}")).unwrap_or_default();
+            format!("{name}: {n} mapping{}{device}", plural(n))
+        };
+        ui.set_midi_preset(preset.into());
+        ui.set_midi_has_mappings(!map.is_empty());
+        ui.set_midi_last(self.midi_last.as_str().into());
+    }
+
+    // ---------------------------------------------------------------- parameters & effects
+
+    fn effects_mut(&mut self, scope: i32) -> Option<&mut Vec<Effect>> {
+        match scope {
+            scope::COMP_FX => Some(&mut self.comp.effects),
+            scope::LAYER_FX => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.effects),
+            scope::GROUP_FX => self.selected_group_mut().map(|g| &mut g.effects),
+            scope::CLIP_FX => self.selected_clip_mut().map(|c| &mut c.effects),
+            _ => None,
+        }
+    }
+
+    fn selected_clip_mut(&mut self) -> Option<&mut Clip> {
+        let (l, c) = self.selected?;
+        self.comp.clip_mut(l, c)
+    }
+
+    /// Effect `owner` of a chain, or the selected layer's or clip's Transform.
+    fn effect_mut(&mut self, scope: i32, owner: i32) -> Option<&mut Effect> {
+        match scope {
+            scope::LAYER_TF => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.transform),
+            scope::LAYER_LOOK => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.look),
+            scope::OVERLAY_LOOK => self.comp.layers.get_mut(self.selected_layer)?.overlay.as_mut().map(|o| &mut o.look),
+            scope::CLIP_TF => self.selected_clip_mut().map(|c| &mut c.transform),
+            _ => self.effects_mut(scope)?.get_mut(usize::try_from(owner).ok()?),
+        }
+    }
+
+    fn effect_param_mut(&mut self, scope: i32, owner: i32, index: usize) -> Option<&mut Param> {
+        let fx = self.effect_mut(scope, owner)?;
+        if index == MIX_INDEX {
+            return Some(&mut fx.mix);
+        }
+        let key = fx.ty()?.channels.get(index)?.key.clone();
+        fx.param_mut(&key)
+    }
+
+    /// Channel `index` of the selected clip's ISF generator.
+    fn isf_param_mut(&mut self, index: usize) -> Option<&mut Param> {
+        let (l, c) = self.selected?;
+        let ClipSource::Isf { generator } = &mut self.comp.clip_mut(l, c)?.source else { return None };
+        let key = generator.ty()?.channels.get(index)?.key.clone();
+        generator.param_mut(&key)
+    }
+
+    fn modulation_mut(&mut self, scope: i32, owner: i32, index: usize) -> Option<&mut Modulation> {
+        match (scope, index) {
+            (scope::COMP, 0) => Some(&mut self.comp.master_mod),
+            (scope::COMP, CROSSFADER_INDEX) => Some(&mut self.comp.crossfader.position_mod),
+            (scope::GROUP, 0) => self.selected_group_mut().map(|g| &mut g.opacity_mod),
+            (s, _) if scope::is_effect(s) => self.effect_param_mut(scope, owner, index).map(|p| &mut p.modulation),
+            (scope::LAYER, 0) => {
+                let l = self.layer_index(owner)?;
+                Some(&mut self.comp.layers[l].opacity_mod)
+            }
+            (scope::CLIP_MACRO, i) => self.selected_clip_mut()?.macro_mut(i).map(|m| &mut m.value.modulation),
+            (scope::OVERLAY, OV_AMOUNT | OV_SCALE) => {
+                let o = self.comp.layers.get_mut(self.selected_layer)?.overlay.as_mut()?;
+                Some(if index == OV_AMOUNT { &mut o.amount.modulation } else { &mut o.scale.modulation })
+            }
+            (scope::CLIP, i) if i >= ISF_PARAM_BASE => {
+                self.isf_param_mut(i - ISF_PARAM_BASE).map(|p| &mut p.modulation)
+            }
+            (scope::CLIP, i) => {
+                let (l, c) = self.selected?;
+                self.comp.clip_mut(l, c)?.mods.get_mut(i)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn param_set(&mut self, scope: i32, owner: i32, index: usize, v: f32) {
+        let v = v.clamp(0.0, 1.0);
+        match scope {
+            scope::COMP => match index {
+                0 => self.comp.master = v,
+                1 => self.comp.reactivity = (v * MAX_REACTIVITY * 100.0).round() / 100.0,
+                2 => self.analyzer.release = (v * MAX_RELEASE).max(0.01),
+                CROSSFADER_INDEX => self.comp.crossfader.position = v,
+                _ => {}
+            },
+            scope::GROUP => {
+                if let (0, Some(g)) = (index, self.selected_group_mut()) {
+                    g.opacity = v;
+                }
+            }
+            s if scope::is_effect(s) => {
+                if let Some(p) = self.effect_param_mut(scope, owner, index) {
+                    p.value = v;
+                }
+            }
+            scope::LAYER => {
+                let Some(l) = self.layer_index(owner) else { return };
+                let layer = &mut self.comp.layers[l];
+                match index {
+                    0 => layer.opacity = v,
+                    1 => layer.transition_secs = (v * MAX_TRANSITION * 10.0).round() / 10.0,
+                    _ => {}
+                }
+            }
+            scope::CLIP if index >= ISF_PARAM_BASE => {
+                if let Some(p) = self.isf_param_mut(index - ISF_PARAM_BASE) {
+                    p.value = v;
+                }
+            }
+            scope::CLIP_MACRO => {
+                if let Some(m) = self.selected_clip_mut().and_then(|c| c.macro_mut(index)) {
+                    m.value.value = v;
+                }
+            }
+            scope::OVERLAY => {
+                let Some(o) = self.comp.layers.get_mut(self.selected_layer).and_then(|l| l.overlay.as_mut()) else {
+                    return;
+                };
+                let on = v >= 0.5;
+                match index {
+                    OV_AMOUNT => o.amount.value = v,
+                    OV_SPEED => o.clip.speed = ((v * MAX_SPEED * 100.0).round() / 100.0).max(0.01),
+                    OV_SCALE => o.scale.value = v,
+                    OV_FILL => o.fill = on,
+                    OV_FLIP_V => o.flip_v = on,
+                    OV_FLIP_H => o.flip_h = on,
+                    _ => {}
+                }
+            }
+            scope::CLIP => {
+                let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) else { return };
+                if index == SPEED_INDEX {
+                    clip.speed = (v * MAX_SPEED * 100.0).round() / 100.0;
+                } else if index == BEATS_INDEX {
+                    let i = (v * (SYNC_BEATS.len() - 1) as f32).round() as usize;
+                    clip.sync_beats = Some(SYNC_BEATS[i.min(SYNC_BEATS.len() - 1)]);
+                } else if index == DURATION_INDEX {
+                    clip.duration = Some(((v * MAX_DURATION * 10.0).round() / 10.0).max(0.1));
+                } else if let Some(p) = clip.params.get_mut(index) {
+                    *p = v;
+                }
+            }
+            _ => {}
+        }
+        self.grid_dirty = true;
+    }
+
+    pub fn param_mod(&mut self, scope: i32, owner: i32, index: usize, source: usize) {
+        let seed = random_seed();
+        if let Some(m) = self.modulation_mut(scope, owner, index) {
+            m.source = ModSource::from_index(source);
+            if m.source.is_random() && m.seed == 0 {
+                m.seed = seed;
+            }
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn param_mod_amount(&mut self, scope: i32, owner: i32, index: usize, amount: f32) {
+        if let Some(m) = self.modulation_mut(scope, owner, index) {
+            m.amount = (amount.clamp(-1.0, 1.0) * 100.0).round() / 100.0;
+        }
+    }
+
+    /// Sets a tempo shape's rate (an index into [`MOD_RATES`]), phase (`TEMPO_PHASE` + quarters)
+    /// or restart on launch (`TEMPO_RESTART` + 0 or 1).
+    pub fn param_mod_tempo(&mut self, scope: i32, owner: i32, index: usize, code: i32) {
+        if let Some(m) = self.modulation_mut(scope, owner, index) {
+            match code {
+                TEMPO_RESTART.. => m.restart = code > TEMPO_RESTART,
+                TEMPO_PHASE.. => m.phase = (code - TEMPO_PHASE).clamp(0, 3) as f32 / 4.0,
+                _ => m.beats = MOD_RATES[(code.max(0) as usize).min(MOD_RATES.len() - 1)],
+            }
+        }
+    }
+
+    /// Refreshes the Effects tab when effect folders changed.
+    fn update_effect_library(&mut self, ui: &MainWindow) {
+        let lib = library();
+        if self.effects_generation == Some(lib.generation) {
+            return;
+        }
+        let first = self.effects_generation.is_none();
+        self.effects_generation = Some(lib.generation);
+        let folder = openvj_core::effect_folders::user_dir()
+            .map(|d| browser::short_path(&d, 60))
+            .unwrap_or_else(|| "the openVJ effects folder".into());
+        ui.set_effects_hint(format!("Drop ISF effects (.fs) into {folder}").into());
+        // Cards show effect names and parameters, which a reload can change.
+        self.props_dirty = true;
+        self.browser_dirty = true;
+        if !first && lib.generation > 1 {
+            let added = lib.all().iter().filter(|t| t.path.is_some()).count();
+            let broken = match lib.errors.len() {
+                0 => String::new(),
+                n => format!(", {n} with errors (see the Effects tab)"),
+            };
+            self.set_status(format!("Effects reloaded: {added} from folders{broken}"));
+        }
+    }
+
+    /// Keeps the library in step with the folders, renders missing thumbnails in the
+    /// background and saves `library.json` after changes.
+    fn update_library(&mut self, dt: f32) {
+        self.frame_time += (dt - self.frame_time) * 0.1;
+        if self.library.refresh() {
+            self.library.lib.set_in_use(openvj_core::library::composition_ids(&self.comp));
+            self.library_dirty = true;
+            // New items join Discover's queue: now if it is empty, else next time it opens.
+            if self.layout == DISCOVER_LAYOUT {
+                if self.discover.queue.current().is_none() {
+                    self.discover_rebuild();
+                }
+            } else {
+                self.discover.started = false;
+            }
+        }
+        let over_budget = self.frame_time > crate::library::THUMB_FRAME_BUDGET.as_secs_f32();
+        self.library.thumbs.pump(&mut self.engine, over_budget);
+        self.library.save_if_due();
+        for id in self.library.thumbs.take_updated() {
+            if let Some(path) = self.library.thumbs.path(&id) {
+                self.library.view.forget_image(&path);
+                if self.library.view.seen.contains(&id) || self.player_thumbs.contains(&id) {
+                    self.library.view.want_image(path);
+                }
+            }
+        }
+        let decoded = self.library.view.take_decoded();
+        if !decoded.is_empty() && !self.player_thumbs.is_empty() {
+            let thumbs = &self.library.thumbs;
+            if self.player_thumbs.iter().filter_map(|id| thumbs.path(id)).any(|p| decoded.contains(&p)) {
+                self.player.dirty = true;
+            }
+        }
+        if !decoded.is_empty() {
+            self.set_tile_images(&decoded);
+            self.discover_dirty |= self.layout == DISCOVER_LAYOUT;
+        }
+        if self.library.thumbs.pending() > 0 && self.frames == 0 {
+            self.library_dirty = true; // the count shows thumbnails left
+        }
+    }
+
+    /// Shows a finished Shadertoy import in the dialog and the status bar.
+    pub fn shadertoy_finished(&mut self, ui: &MainWindow) {
+        let Some(outcome) = crate::shadertoy_import::take_finished() else { return };
+        let g = ui.global::<Shadertoy>();
+        g.set_busy(false);
+        g.set_ok(outcome.ok);
+        g.set_message(outcome.message.as_str().into());
+        if outcome.ok {
+            g.set_link("".into());
+            g.set_code("".into());
+            self.set_status(outcome.message.lines().next().unwrap_or_default().to_owned());
+        }
+    }
+
+    /// Refreshes the MilkDrop tab when the MilkDrop folders changed.
+    fn update_milk_library(&mut self, ui: &MainWindow) {
+        let lib = milk_library();
+        if self.milk_generation == Some(lib.generation) {
+            return;
+        }
+        let first = self.milk_generation.is_none();
+        self.milk_generation = Some(lib.generation);
+        let folder = openvj_core::milkdrop::user_dir()
+            .map(|d| browser::short_path(&d, 60))
+            .unwrap_or_else(|| "the openVJ MilkDrop folder".into());
+        let hint = match lib.presets().len() {
+            0 => format!("Drop MilkDrop presets (.milk) into {folder}"),
+            n => format!("{n} presets in {folder}"),
+        };
+        ui.set_milk_hint(hint.into());
+        self.browser_dirty = true;
+        self.props_dirty = true;
+        if !first && lib.generation > 1 {
+            self.set_status(format!("MilkDrop presets reloaded: {}", lib.presets().len()));
+        }
+    }
+
+    /// Shows how the MilkDrop community pack download is going, in its dialog and, when it
+    /// ends, in the status bar.
+    fn update_milk_pack(&mut self, ui: &MainWindow) {
+        use crate::milk_pack::{Progress, describe, installed, progress};
+        let p = progress();
+        if p == self.milk_pack_shown {
+            return;
+        }
+        let g = ui.global::<MilkPack>();
+        g.set_busy(matches!(p, Progress::Running { .. }));
+        g.set_failed(matches!(p, Progress::Failed(_)));
+        g.set_message(describe(&p).into());
+        if matches!(p, Progress::Done { .. } | Progress::Failed(_)) {
+            g.set_installed(installed());
+            self.set_status(describe(&p));
+        }
+        self.milk_pack_shown = p;
+    }
+
+    /// Opens the openVJ MilkDrop folder in Finder (or the system file manager).
+    pub fn open_milk_folder(&mut self) {
+        if let Some(dir) = openvj_core::milkdrop::user_dir() {
+            self.open_folder(&dir);
+        }
+    }
+
+    /// Opens the openVJ effects folder in Finder (or the system file manager).
+    pub fn open_effects_folder(&mut self) {
+        if let Some(dir) = openvj_core::effect_folders::user_dir() {
+            self.open_folder(&dir);
+        }
+    }
+
+    fn open_folder(&mut self, dir: &Path) {
+        let _ = std::fs::create_dir_all(dir);
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else if cfg!(windows) {
+            "explorer"
+        } else {
+            "xdg-open"
+        };
+        if let Err(e) = std::process::Command::new(opener).arg(dir).spawn() {
+            self.set_status(format!("Couldn't open {}: {e}", dir.display()));
+        }
+    }
+
+    pub fn effect_add(&mut self, scope: i32, kind: &str) {
+        let lib = library();
+        let Some(kind) = lib.get(kind) else { return };
+        let layer = self.comp.layers.get(self.selected_layer);
+        let target = match scope {
+            scope::COMP_FX => "the composition".to_owned(),
+            scope::GROUP_FX => layer.and_then(|l| self.comp.group_of(l)).map(|g| g.name.clone()).unwrap_or_default(),
+            scope::CLIP_FX => {
+                self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.name.clone()).unwrap_or_default()
+            }
+            _ => layer.map(|l| l.name.clone()).unwrap_or_default(),
+        };
+        let Some(chain) = self.effects_mut(scope) else { return };
+        chain.push(Effect::new(kind.id()));
+        self.tab_request = Some(match scope {
+            scope::COMP_FX => 0,
+            scope::GROUP_FX => 3,
+            scope::CLIP_FX => 2,
+            _ => 1,
+        });
+        self.grid_dirty = true;
+        self.set_status(format!("Added {} to {target}", kind.name()));
+        let id = openvj_core::library::isf_id(kind.id());
+        self.library.lib.record_use(&id, unix_now());
+        self.library.changed();
+    }
+
+    // ---------------------------------------------------------------- library
+
+    /// A library item as a clip, with its saved settings for presets.
+    fn library_clip(&self, id: &str) -> Option<Clip> {
+        crate::library::item_clip(self.library.lib.get(id)?)
+    }
+
+    /// Puts a library item in a slot, with a preset's parameters, mappings and effects.
+    fn place_library(&mut self, layer: usize, col: usize, id: &str) {
+        let Some(clip) = self.library_clip(id) else { return };
+        self.place(layer, col, clip.source.clone());
+        if let Some(placed) = self.comp.clip_mut(layer, col) {
+            let id = placed.id;
+            *placed = Clip { id, ..clip };
+        }
+        self.library.lib.record_use(id, unix_now());
+        self.library.lib.set_in_use(openvj_core::library::composition_ids(&self.comp));
+        self.library.changed();
+        self.library_dirty = true;
+    }
+
+    /// Places a library item in the selected slot, or the first empty one of the layer.
+    fn place_library_in_selection(&mut self, id: &str) {
+        let target = self.selected.or_else(|| {
+            let layer = self.comp.layers.get(self.selected_layer)?;
+            layer.clips.iter().position(Option::is_none).map(|c| (self.selected_layer, c))
+        });
+        match target {
+            Some((l, c)) => {
+                self.place_library(l, c, id);
+                self.stop_audition();
+                if self.library.view.expanded {
+                    self.lib_toggle_expanded(); // back to the Mixer to see it in its slot
+                }
+            }
+            None => self.set_status("Select a slot first (right-click a cell)"),
+        }
+    }
+
+    fn stop_audition(&mut self) {
+        // Discover owns the Preview while it shows.
+        if self.layout == DISCOVER_LAYOUT {
+            return;
+        }
+        if self.engine.auditioning() {
+            self.engine.audition(None);
+            self.props_dirty = true; // the Preview label goes back to the selected clip
+        }
+    }
+
+    /// Shows a library item on the Preview only: a source on its own, an effect on the
+    /// selected clip (or on the test pattern when no clip is selected).
+    fn audition_library(&mut self, id: &str) {
+        let Some(item) = self.library.lib.get(id) else { return };
+        let clip = if item.kind == openvj_core::library::Kind::Effect {
+            let base = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).cloned();
+            let mut clip = base.or_else(crate::library::test_pattern_clip).expect("test pattern");
+            clip.effects.push(Effect::new(id.trim_start_matches("isf:")));
+            Some(clip)
+        } else {
+            self.library_clip(id)
+        };
+        if let Some(mut clip) = clip {
+            clip.id = openvj_render::AUDITION_CLIP;
+            self.engine.audition(Some(clip));
+        }
+    }
+
+    /// The id of grid tile `i`.
+    fn lib_id(&self, i: i32) -> Option<String> {
+        self.library.view.shown.get(usize::try_from(i).ok()?).cloned()
+    }
+
+    pub fn lib_tile_clicked(&mut self, i: i32) {
+        let Some(id) = self.lib_id(i) else { return };
+        self.audition_library(&id);
+        self.library.view.selected = Some(id);
+        self.library_dirty = true;
+    }
+
+    pub fn lib_tile_double_clicked(&mut self, i: i32) {
+        let Some(id) = self.lib_id(i) else { return };
+        self.library.view.selected = Some(id.clone());
+        self.lib_place();
+    }
+
+    /// Enter or the Put in button: the selected item into the selected slot, or an effect
+    /// onto the selected layer.
+    pub fn lib_place(&mut self) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        if self.library.view.effects {
+            self.lib_effect_add(scope::LAYER_FX);
+        } else {
+            self.place_library_in_selection(&id);
+        }
+        self.library_dirty = true;
+    }
+
+    /// Adds the selected effect: `to` is 0 clip, 1 layer, 2 group, 3 composition.
+    pub fn lib_effect_add(&mut self, to: i32) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        let scope = match to {
+            0 => scope::CLIP_FX,
+            2 => scope::GROUP_FX,
+            3 => scope::COMP_FX,
+            _ => scope::LAYER_FX,
+        };
+        self.stop_audition();
+        self.effect_add(scope, id.trim_start_matches("isf:"));
+    }
+
+    // ---------------------------------------------------------------- drag and drop
+
+    /// What a drag payload from ui/drag.slint ("lib:<tile>", "input:<i>", "file:<i>")
+    /// stands for.
+    fn dragged(&self, item: &str) -> Option<Dragged> {
+        if item == "finder" {
+            return Some(Dragged::Files(self.finder_files.clone()));
+        }
+        if let Some(slot) = item.strip_prefix("clip:") {
+            let (l, c) = slot.split_once(':')?;
+            let (l, c) = (l.parse().ok()?, c.parse().ok()?);
+            return self.comp.clip(l, c).is_some().then_some(Dragged::Clip(l, c));
+        }
+        let (kind, i) = item.split_once(':')?;
+        let i: usize = i.parse().ok()?;
+        match kind {
+            "lib" => {
+                let id = self.library.view.shown.get(i)?.clone();
+                let effect = self.library.lib.get(&id)?.kind == openvj_core::library::Kind::Effect;
+                Some(if effect { Dragged::Effect(id) } else { Dragged::Library(id) })
+            }
+            "input" => self.input_sources().into_iter().nth(i).map(Dragged::Source),
+            "file" => self.browser_entries.get(i).and_then(|e| e.source.clone()).map(Dragged::Source),
+            _ => None,
+        }
+    }
+
+    fn dragged_name(&self, what: &Dragged) -> String {
+        match what {
+            Dragged::Library(id) | Dragged::Effect(id) => {
+                self.library.lib.get(id).map_or_else(|| id.clone(), |i| i.name.clone())
+            }
+            Dragged::Source(source) => source.live_name().unwrap_or_else(|| source.default_name()),
+            Dragged::Clip(l, c) => self.comp.clip(*l, *c).map(|c| c.name.clone()).unwrap_or_default(),
+            Dragged::Files(files) => match files.as_slice() {
+                [one] => one.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+                many => format!("{} files", many.len()),
+            },
+        }
+    }
+
+    /// Files are being dragged in from the Finder.
+    pub fn set_finder_files(&mut self, files: Vec<PathBuf>) {
+        self.finder_files = files;
+    }
+
+    /// Puts a dragged source in a slot, adds a dragged effect to the clip there, or moves
+    /// (`copy`: copies) a dragged clip there, swapping with the clip already there.
+    pub fn drop_on_slot(&mut self, item: &str, layer: usize, col: usize, copy: bool) {
+        let Some(what) = self.dragged(item) else { return };
+        self.stop_audition();
+        let name = self.dragged_name(&what);
+        let where_ = self.slot_name(layer, col);
+        match what {
+            Dragged::Effect(id) => {
+                if self.comp.clip(layer, col).is_none() {
+                    return;
+                }
+                self.select_slot(layer, col);
+                self.effect_add(scope::CLIP_FX, id.trim_start_matches("isf:"));
+                return; // effect_add says where it went
+            }
+            Dragged::Library(id) => self.place_library(layer, col, &id),
+            Dragged::Source(source) => self.place(layer, col, source),
+            Dragged::Clip(l, c) => {
+                self.drop_clip((l, c), (layer, col), copy);
+                return;
+            }
+            Dragged::Files(files) => {
+                self.drop_files(&files, layer, col);
+                return;
+            }
+        }
+        self.browser_dirty = true;
+        self.set_status(format!("Placed {name} in {where_}"));
+    }
+
+    /// An effect dropped on a layer goes on the layer; a source goes into the layer's
+    /// first empty slot.
+    pub fn drop_on_layer(&mut self, item: &str, layer: usize, copy: bool) {
+        let Some(what) = self.dragged(item) else { return };
+        if let Dragged::Effect(id) = &what {
+            self.stop_audition();
+            self.selected_layer = layer;
+            self.grid_dirty = true;
+            self.props_dirty = true;
+            self.effect_add(scope::LAYER_FX, id.trim_start_matches("isf:"));
+            return;
+        }
+        let Some(l) = self.comp.layers.get(layer) else { return };
+        match l.clips.iter().position(Option::is_none) {
+            Some(col) => self.drop_on_slot(item, layer, col, copy),
+            None => {
+                let name = l.name.clone();
+                self.set_status(format!("{name} has no empty slot: drop on a slot to replace its clip"));
+            }
+        }
+    }
+
+    /// An effect dropped on an effect chain in the properties panel.
+    pub fn drop_on_chain(&mut self, item: &str, scope: i32) {
+        if let Some(Dragged::Effect(id)) = self.dragged(item) {
+            self.stop_audition();
+            self.effect_add(scope, id.trim_start_matches("isf:"));
+        }
+    }
+
+    /// Moves a clip to another slot (swapping with what's there), or copies it there.
+    fn drop_clip(&mut self, from: (usize, usize), to: (usize, usize), copy: bool) {
+        let Some(clip) = self.comp.clip(from.0, from.1).cloned() else { return };
+        if from == to {
+            return;
+        }
+        let where_ = self.slot_name(to.0, to.1);
+        if copy {
+            self.place(to.0, to.1, clip.source.clone());
+            if let Some(placed) = self.comp.clip_mut(to.0, to.1) {
+                let id = placed.id;
+                *placed = Clip { id, ..clip.clone() };
+            }
+            self.set_status(format!("Copied {} to {where_}", clip.name));
+        } else {
+            let swapped = self.comp.clip(to.0, to.1).map(|c| c.name.clone());
+            self.comp.move_clip(from, to);
+            self.select_slot(to.0, to.1);
+            self.set_status(match swapped {
+                Some(other) => format!("Swapped {} with {other}", clip.name),
+                None => format!("Moved {} to {where_}", clip.name),
+            });
+        }
+        self.library.lib.set_in_use(openvj_core::library::composition_ids(&self.comp));
+    }
+
+    /// Files from the Finder: the first in the slot, the rest in the columns after it.
+    fn drop_files(&mut self, files: &[PathBuf], layer: usize, col: usize) {
+        let sources: Vec<ClipSource> = files.iter().filter_map(|p| ClipSource::from_path(p)).collect();
+        if sources.is_empty() {
+            self.set_status("Those files aren't images or videos openVJ can play");
+            return;
+        }
+        let columns = self.comp.columns.len();
+        let mut placed = 0;
+        for (c, source) in (col..columns).zip(sources) {
+            self.place(layer, c, source);
+            placed += 1;
+        }
+        self.select_slot(layer, col);
+        let skipped = files.len() - placed;
+        let mut status = format!("Placed {placed} file{} starting at {}", plural(placed), self.slot_name(layer, col));
+        if skipped > 0 {
+            status += &format!(" ({skipped} skipped: not media, or no columns left)");
+        }
+        self.set_status(status);
+    }
+
+    fn select_slot(&mut self, layer: usize, col: usize) {
+        self.selected = Some((layer, col));
+        self.selected_layer = layer;
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    /// "Layer 2 · column 4", as the library's Put in button says it.
+    fn slot_name(&self, layer: usize, col: usize) -> String {
+        let name = self.comp.layers.get(layer).map(|l| l.name.clone()).unwrap_or_default();
+        format!("{name} · column {}", col + 1)
+    }
+
+    pub fn lib_chip_clicked(&mut self, i: i32) {
+        if let Some(v) = usize::try_from(i).ok().and_then(|i| self.library.view.chips.get(i)) {
+            self.library.view.filter.view = v.clone();
+            self.library_dirty = true;
+        }
+    }
+
+    /// The search box or a filter chip changed, or the browser switched tabs.
+    pub fn lib_filters_changed(&mut self, search: &str, kind: i32, intensity: i32, reactive: bool, tab: i32) {
+        let view = &mut self.library.view;
+        view.filter.search = search.to_owned();
+        view.kind = kind.max(0) as usize;
+        view.intensity = intensity.max(0) as usize;
+        view.filter.audio_reactive = reactive;
+        let effects = tab == 2;
+        if effects != view.effects {
+            view.effects = effects;
+            view.selected = None;
+            self.stop_audition();
+        }
+        self.browser_tab = tab;
+        self.library_dirty = true;
+    }
+
+    /// Thumbnails of tiles `first..last` are wanted (their row came into view).
+    pub fn lib_rows_shown(&mut self, first: i32, last: i32) {
+        let (first, last) = (first.max(0) as usize, last.max(0) as usize);
+        let ids: Vec<String> =
+            self.library.view.shown.iter().skip(first).take(last.saturating_sub(first)).cloned().collect();
+        for id in ids {
+            if let Some(path) = self.library.thumbs.path(&id) {
+                self.library.view.want_image(path);
+            }
+            self.library.view.seen.insert(id);
+        }
+    }
+
+    fn lib_edit(&mut self, f: impl FnOnce(&mut openvj_core::library::Library, &str)) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        f(&mut self.library.lib, &id);
+        self.library.changed();
+        self.library_dirty = true;
+    }
+
+    pub fn lib_set_intensity(&mut self, n: i32) {
+        self.lib_edit(|lib, id| {
+            let now = lib.entry(id).intensity;
+            let n = u8::try_from(n).ok();
+            // Pressing the same number again clears it.
+            lib.set_intensity(id, if now == n { None } else { n });
+        });
+    }
+
+    pub fn lib_toggle_favorite(&mut self) {
+        self.lib_edit(|lib, id| lib.toggle_favorite(id));
+    }
+
+    pub fn lib_set_kept(&mut self, kept: bool) {
+        use openvj_core::library::Status;
+        self.lib_edit(|lib, id| lib.set_status(id, if kept { Status::Kept } else { Status::NotReviewed }));
+    }
+
+    pub fn lib_set_unwanted(&mut self, unwanted: bool) {
+        use openvj_core::library::Status;
+        self.lib_edit(|lib, id| lib.set_status(id, if unwanted { Status::Unwanted } else { Status::Kept }));
+        if unwanted {
+            let name =
+                self.library.view.selected.as_deref().and_then(|id| self.library.lib.get(id)).map(|i| i.name.clone());
+            self.set_status(format!("{} moved to Unwanted (restore it from there)", name.unwrap_or_default()));
+        }
+    }
+
+    pub fn lib_use_preview_thumbnail(&mut self) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        self.library.thumbs.use_preview(&mut self.engine, &id);
+        self.set_status("Thumbnail set from the Preview");
+    }
+
+    /// Keys while the library grid has the keyboard. Returns whether it used the key.
+    pub fn lib_key(&mut self, text: &str) -> bool {
+        const LEFT: &str = "\u{f702}";
+        const RIGHT: &str = "\u{f703}";
+        match text {
+            "0" | "1" | "2" | "3" | "4" | "5" if self.library.view.selected.is_some() => {
+                self.lib_set_intensity(text.parse().unwrap_or(0));
+                true
+            }
+            "f" | "F" if self.library.view.selected.is_some() => {
+                self.lib_toggle_favorite();
+                true
+            }
+            "x" | "X" if self.library.view.selected.is_some() => {
+                let unwanted = self
+                    .library
+                    .view
+                    .selected
+                    .as_deref()
+                    .is_some_and(|id| self.library.lib.status(id) == openvj_core::library::Status::Unwanted);
+                self.lib_set_unwanted(!unwanted);
+                true
+            }
+            "k" | "K" if self.library.view.selected.is_some() => {
+                self.lib_set_kept(true);
+                true
+            }
+            "\n" | "\r" => {
+                self.lib_place();
+                true
+            }
+            LEFT | RIGHT => {
+                let shown = &self.library.view.shown;
+                let at = self.library.view.selected.as_ref().and_then(|id| shown.iter().position(|s| s == id));
+                let next = match (at, text == RIGHT) {
+                    (None, _) => 0,
+                    (Some(i), true) => (i + 1).min(shown.len().saturating_sub(1)),
+                    (Some(i), false) => i.saturating_sub(1),
+                };
+                if !shown.is_empty() {
+                    self.lib_tile_clicked(next as i32);
+                }
+                true
+            }
+            "\u{1b}" => {
+                if self.library.view.expanded {
+                    self.lib_toggle_expanded();
+                }
+                self.library_done();
+                true
+            }
+            _ => self.lib_type(text),
+        }
+    }
+
+    /// Esc in the grid: clears the selection and gives the keyboard back.
+    pub fn library_done(&mut self) {
+        self.library.view.selected = None;
+        self.stop_audition();
+        self.library_dirty = true;
+        self.lib_release_keys = true;
+    }
+
+    /// Typing a letter anywhere starts a search in the Sources or Effects tab.
+    fn lib_type(&mut self, text: &str) -> bool {
+        let mut chars = text.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else { return false };
+        let printable = !c.is_control() && !('\u{e000}'..='\u{f8ff}').contains(&c);
+        if !printable || !matches!(self.browser_tab, 0 | 2) || c == ' ' {
+            return false;
+        }
+        self.library.view.filter.search.push(c);
+        self.lib_focus_search = true;
+        self.library_dirty = true;
+        true
+    }
+
+    /// Tab or the Expand button: the library takes the clip grid's place, or gives it back.
+    pub fn lib_toggle_expanded(&mut self) {
+        let view = &mut self.library.view;
+        view.expanded = !view.expanded;
+        if !view.expanded {
+            // The small panel has no pack or category filter to show or clear.
+            view.filter.pack.clear();
+            view.filter.category.clear();
+        }
+        if view.expanded && self.browser_tab == 1 {
+            self.lib_tab_request = Some(0);
+        }
+        self.library_dirty = true;
+    }
+
+    /// A sidebar row: a view, a kind, Effects, a pack or a category (a second click on an
+    /// active pack or category clears it).
+    pub fn lib_side_clicked(&mut self, i: i32) {
+        use crate::library::SideAction;
+        let Some(action) = usize::try_from(i).ok().and_then(|i| self.library.view.side.get(i)).cloned() else {
+            return;
+        };
+        let view = &mut self.library.view;
+        match action {
+            SideAction::Heading => return,
+            SideAction::View(v) => view.filter.view = v,
+            SideAction::Kind(k) => {
+                view.kind = k;
+                if view.effects {
+                    self.lib_tab_request = Some(0);
+                }
+            }
+            SideAction::Effects => {
+                if !view.effects {
+                    self.lib_tab_request = Some(2);
+                }
+            }
+            SideAction::Pack(p) => {
+                view.filter.pack = if view.filter.pack == p { String::new() } else { p };
+            }
+            SideAction::Category(c) => {
+                view.filter.category = if view.filter.category.eq_ignore_ascii_case(&c) { String::new() } else { c };
+            }
+        }
+        self.library_dirty = true;
+    }
+
+    pub fn lib_add_tag(&mut self, tag: &str) {
+        let tag = tag.trim().to_owned();
+        if !tag.is_empty() {
+            self.lib_edit(|lib, id| lib.add_tag(id, &tag));
+        }
+    }
+
+    pub fn lib_remove_tag(&mut self, i: i32) {
+        self.lib_edit(|lib, id| {
+            if let Some(tag) = usize::try_from(i).ok().and_then(|i| lib.entry(id).tags.get(i).cloned()) {
+                lib.remove_tag(id, &tag);
+            }
+        });
+    }
+
+    pub fn lib_add_to_crate(&mut self, name: &str) {
+        let name = name.trim().to_owned();
+        if !name.is_empty() {
+            self.lib_edit(|lib, id| lib.add_to_crate(id, &name));
+        }
+    }
+
+    pub fn lib_remove_from_crate(&mut self, i: i32) {
+        self.lib_edit(|lib, id| {
+            if let Some(name) = usize::try_from(i).ok().and_then(|i| lib.entry(id).crates.get(i).cloned()) {
+                lib.remove_from_crate(id, &name);
+            }
+        });
+    }
+
+    /// Adds the selected source to the end of the Player's playlist.
+    pub fn lib_add_to_playlist(&mut self) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        let Some(clip) = self.library_clip(&id) else { return };
+        match self.player.add(&clip) {
+            Ok(()) => {
+                self.library.lib.record_use(&id, unix_now());
+                self.library.changed();
+                self.library_dirty = true;
+                self.set_status(format!("Added {} to the playlist", clip.name));
+            }
+            Err(e) => self.set_status(e),
+        }
+    }
+
+    /// Puts newly decoded thumbnails into the tiles that show them.
+    fn set_tile_images(&mut self, paths: &[PathBuf]) {
+        let view = &self.library.view;
+        let rows: Vec<(usize, PathBuf)> = view
+            .shown
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| Some((i, self.library.thumbs.path(id)?)))
+            .filter(|(_, p)| paths.contains(p))
+            .collect();
+        for (i, path) in rows {
+            let Some(img) = self.library.view.image(&path) else { continue };
+            if let Some(mut tile) = self.lib_tiles.row_data(i) {
+                tile.thumb = img;
+                tile.has_thumb = true;
+                self.lib_tiles.set_row_data(i, tile);
+            }
+        }
+    }
+
+    fn sync_library(&mut self, ui: &MainWindow) {
+        use crate::library::{chip_label, chip_views, kind_badge, thousands};
+        use openvj_core::library::{Filter, Status, View};
+        let g = ui.global::<Lib>();
+        let filter = self.library.view.query_filter();
+        let rows: Vec<(String, openvj_core::library::Item)> =
+            self.library.lib.query(&filter).into_iter().map(|i| (i.id.clone(), i.clone())).collect();
+        let selected = self.library.view.selected.clone();
+        let mut tiles = Vec::with_capacity(rows.len());
+        for (id, item) in &rows {
+            let entry = self.library.lib.entry(id);
+            let path = self.library.thumbs.path(id);
+            let thumb = path.as_deref().and_then(|p| self.library.view.image(p));
+            tiles.push(LibTile {
+                name: item.name.as_str().into(),
+                detail: if item.pack.is_empty() { item.kind.name().into() } else { item.pack.as_str().into() },
+                kind: kind_badge(item.kind).into(),
+                has_thumb: thumb.is_some(),
+                thumb: thumb.unwrap_or_default(),
+                intensity: entry.intensity.map_or(-1, i32::from),
+                favorite: entry.favorite,
+                reactive: item.audio_reactive,
+                selected: selected.as_deref() == Some(id.as_str()),
+                unwanted: self.library.lib.status(id) == Status::Unwanted,
+            });
+        }
+        update_model(&self.lib_tiles, tiles);
+        let shown: Vec<String> = rows.into_iter().map(|(id, _)| id).collect();
+        if shown != self.library.view.shown {
+            self.library.view.seen.clear();
+            self.library.view.shown = shown;
+        }
+
+        // Chips with their counts (of this tab's kinds, before search and filters).
+        let kinds = Filter { kinds: filter.kinds.clone(), ..Default::default() };
+        // Empty Favorites, Recent and Unwanted chips stay out of the way.
+        let current = self.library.view.filter.view.clone();
+        let mut views = Vec::new();
+        let chips: Vec<LibChip> = chip_views(&self.library.lib)
+            .into_iter()
+            .filter_map(|v| {
+                let n = self.library.lib.query(&Filter { view: v.clone(), ..kinds.clone() }).len();
+                let optional = matches!(v, View::Favorites | View::Recent | View::Unwanted);
+                if optional && n == 0 && v != current {
+                    return None;
+                }
+                let chip = LibChip {
+                    label: chip_label(&v).into(),
+                    count: if v == View::Discover { format!("{} new", thousands(n)) } else { thousands(n) }.into(),
+                    active: v == current,
+                };
+                views.push(v);
+                Some(chip)
+            })
+            .collect();
+        update_model(&self.lib_chips, chips);
+        self.library.view.chips = views;
+
+        let n = self.library.view.shown.len();
+        let pending = self.library.thumbs.pending();
+        let count = match pending {
+            0 => thousands(n),
+            p => format!("{} · {} rendering", thousands(n), thousands(p)),
+        };
+        g.set_count(count.into());
+        let what = if self.library.view.effects { "effects" } else { "sources" };
+        let hint = if !filter.search.is_empty() {
+            format!("Nothing matches \u{201c}{}\u{201d} here. Try Discover or another chip.", filter.search)
+        } else {
+            match &filter.view {
+                View::MyLibrary => {
+                    format!("No {what} kept yet. Open Discover to go through new ones, then press K to keep one.")
+                }
+                View::Discover => format!("No new {what} waiting. Drop files into the folders below to add more."),
+                View::Unwanted => "Nothing marked unwanted.".into(),
+                View::Favorites => "No favorites yet: select an item and press F.".into(),
+                View::Recent => "Nothing used yet.".into(),
+                _ => format!("No {what} here."),
+            }
+        };
+        g.set_empty_hint(hint.into());
+        g.set_search(filter.search.as_str().into());
+
+        let sel = selected.as_deref().and_then(|id| Some((id, self.library.lib.get(id)?.clone())));
+        g.set_selected(
+            sel.as_ref()
+                .and_then(|(id, _)| self.library.view.shown.iter().position(|s| s == id))
+                .map_or(-1, |i| i as i32),
+        );
+        if let Some((id, item)) = sel {
+            let entry = self.library.lib.entry(id);
+            let status = self.library.lib.status(id);
+            g.set_selected_name(item.name.as_str().into());
+            g.set_selected_intensity(entry.intensity.map_or(-1, i32::from));
+            g.set_selected_favorite(entry.favorite);
+            g.set_selected_unwanted(status == Status::Unwanted);
+            g.set_selected_kept(status == Status::Kept);
+            if self.engine.auditioning() {
+                ui.set_preview_label(format!("{} (not on output)", item.name).into());
+            }
+            let place = match self.selected {
+                Some((l, c)) => format!("Put in Layer {} · column {}", l + 1, c + 1),
+                None => "Put in slot".into(),
+            };
+            g.set_place_label(place.into());
+            let entry = self.library.lib.entry(id);
+            let mut detail = vec![item.kind.name().to_owned()];
+            if !item.pack.is_empty() {
+                detail.push(item.pack.clone());
+            }
+            if !item.categories.is_empty() {
+                detail.push(item.categories.join(", "));
+            }
+            let mut detail = detail.join(" · ");
+            for extra in [&item.description, &item.credit] {
+                if !extra.is_empty() {
+                    detail.push('\n');
+                    detail.push_str(extra);
+                }
+            }
+            if item.audio_reactive {
+                detail.push_str("\nReacts to audio");
+            }
+            g.set_selected_detail(detail.into());
+            g.set_selected_usage(crate::library::usage_text(entry.uses, entry.last_used, unix_now()).into());
+            let strings =
+                |v: &[String]| ModelRc::new(VecModel::from(v.iter().map(SharedString::from).collect::<Vec<_>>()));
+            g.set_selected_tags(strings(&entry.tags));
+            g.set_selected_crates(strings(&entry.crates));
+            g.set_selected_is_effect(item.kind == openvj_core::library::Kind::Effect);
+        }
+
+        g.set_kind(self.library.view.kind as i32);
+        g.set_expanded(self.library.view.expanded);
+        if self.library.view.expanded {
+            let rows = crate::library::side_rows(&self.library.lib, &self.library.view);
+            let model: Vec<LibSideRow> = rows
+                .iter()
+                .map(|r| LibSideRow {
+                    label: r.label.as_str().into(),
+                    count: r.count.as_str().into(),
+                    active: r.active,
+                    heading: r.action == crate::library::SideAction::Heading,
+                })
+                .collect();
+            g.set_side_rows(ModelRc::new(VecModel::from(model)));
+            self.library.view.side = rows.into_iter().map(|r| r.action).collect();
+        }
+    }
+
+    pub fn effect_toggle(&mut self, scope: i32, i: usize) {
+        if let Some(fx) = self.effect_mut(scope, i as i32) {
+            fx.enabled ^= true;
+        }
+    }
+
+    pub fn effect_remove(&mut self, scope: i32, i: usize) {
+        if let Some(chain) = self.effects_mut(scope)
+            && i < chain.len()
+        {
+            chain.remove(i);
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn effect_move(&mut self, scope: i32, i: usize, delta: i32) {
+        if let Some(chain) = self.effects_mut(scope) {
+            move_effect(chain, i, delta);
+        }
+    }
+
+    pub fn master(&mut self, v: f32) {
+        self.comp.master = v.clamp(0.0, 1.0);
+        self.grid_dirty = true;
+    }
+
+    /// Keyboard shortcuts. Returns true if handled.
+    pub fn key(&mut self, text: &str) -> bool {
+        match text {
+            "\u{1b}" => {
+                if self.library.view.expanded {
+                    self.lib_toggle_expanded();
+                    self.library_done();
+                } else if self.engine.auditioning() {
+                    self.stop_audition();
+                    self.library_dirty = true;
+                } else if self.escape_at.take().is_some() {
+                    self.clear_all();
+                } else {
+                    self.escape_at = Some(self.now());
+                }
+                self.props_dirty = true;
+                true
+            }
+            "\u{7f}" | "\u{8}" => {
+                self.clip_remove();
+                true
+            }
+            _ => match text.parse::<usize>() {
+                Ok(n @ 1..=9) if n <= self.comp.columns.len() => {
+                    self.column_clicked(n - 1);
+                    true
+                }
+                // Typing anywhere searches the library.
+                _ => self.lib_type(text),
+            },
+        }
+    }
+
+    pub fn output_shown(&mut self, open: bool) {
+        self.output_open = open;
+        self.grid_dirty = true;
+        self.mapping_dirty = true;
+    }
+
+    pub fn import_mapping(&mut self, path: &Path) {
+        match self.mapping.import(path) {
+            Ok(msg) => self.set_status(msg),
+            Err(e) => self.set_status(format!("Could not import {}: {e}", path.display())),
+        }
+        self.mapping_changed();
+    }
+
+    pub fn clear_mapping(&mut self) {
+        self.mapping.clear();
+        self.set_status("Mapping cleared: the output window shows the whole composition.");
+        self.mapping_changed();
+    }
+
+    pub fn toggle_test_card(&mut self) {
+        self.mapping.test_card = !self.mapping.test_card && self.mapping.setup.is_some();
+        self.grid_dirty = true;
+        self.mapping_view_dirty = true;
+    }
+
+    fn mapping_changed(&mut self) {
+        self.mapping_view_dirty = true;
+        self.mapping_dirty = true;
+        self.images_dirty = true;
+        self.grid_dirty = true;
+    }
+
+    pub fn status_message(&mut self, msg: &str) {
+        self.set_status(msg);
+    }
+}
+
+/// Replaces a model's rows, touching only rows that changed (keeps widget state stable).
+fn update_model<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    if model.row_count() != rows.len() {
+        model.set_vec(rows);
+        return;
+    }
+    for (i, row) in rows.into_iter().enumerate() {
+        if model.row_data(i).as_ref() != Some(&row) {
+            model.set_row_data(i, row);
+        }
+    }
+}
+
+fn pct(v: f32) -> String {
+    format!("{:.0}%", v * 100.0)
+}
+
+fn crossfade_label(v: f32) -> String {
+    match (v * 100.0).round() as i32 {
+        50 => "centre".into(),
+        p if p < 50 => format!("A {}%", 100 - p),
+        p => format!("B {p}%"),
+    }
+}
+
+/// Index of the [`SYNC_BEATS`] entry closest to `beats`.
+fn beat_choice(beats: f32) -> usize {
+    SYNC_BEATS
+        .iter()
+        .enumerate()
+        .min_by(|a, b| (a.1 - beats).abs().total_cmp(&(b.1 - beats).abs()))
+        .map_or(0, |(i, _)| i)
+}
+
+/// A modulatable row; the display shows the live value. Double-clicking the bar resets it to `reset`.
+fn param_row(
+    index: usize,
+    name: &str,
+    p: &Param,
+    reset: f32,
+    inputs: &ModInputs,
+    display: impl Fn(f32) -> String,
+) -> ParamData {
+    let live = p.eval(inputs);
+    let m = p.modulation;
+    ParamData {
+        index: index as i32,
+        name: name.into(),
+        value: p.value,
+        live,
+        reset,
+        display: display(live).into(),
+        modulatable: true,
+        mod_source: m.source.index() as i32,
+        mod_amount: m.amount,
+        mod_rate: m.rate_index() as i32,
+        macro_index: -1,
+        mod_phase: (m.phase * 4.0).round() as i32 % 4,
+        mod_restart: m.restart,
+        restartable: false,
+    }
+}
+
+/// A seed for a new Random mapping, so two mappings set up the same way still differ.
+fn random_seed() -> u32 {
+    use std::hash::{BuildHasher, RandomState};
+    (RandomState::new().hash_one(Instant::now()) as u32).max(1)
+}
+
+/// A row without a modulator (speed, transition, analyser settings).
+fn fixed_row(index: usize, name: &str, value: f32, reset: f32, display: String) -> ParamData {
+    ParamData {
+        index: index as i32,
+        name: name.into(),
+        value,
+        live: value,
+        reset,
+        display: display.into(),
+        modulatable: false,
+        macro_index: -1,
+        ..Default::default()
+    }
+}
+
+/// UI models for one effect chain, with a nested parameter model per card so cards
+/// update in place.
+#[derive(Default)]
+struct EffectModels {
+    effects: Rc<VecModel<EffectData>>,
+    params: Vec<Rc<VecModel<ParamData>>>,
+    /// A clip's chain: its tempo mappings can restart when the clip launches.
+    restartable: bool,
+}
+
+impl EffectModels {
+    fn update(&mut self, chain: &[Effect], inputs: &ModInputs) {
+        self.update_marked(chain, inputs, &|_, _| -1);
+    }
+
+    /// `mark(effect, index)` is the macro moving that parameter, or -1.
+    fn update_marked(&mut self, chain: &[Effect], inputs: &ModInputs, mark: &dyn Fn(usize, usize) -> i32) {
+        self.params.resize_with(chain.len(), || Rc::new(VecModel::default()));
+        let mut rows = Vec::with_capacity(chain.len());
+        for (e, (fx, model)) in chain.iter().zip(&self.params).enumerate() {
+            let mut params: Vec<ParamData> = match fx.ty() {
+                Some(ty) => ty
+                    .channels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, ch)| {
+                        let input = ty.input(ch);
+                        let p = fx.param(&ch.key).copied().unwrap_or(Param::new(ch.default));
+                        param_row(i, &ch.label, &p, ch.default, inputs, |v| input.display(ch.component, v))
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            params.push(param_row(MIX_INDEX, "Mix", &fx.mix, 1.0, inputs, pct));
+            for row in &mut params {
+                row.macro_index = mark(e, row.index as usize);
+            }
+            params.iter_mut().for_each(|p| p.restartable = self.restartable);
+            update_model(model, params);
+            let source =
+                fx.ty().map(|t| t.def.source.clone()).filter(|u| u.starts_with("https://")).unwrap_or_default();
+            rows.push(EffectData {
+                name: fx.name().into(),
+                enabled: fx.enabled,
+                source: source.into(),
+                params: ModelRc::from(model.clone()),
+            });
+        }
+        update_model(&self.effects, rows);
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// A target as people would name it, for the map bar and status line.
+fn describe_target(comp: &Composition, target: MidiTarget) -> String {
+    let layer_name =
+        |l: usize| comp.layers.get(l).map(|x| x.name.clone()).unwrap_or_else(|| format!("Layer {}", l + 1));
+    let layer = |r: LayerRef| match r {
+        LayerRef::Index(l) => layer_name(l),
+        LayerRef::Selected => "the selected layer".to_owned(),
+    };
+    let effect = |e: EffectRef| {
+        let (chain, owner) = match e.layer {
+            None => (Some(&comp.effects), "the composition".to_owned()),
+            Some(r) => {
+                let l = match r {
+                    LayerRef::Index(l) => l,
+                    LayerRef::Selected => usize::MAX,
+                };
+                (comp.layers.get(l).map(|x| &x.effects), layer(r))
+            }
+        };
+        let fx = chain.and_then(|c| c.get(e.index));
+        (fx, format!("{} on {owner}", fx.map_or("Effect".to_owned(), |f| f.name().to_owned())))
+    };
+    match target {
+        MidiTarget::Master => "Master".into(),
+        MidiTarget::Crossfader => "Crossfader".into(),
+        MidiTarget::TempoTap => "Tap tempo".into(),
+        MidiTarget::LayerOpacity { layer: r } => format!("{} opacity", layer(r)),
+        MidiTarget::LayerBypass { layer: r } => format!("{} bypass", layer(r)),
+        MidiTarget::LayerSolo { layer: r } => format!("{} solo", layer(r)),
+        MidiTarget::LayerClear { layer: r } => format!("Clear {}", layer(r)),
+        MidiTarget::ClipLaunch { layer, column } => {
+            let name = comp.clip(layer, column).map(|c| c.name.clone()).unwrap_or_default();
+            format!("Launch {name} ({}, column {})", layer_name(layer), column + 1)
+        }
+        MidiTarget::ColumnLaunch { column } => format!("Launch column {}", column + 1),
+        MidiTarget::EffectParam { effect: e, param } => {
+            let (fx, what) = effect(e);
+            let label = fx.and_then(|f| f.ty()).and_then(|t| t.channels.get(param).map(|c| c.label.clone()));
+            format!("{} of {what}", label.unwrap_or_else(|| format!("Parameter {}", param + 1)))
+        }
+        MidiTarget::EffectMix { effect: e } => format!("Mix of {}", effect(e).1),
+        MidiTarget::EffectBypass { effect: e } => format!("Bypass {}", effect(e).1),
+        other => format!("{other:?}"),
+    }
+}
+
+fn message_label(msg: MidiMessage) -> String {
+    match msg {
+        MidiMessage::NoteOn { channel, note, velocity } => format!("Note {note} on, ch {} vel {velocity}", channel + 1),
+        MidiMessage::NoteOff { channel, note } => format!("Note {note} off, ch {}", channel + 1),
+        MidiMessage::ControlChange { channel, controller, value } => {
+            format!("CC {controller} = {value}, ch {}", channel + 1)
+        }
+    }
+}
+
+/// Loads the MIDI preset an `.avc` was saved with into `comp`, if it can be found next to the
+/// `.avc` or in Resolume's preset folders. Returns a line for the status bar.
+fn load_midi_preset_for(comp: &mut Composition, avc: &Path, refs: &openvj_resolume::ResolumeRefs) -> Option<String> {
+    let name = refs.midi_preset.as_deref()?;
+    let mut dirs: Vec<PathBuf> = avc.parent().map(Path::to_owned).into_iter().collect();
+    dirs.extend(openvj_resolume::midi_preset_dirs());
+    let Some(path) = openvj_resolume::find_midi_preset(name, &dirs) else {
+        return Some(format!("MIDI preset \"{name}\" not found, import it from the Composition tab"));
+    };
+    match openvj_resolume::import_midi_preset_file(&path, comp, Some(refs)) {
+        Ok(imported) => {
+            for note in &imported.notes {
+                eprintln!("midi import: {note}");
+            }
+            let line = format!("MIDI preset {name}: {}", imported.summary());
+            comp.midi = imported.map;
+            Some(line)
+        }
+        Err(e) => Some(format!("Could not read MIDI preset {}: {e}", path.display())),
+    }
+}
+
+// ---------------------------------------------------------------- Synthesis layout
+
+/// Which of `clip`'s parameters a UI row (scope, owner, index) is, for macros.
+fn clip_param_ref(clip: &Clip, scope: i32, owner: i32, index: usize) -> Option<ParamRef> {
+    match scope {
+        scope::CLIP if index >= ISF_PARAM_BASE => match &clip.source {
+            ClipSource::Isf { generator } => {
+                Some(ParamRef::Isf(generator.ty()?.channels.get(index - ISF_PARAM_BASE)?.key.clone()))
+            }
+            _ => None,
+        },
+        scope::CLIP if index < openvj_core::PARAM_COUNT => match clip.source {
+            ClipSource::Generator { .. } | ClipSource::Milkdrop { .. } => Some(ParamRef::Source(index)),
+            _ => None,
+        },
+        scope::CLIP_FX => {
+            let effect = usize::try_from(owner).ok()?;
+            let fx = clip.effects.get(effect)?;
+            let key = if index == MIX_INDEX {
+                openvj_core::MIX_KEY.to_owned()
+            } else {
+                fx.ty()?.channels.get(index)?.key.clone()
+            };
+            Some(ParamRef::Effect { effect, key })
+        }
+        scope::CLIP_TF => Some(ParamRef::Transform(clip.transform.ty()?.channels.get(index)?.key.clone())),
+        _ => None,
+    }
+}
+
+impl App {
+    /// Shows a layer in Synthesis: selects the clip it plays (or its first clip).
+    pub fn synth_focus(&mut self, layer: usize) {
+        let Some(l) = self.comp.layers.get(layer) else { return };
+        let col = l.playing_column().or_else(|| l.clips.iter().position(Option::is_some));
+        self.selected_layer = layer;
+        self.selected = col.map(|c| (layer, c));
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    /// Adds a parameter of the selected clip to macro `m`, or takes it off.
+    pub fn macro_toggle(&mut self, m: usize, scope: i32, owner: i32, index: usize) {
+        let Some(clip) = self.selected_clip_mut() else { return };
+        let Some(r) = clip_param_ref(clip, scope, owner, index) else {
+            self.set_status("Only the visual's own parameters can go on a macro.");
+            return;
+        };
+        clip.toggle_macro_target(m, r);
+        self.grid_dirty = true;
+    }
+
+    /// Takes every parameter off macro `m`.
+    pub fn macro_clear(&mut self, m: usize) {
+        if let Some(mac) = self.selected_clip_mut().and_then(|c| c.macro_mut(m)) {
+            mac.targets.clear();
+            self.grid_dirty = true;
+        }
+    }
+
+    fn sync_synth_layers(&self, ui: &MainWindow) {
+        let rows: Vec<SynthLayer> = self
+            .comp
+            .layers
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(i, l)| {
+                let clip = l.active.and_then(|p| l.clip_by_id(p.clip_id));
+                let thumb = clip.and_then(|c| self.thumbs.get(&c.id).cloned());
+                SynthLayer {
+                    index: i as i32,
+                    name: l.name.as_str().into(),
+                    clip: clip.map_or(SharedString::new(), |c| c.name.as_str().into()),
+                    has_thumb: thumb.is_some(),
+                    thumb: thumb.unwrap_or_default(),
+                    focused: i == self.selected_layer,
+                }
+            })
+            .collect();
+        ui.set_synth_layers(ModelRc::new(VecModel::from(rows)));
+    }
+}
+
+/// Group tool buttons (ui/synthesis.slint `GroupTools`).
+const GROUP_LOCK: i32 = 0;
+const GROUP_UNDO: i32 = 1;
+const GROUP_DEFAULT: i32 = 2;
+const GROUP_RANDOM: i32 = 3;
+/// Synthesis rows of sections.
+const ROW_SCENE: i32 = 0;
+const ROW_META: i32 = 1;
+/// META sections (the owner of a `LAYER_LOOK` group), and the look's channels in each.
+/// Channels follow effects/layer_look.fs: invert, brightness, gamma, contrast, hue,
+/// saturation, mirror v/h, limit, low colour rgba, high colour rgba, alpha.
+const META_SECTIONS: [std::ops::Range<usize>; 5] = [0..0, 0..6, 6..8, 8..17, 17..18];
+/// Channels Random leaves alone: the colours' alpha, and Alpha channel (it would punch holes).
+const META_FIXED: [usize; 3] = [12, 16, 17];
+/// Media overlay rows (`scope::OVERLAY`).
+const OV_AMOUNT: usize = 0;
+const OV_SPEED: usize = 1;
+const OV_SCALE: usize = 2;
+const OV_FILL: usize = 3;
+const OV_FLIP_V: usize = 4;
+const OV_FLIP_H: usize = 5;
+/// The look channels the overlay's colour section shows: invert, gamma, contrast, hue, saturation.
+const OVERLAY_COLOR: [usize; 5] = [0, 2, 3, 4, 5];
+/// Overlay transport buttons (ui/synthesis.slint).
+const OV_PLAY: i32 = 0;
+const OV_PREV: i32 = 1;
+const OV_NEXT: i32 = 2;
+const OV_STOP: i32 = 3;
+
+impl App {
+    /// The section key for (scope, owner): the selected visual's for scene sections, the
+    /// focused layer's for META.
+    fn synth_key(&self, scope: i32, owner: i32) -> Option<crate::synth_controls::Key> {
+        if matches!(scope, scope::LAYER_LOOK | scope::OVERLAY | scope::OVERLAY_LOOK) {
+            let l = self.layer_index(-1)?;
+            return Some((u64::MAX - l as u64, scope, owner));
+        }
+        let (l, c) = self.selected?;
+        Some((self.comp.clip(l, c)?.id.0, scope, owner))
+    }
+
+    /// The knobs of a Synthesis section as the panel shows them.
+    fn synth_knobs(&self, scope: i32, owner: i32) -> Vec<crate::synth_controls::Knob> {
+        use crate::synth_controls::Knob;
+        let rows: Vec<ParamData> = match scope {
+            scope::CLIP => self.clip_params.iter().collect(),
+            // MEDIA transform: scale, fit or fill and the flips; Amount and Speed stay put.
+            scope::OVERLAY => {
+                return self
+                    .overlay_params
+                    .iter()
+                    .filter(|r| r.index as usize >= OV_SCALE)
+                    .map(|r| Knob { index: r.index as usize, value: r.value, reset: r.reset, random: true })
+                    .collect();
+            }
+            scope::OVERLAY_LOOK => {
+                let rows: Vec<ParamData> =
+                    self.overlay_look.params.first().map(|m| m.iter().collect()).unwrap_or_default();
+                return rows
+                    .iter()
+                    .filter(|r| OVERLAY_COLOR.contains(&(r.index as usize)))
+                    .map(|r| Knob { index: r.index as usize, value: r.value, reset: r.reset, random: true })
+                    .collect();
+            }
+            // META: Master is the layer's opacity; the rest are the look's channels.
+            scope::LAYER_LOOK if owner == 0 => self.layer_params.iter().take(1).collect(),
+            scope::LAYER_LOOK => {
+                let range = META_SECTIONS.get(owner as usize).cloned().unwrap_or(0..0);
+                let rows: Vec<ParamData> =
+                    self.layer_look.params.first().map(|m| m.iter().collect()).unwrap_or_default();
+                return rows
+                    .iter()
+                    .filter(|r| range.contains(&(r.index as usize)))
+                    .map(|r| Knob {
+                        index: r.index as usize,
+                        value: r.value,
+                        reset: r.reset,
+                        random: !META_FIXED.contains(&(r.index as usize)),
+                    })
+                    .collect();
+            }
+            scope::CLIP_FX => usize::try_from(owner)
+                .ok()
+                .and_then(|e| self.clip_fx.params.get(e))
+                .map(|m| m.iter().collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        rows.iter()
+            .map(|r| Knob {
+                index: r.index as usize,
+                value: r.value,
+                reset: r.reset,
+                // Speed and timing rows aren't modulatable; an effect's Mix stays where it is.
+                random: r.modulatable && r.index as usize != MIX_INDEX && scope != scope::LAYER_LOOK,
+            })
+            .collect()
+    }
+
+    /// The SCENE row's sections: the source and each of the visual's effects.
+    fn synth_scene(&self) -> Vec<(i32, i32)> {
+        let n = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map_or(0, |c| c.effects.len());
+        std::iter::once((scope::CLIP, 0)).chain((0..n as i32).map(|e| (scope::CLIP_FX, e))).collect()
+    }
+
+    fn synth_write(&mut self, scope: i32, owner: i32, values: &[(usize, f32)]) {
+        let (scope, owner) = match (scope, owner) {
+            (scope::LAYER_LOOK, 0) => (scope::LAYER, -1),
+            (scope::LAYER_LOOK, _) => (scope::LAYER_LOOK, 0),
+            (scope::OVERLAY | scope::OVERLAY_LOOK, _) => (scope, 0),
+            other => other,
+        };
+        for &(i, v) in values {
+            self.param_set(scope, owner, i, v);
+        }
+        if !values.is_empty() {
+            self.props_dirty = true;
+        }
+    }
+
+    /// A section's lock, undo, default or random button.
+    pub fn synth_group(&mut self, scope: i32, owner: i32, op: i32) {
+        let Some(key) = self.synth_key(scope, owner) else { return };
+        let knobs = self.synth_knobs(scope, owner);
+        let values = match op {
+            GROUP_LOCK => {
+                self.synth.toggle_lock(key);
+                self.grid_dirty = true;
+                return;
+            }
+            GROUP_UNDO => self.synth.undo(key),
+            GROUP_DEFAULT => self.synth.default(key, &knobs),
+            GROUP_RANDOM => self.synth.random(key, &knobs),
+            _ => return,
+        };
+        self.synth_write(scope, owner, &values);
+        self.grid_dirty = true;
+    }
+
+    /// A row's lock, undo, default or random button. Lock locks every section, or unlocks
+    /// them all when all are locked.
+    pub fn synth_row(&mut self, row: i32, op: i32) {
+        let sections = match row {
+            ROW_SCENE => self.synth_scene(),
+            ROW_META => (0..META_SECTIONS.len() as i32).map(|o| (scope::LAYER_LOOK, o)).collect(),
+            _ => return,
+        };
+        let keys: Vec<_> = sections.iter().filter_map(|&(s, o)| self.synth_key(s, o)).collect();
+        let Some(id) = keys.first().map(|k| k.0) else { return };
+        let out = match op {
+            GROUP_LOCK => {
+                let all = self.synth.all_locked(keys.iter().copied());
+                for k in keys {
+                    if self.synth.is_locked(k) == all {
+                        self.synth.toggle_lock(k);
+                    }
+                }
+                self.grid_dirty = true;
+                return;
+            }
+            GROUP_UNDO => self.synth.undo_row((id, row)),
+            GROUP_DEFAULT | GROUP_RANDOM => {
+                let knobs: Vec<_> = keys.iter().map(|&k| (k, self.synth_knobs(k.1, k.2))).collect();
+                if op == GROUP_RANDOM {
+                    self.synth.random_row((id, row), &knobs)
+                } else {
+                    self.synth.default_row((id, row), &knobs)
+                }
+            }
+            _ => return,
+        };
+        for ((_, s, o), values) in out {
+            self.synth_write(s, o, &values);
+        }
+        self.grid_dirty = true;
+    }
+
+    /// A knob in a section was grabbed: the drag that follows undoes as one step.
+    pub fn synth_touch(&mut self, scope: i32, owner: i32) {
+        if let Some(key) = self.synth_key(scope, owner) {
+            let knobs = self.synth_knobs(scope, owner);
+            self.synth.checkpoint(key, &knobs);
+        }
+    }
+
+    fn sync_synth_groups(&self, ui: &MainWindow) {
+        let id = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id.0);
+        let locked = |s: i32, o: i32| id.is_some_and(|id| self.synth.is_locked((id, s, o)));
+        let scene = self.synth_scene();
+        ui.set_synth_source_locked(locked(scope::CLIP, 0));
+        let fx: Vec<bool> = scene.iter().skip(1).map(|&(s, o)| locked(s, o)).collect();
+        ui.set_synth_fx_locked(ModelRc::new(VecModel::from(fx)));
+        ui.set_synth_scene_locked(id.is_some_and(|id| self.synth.all_locked(scene.iter().map(|&(s, o)| (id, s, o)))));
+        let meta: Vec<_> =
+            (0..META_SECTIONS.len() as i32).filter_map(|o| self.synth_key(scope::LAYER_LOOK, o)).collect();
+        let meta_locked: Vec<bool> = meta.iter().map(|&k| self.synth.is_locked(k)).collect();
+        ui.set_synth_meta_locked(ModelRc::new(VecModel::from(meta_locked)));
+        ui.set_synth_meta_row_locked(self.synth.all_locked(meta));
+        let media: Vec<bool> = [scope::OVERLAY, scope::OVERLAY_LOOK]
+            .iter()
+            .map(|&s| self.synth_key(s, 0).is_some_and(|k| self.synth.is_locked(k)))
+            .collect();
+        ui.set_synth_media_locked(ModelRc::new(VecModel::from(media)));
+    }
+
+    // ---------------------------------------------------------------- media overlay
+
+    fn overlay_mut(&mut self) -> Option<&mut openvj_core::MediaOverlay> {
+        self.comp.layers.get_mut(self.selected_layer)?.overlay.as_mut()
+    }
+
+    /// Puts `source` on the focused layer as its overlay.
+    fn set_overlay(&mut self, source: ClipSource) {
+        let media = source.media_path().map(|p| (p.to_owned(), matches!(source, ClipSource::Video { .. })));
+        let Some(id) = self.comp.set_overlay(self.selected_layer, source) else { return };
+        if let Some((path, is_video)) = media {
+            self.start_load(id, path, is_video);
+        }
+        self.collect_garbage();
+        self.media_dirty = true;
+        self.grid_dirty = true;
+    }
+
+    /// A tile in the media browser was clicked.
+    pub fn overlay_pick(&mut self, item: usize) {
+        if self.media_browser.locked {
+            self.set_status("The media browser is locked. Unlock it to change the overlay.");
+            return;
+        }
+        if let Some(it) = self.media_browser.items.get(item).cloned() {
+            self.set_overlay(it.source);
+        }
+    }
+
+    pub fn overlay_clear(&mut self) {
+        if let Some(l) = self.comp.layers.get_mut(self.selected_layer) {
+            l.overlay = None;
+            self.collect_garbage();
+            self.media_dirty = true;
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn overlay_transport(&mut self, op: i32) {
+        match op {
+            OV_PLAY => {
+                if let Some(o) = self.overlay_mut() {
+                    o.transport.playing = !o.transport.playing;
+                }
+            }
+            OV_STOP => {
+                if let Some(o) = self.overlay_mut() {
+                    o.stop();
+                }
+            }
+            OV_PREV | OV_NEXT => {
+                let current = self
+                    .comp
+                    .layers
+                    .get(self.selected_layer)
+                    .and_then(|l| l.overlay.as_ref())
+                    .and_then(|o| o.clip.source.media_path().map(Path::to_owned));
+                let by = if op == OV_NEXT { 1 } else { -1 };
+                if let Some(it) = self.media_browser.step(current.as_deref(), by).cloned() {
+                    self.set_overlay(it.source);
+                }
+            }
+            _ => {}
+        }
+        self.media_dirty = true;
+    }
+
+    pub fn overlay_scrub(&mut self, at: f32) {
+        if let Some(o) = self.overlay_mut() {
+            o.scrub(at);
+        }
+    }
+
+    pub fn overlay_play_mode(&mut self, i: usize) {
+        if let Some(o) = self.overlay_mut() {
+            o.clip.play_mode = PlayMode::from_index(i);
+            self.media_dirty = true;
+        }
+    }
+
+    pub fn overlay_blend(&mut self, i: usize) {
+        if let Some(o) = self.overlay_mut() {
+            o.blend = BlendMode::ALL.get(i).copied().unwrap_or_default();
+            self.media_dirty = true;
+        }
+    }
+
+    pub fn media_chip(&mut self, chip: usize) {
+        self.media_browser.chip = chip;
+        self.media_refresh();
+    }
+
+    pub fn media_lock(&mut self) {
+        self.media_browser.locked = !self.media_browser.locked;
+        self.media_dirty = true;
+    }
+
+    pub fn media_refresh(&mut self) {
+        let live = self.input_sources();
+        self.media_browser.refresh(&live);
+        self.media_dirty = true;
+    }
+
+    pub fn media_add_folder(&mut self, dir: PathBuf) {
+        self.media_browser.add_folder(dir);
+        self.media_refresh();
+    }
+
+    pub fn media_remove_folder(&mut self, chip: usize) {
+        self.media_browser.remove_folder(chip);
+        self.media_refresh();
+    }
+
+    /// Takes finished browser thumbnails.
+    fn poll_media_thumbs(&mut self) {
+        let Some(rx) = &self.media_browser.done else { return };
+        let mut got = false;
+        while let Ok((path, thumb)) = rx.try_recv() {
+            let image = match thumb {
+                Some((w, h, rgba)) => Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, w, h)),
+                None => Image::default(),
+            };
+            self.media_thumbs.insert(path, image);
+            got = true;
+        }
+        self.media_dirty |= got;
+    }
+
+    /// The overlay's transport, every frame while Synthesis shows.
+    fn sync_overlay_transport(&self, ui: &MainWindow) {
+        let o = self.comp.layers.get(self.selected_layer).and_then(|l| l.overlay.as_ref());
+        ui.set_overlay_playing(o.is_some_and(|o| o.transport.playing));
+        ui.set_overlay_progress(o.map_or(0.0, |o| o.progress()));
+    }
+
+    /// The overlay's settings and the browser, when the overlay or the browser changed.
+    fn sync_media(&mut self, ui: &MainWindow, browser: bool) {
+        if browser && !self.media_listed {
+            self.media_listed = true;
+            let live = self.input_sources();
+            self.media_browser.refresh(&live);
+        }
+        if browser {
+            self.media_browser.want_thumbs(&self.media_thumbs);
+        }
+        let o = self.comp.layers.get(self.selected_layer).and_then(|l| l.overlay.as_ref());
+        ui.set_overlay_valid(o.is_some());
+        let current = o.map(|o| o.clip.source.clone());
+        if let Some(o) = o {
+            let name = o.clip.source.media_path().and_then(|p| p.file_name()).map_or_else(
+                || o.clip.source.live_name().unwrap_or_else(|| o.clip.source.default_name()),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            ui.set_overlay_name(name.into());
+            let thumb = o
+                .clip
+                .source
+                .media_path()
+                .and_then(|p| self.media_thumbs.get(p))
+                .or_else(|| self.thumbs.get(&o.clip.id))
+                .cloned();
+            ui.set_overlay_has_thumb(thumb.is_some());
+            ui.set_overlay_thumb(thumb.unwrap_or_default());
+            ui.set_overlay_blend(BlendMode::ALL.iter().position(|m| *m == o.blend).unwrap_or(0) as i32);
+            ui.set_overlay_play_mode(o.clip.play_mode.index() as i32);
+            ui.set_overlay_has_length(o.clip.length().is_some() && matches!(o.clip.source, ClipSource::Video { .. }));
+        }
+        if !browser {
+            return;
+        }
+        let chips: Vec<SharedString> = self.media_browser.chip_labels().into_iter().map(SharedString::from).collect();
+        ui.set_media_chips(ModelRc::new(VecModel::from(chips)));
+        ui.set_media_chip(self.media_browser.chip as i32);
+        ui.set_media_locked(self.media_browser.locked);
+        let tiles: Vec<MediaTile> = self
+            .media_browser
+            .items
+            .iter()
+            .map(|it| {
+                let thumb = it.path().and_then(|p| self.media_thumbs.get(p));
+                MediaTile {
+                    name: it.name.as_str().into(),
+                    kind: it.source.kind_label().into(),
+                    has_thumb: thumb.is_some_and(|t| t.size().width > 0),
+                    thumb: thumb.cloned().unwrap_or_default(),
+                    current: current.as_ref() == Some(&it.source),
+                }
+            })
+            .collect();
+        update_model(&self.media_tiles, tiles);
+    }
+}
+
+// ---------------------------------------------------------------- Discover layout
+
+/// The Discover layout's index in `Layouts` (ui/layouts.slint).
+pub const DISCOVER_LAYOUT: i32 = 3;
+/// The Synthesis layout's index in `Layouts`.
+pub const SYNTHESIS_LAYOUT: i32 = 2;
+
+impl App {
+    /// The window switched layout. Entering Discover shows its item on the Preview; leaving
+    /// it gives the Preview back.
+    pub fn layout_changed(&mut self, layout: i32) {
+        let was = self.layout;
+        self.layout = layout;
+        if layout == DISCOVER_LAYOUT && was != DISCOVER_LAYOUT {
+            if self.discover.started {
+                self.discover_load();
+            } else {
+                self.discover_rebuild();
+            }
+        } else if was == DISCOVER_LAYOUT && layout != DISCOVER_LAYOUT {
+            self.stop_audition();
+            self.library_dirty = true;
+        }
+    }
+
+    /// Builds the queue again from the packs and order picked.
+    fn discover_rebuild(&mut self) {
+        use openvj_core::discover::Queue;
+        let seed = self.discover.rng().next_u64();
+        let d = &mut self.discover;
+        let session = d.queue.session;
+        d.queue = Queue::build(&self.library.lib, &d.packs, d.order, seed);
+        d.queue.session = session;
+        d.started = true;
+        self.discover_load();
+    }
+
+    /// Puts the queue's current item on the Preview, with a fresh parameter panel.
+    fn discover_load(&mut self) {
+        let id = self.discover.queue.current().map(str::to_owned);
+        let item = id.as_deref().and_then(|id| self.library.lib.get(id)).cloned();
+        let clip = item.as_ref().and_then(crate::library::item_clip);
+        match (item, clip) {
+            (Some(item), Some(mut clip)) => {
+                let effect = item.kind == openvj_core::library::Kind::Effect;
+                let (rows, knobs) = crate::discover::panel(&clip, effect);
+                clip.id = openvj_render::AUDITION_CLIP;
+                self.engine.audition(Some(clip.clone()));
+                self.discover.clip = Some(clip);
+                self.discover.rows = rows;
+                self.discover.knobs = knobs;
+            }
+            _ => {
+                if self.discover.queue.current().is_some() {
+                    // The file went away: skip it without counting.
+                    self.discover.queue.jump(0);
+                    if self.discover.queue.current().is_some() {
+                        return self.discover_load();
+                    }
+                }
+                self.engine.audition(None);
+                self.discover.clip = None;
+                self.discover.rows.clear();
+                self.discover.knobs = Default::default();
+            }
+        }
+        self.discover_dirty = true;
+    }
+
+    /// Writes the panel's values into the clip under review, playing on without a restart.
+    fn discover_apply(&mut self) {
+        let d = &mut self.discover;
+        let Some(clip) = d.clip.as_mut() else { return };
+        crate::discover::apply(clip, &d.rows, d.knobs.values());
+        if let Some(playing) = self.engine.audition_clip_mut() {
+            crate::discover::apply(playing, &d.rows, d.knobs.values());
+        }
+        self.discover_dirty = true;
+    }
+
+    fn discover_id(&self) -> Option<String> {
+        self.discover.clip.as_ref()?;
+        self.discover.queue.current().map(str::to_owned)
+    }
+
+    pub fn disc_param_set(&mut self, i: i32, v: f32) {
+        self.discover.knobs.set(i.max(0) as usize, v);
+        self.discover_apply();
+    }
+
+    pub fn disc_lock_toggled(&mut self, i: i32) {
+        self.discover.knobs.toggle_lock(i.max(0) as usize);
+        self.discover_dirty = true;
+    }
+
+    pub fn disc_randomize(&mut self) {
+        let mut rng = self.discover.rng().clone();
+        let moved = self.discover.knobs.randomize(&mut rng);
+        self.discover.rng = Some(rng);
+        if moved {
+            self.discover_apply();
+        }
+    }
+
+    pub fn disc_undo(&mut self) {
+        if self.discover.knobs.undo() {
+            self.discover_apply();
+        }
+    }
+
+    pub fn disc_reset(&mut self) {
+        self.discover.knobs.reset();
+        self.discover_apply();
+    }
+
+    fn disc_edit(&mut self, f: impl FnOnce(&mut openvj_core::library::Library, &str)) {
+        let Some(id) = self.discover_id() else { return };
+        f(&mut self.library.lib, &id);
+        self.library.changed();
+        self.discover_dirty = true;
+    }
+
+    pub fn disc_set_intensity(&mut self, n: i32) {
+        self.disc_edit(|lib, id| lib.set_intensity(id, u8::try_from(n).ok()));
+    }
+
+    pub fn disc_add_tag(&mut self, tag: &str) {
+        self.disc_edit(|lib, id| lib.add_tag(id, tag));
+    }
+
+    pub fn disc_remove_tag(&mut self, i: i32) {
+        self.disc_edit(|lib, id| {
+            if let Some(tag) = usize::try_from(i).ok().and_then(|i| lib.entry(id).tags.get(i).cloned()) {
+                lib.remove_tag(id, &tag);
+            }
+        });
+    }
+
+    pub fn disc_crate_clicked(&mut self, i: i32) {
+        self.disc_edit(|lib, id| {
+            let Some(name) = usize::try_from(i).ok().and_then(|i| lib.crates().get(i).cloned()) else { return };
+            if lib.entry(id).crates.contains(&name) {
+                lib.remove_from_crate(id, &name);
+            } else {
+                lib.add_to_crate(id, &name);
+            }
+        });
+    }
+
+    pub fn disc_add_crate(&mut self, name: &str) {
+        let name = name.trim().to_owned();
+        if !name.is_empty() {
+            self.disc_edit(|lib, id| lib.add_to_crate(id, &name));
+        }
+    }
+
+    /// 0 Keep, 1 Save as preset, 2 Skip, 3 Unwanted; then the next item.
+    pub fn disc_decide(&mut self, which: i32) {
+        use openvj_core::discover::Decision;
+        let Some(id) = self.discover_id() else { return };
+        let mut decision = match which {
+            0 => Decision::Keep,
+            1 => Decision::Preset,
+            2 => Decision::Skip,
+            _ => Decision::Unwanted,
+        };
+        if decision == Decision::Preset && !self.disc_save_preset(&id) {
+            decision = Decision::Keep;
+        }
+        self.discover.queue.decide(&mut self.library.lib, decision);
+        self.library.changed();
+        self.library_dirty = true;
+        self.discover_load();
+    }
+
+    /// Adds the look under review, with its adjusted values, to the Player's playlist.
+    pub fn disc_add_to_playlist(&mut self) {
+        let Some(id) = self.discover_id() else { return };
+        let Some(mut clip) = self.discover.clip.clone() else { return };
+        if let Some(item) = self.library.lib.get(&id) {
+            clip.name = item.name.clone();
+        }
+        match self.player.add(&clip) {
+            Ok(()) => {
+                let n = self.player.playlist.presets.len();
+                self.set_status(format!("Added \"{}\" to the playlist ({n} presets).", clip.name));
+            }
+            Err(e) => self.set_status(e),
+        }
+    }
+
+    /// Saves the clip under review as a new preset, carrying the item's intensity, tags and
+    /// crates. Effects have no presets: returns false and the item is just kept.
+    fn disc_save_preset(&mut self, id: &str) -> bool {
+        use openvj_core::library::{Kind, presets_dir, save_new_preset};
+        let Some(item) = self.library.lib.get(id).cloned() else { return false };
+        if item.kind == Kind::Effect {
+            self.set_status("Effects have no presets: kept it in the library instead");
+            return false;
+        }
+        let (Some(mut clip), Some(dir)) = (self.discover.clip.clone(), presets_dir()) else { return false };
+        clip.name = item.name.clone();
+        match save_new_preset(&dir, &openvj_core::Preset::new(clip)) {
+            Ok(path) => {
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let new_id = openvj_core::library::preset_id(&file);
+                let entry = self.library.lib.entry(id);
+                let lib = &mut self.library.lib;
+                lib.set_intensity(&new_id, entry.intensity);
+                for tag in &entry.tags {
+                    lib.add_tag(&new_id, tag);
+                }
+                for name in &entry.crates {
+                    lib.add_to_crate(&new_id, name);
+                }
+                self.library.presets_changed();
+                self.set_status(format!("Saved preset {file}"));
+                true
+            }
+            Err(e) => {
+                self.set_status(format!("Could not save the preset: {e}"));
+                false
+            }
+        }
+    }
+
+    /// Clicking an Up next tile jumps to it.
+    pub fn disc_jump(&mut self, i: i32) {
+        self.discover.queue.jump(i.max(0) as usize);
+        self.discover_load();
+    }
+
+    pub fn disc_pack_clicked(&mut self, i: i32) {
+        let packs = openvj_core::discover::pack_counts(&self.library.lib);
+        let Some((name, _)) = usize::try_from(i).ok().and_then(|i| packs.get(i)) else { return };
+        let on = &mut self.discover.packs;
+        match on.iter().position(|p| p == name) {
+            Some(at) => {
+                on.remove(at);
+            }
+            None => on.push(name.clone()),
+        }
+        self.discover_rebuild();
+    }
+
+    pub fn disc_order_picked(&mut self, i: i32) {
+        use openvj_core::discover::Order;
+        self.discover.order = if i == 1 { Order::Pack } else { Order::Random };
+        self.discover_rebuild();
+    }
+
+    /// Discover's keys: R randomize, 0–5 intensity, K keep, S save as preset, X unwanted,
+    /// → skip.
+    pub fn disc_key(&mut self, text: &str) -> bool {
+        const RIGHT: &str = "\u{f703}";
+        match text {
+            "r" | "R" => self.disc_randomize(),
+            "0" | "1" | "2" | "3" | "4" | "5" => {
+                let n: i32 = text.parse().unwrap_or(0);
+                let now = self.discover_id().and_then(|id| self.library.lib.entry(&id).intensity);
+                self.disc_set_intensity(if now.map(i32::from) == Some(n) { -1 } else { n });
+            }
+            "k" | "K" => self.disc_decide(0),
+            "s" | "S" => self.disc_decide(1),
+            RIGHT => self.disc_decide(2),
+            "x" | "X" => self.disc_decide(3),
+            "p" | "P" => self.disc_add_to_playlist(),
+            _ => return false,
+        }
+        true
+    }
+
+    fn sync_discover(&mut self, ui: &MainWindow) {
+        use crate::library::{kind_badge, thousands};
+        let g = ui.global::<Disc>();
+        let d = &self.discover;
+        let lib = &self.library.lib;
+
+        let packs: Vec<LibChip> = openvj_core::discover::pack_counts(lib)
+            .into_iter()
+            .map(|(name, n)| LibChip {
+                active: d.packs.contains(&name),
+                label: name.as_str().into(),
+                count: thousands(n).into(),
+            })
+            .collect();
+        update_model(&self.disc_packs, packs);
+        g.set_order(i32::from(d.order == openvj_core::discover::Order::Pack));
+
+        let s = d.queue.session;
+        let total = d.queue.len().max(1);
+        g.set_remaining(format!("{} to review", thousands(d.queue.remaining())).into());
+        g.set_progress((d.queue.len() - d.queue.remaining()) as f32 / total as f32);
+        g.set_session(
+            format!(
+                "This session: kept {} · presets saved {} · skipped {} · unwanted {}",
+                s.kept, s.presets, s.skipped, s.unwanted
+            )
+            .into(),
+        );
+
+        let current = self.discover_id();
+        let item = current.as_deref().and_then(|id| lib.get(id));
+        g.set_has_item(item.is_some());
+        let entry = current.as_deref().map(|id| lib.entry(id)).unwrap_or_default();
+        if let (Some(item), Some(clip)) = (item, d.clip.as_ref()) {
+            g.set_name(item.name.as_str().into());
+            g.set_kind(kind_badge(item.kind).into());
+            let mut detail = vec![item.pack.clone()];
+            if !item.categories.is_empty() {
+                detail.push(item.categories.join(", "));
+            }
+            if !item.credit.is_empty() {
+                detail.push(format!("by {}", item.credit));
+            }
+            if item.audio_reactive {
+                detail.push("reacts to audio".into());
+            }
+            detail.retain(|s| !s.is_empty());
+            g.set_detail(detail.join(" · ").into());
+            g.set_description(item.description.as_str().into());
+            let params: Vec<DiscParam> = d
+                .rows
+                .iter()
+                .zip(d.knobs.values())
+                .enumerate()
+                .map(|(i, (row, &v))| DiscParam {
+                    name: row.name.as_str().into(),
+                    value: v,
+                    display: crate::discover::display(clip, &row.slot, v).into(),
+                    locked: d.knobs.is_locked(i),
+                })
+                .collect();
+            update_model(&self.disc_params, params);
+        } else {
+            g.set_name("".into());
+            g.set_detail("".into());
+            g.set_description("".into());
+            update_model(&self.disc_params, Vec::new());
+            let text = if d.queue.is_empty() && d.packs.is_empty() {
+                "Everything has been reviewed. New files in the effects, MilkDrop or Shadertoy folders show up here."
+            } else if d.queue.is_empty() {
+                "Nothing left to review in these packs. Pick other packs above, or none for all."
+            } else {
+                "Done for now: everything in this queue was reviewed. Skipped items come back next time."
+            };
+            g.set_empty_text(text.into());
+        }
+        g.set_can_undo(d.knobs.can_undo());
+        g.set_intensity(entry.intensity.map_or(-1, i32::from));
+        g.set_tags(ModelRc::new(VecModel::from(
+            entry.tags.iter().map(|t| SharedString::from(t.as_str())).collect::<Vec<_>>(),
+        )));
+        let crates: Vec<LibChip> = lib
+            .crates()
+            .iter()
+            .map(|c| LibChip { label: c.as_str().into(), count: "".into(), active: entry.crates.contains(c) })
+            .collect();
+        update_model(&self.disc_crates, crates);
+
+        let next: Vec<String> = d.queue.up_next(8).to_vec();
+        let mut tiles = Vec::new();
+        for id in &next {
+            let Some(item) = lib.get(id) else { continue };
+            let path = self.library.thumbs.path(id);
+            let thumb = path.as_deref().and_then(|p| self.library.view.image(p));
+            if thumb.is_none()
+                && let Some(p) = path
+            {
+                self.library.view.want_image(p);
+            }
+            tiles.push(LibTile {
+                name: item.name.as_str().into(),
+                kind: kind_badge(item.kind).into(),
+                has_thumb: thumb.is_some(),
+                thumb: thumb.unwrap_or_default(),
+                ..Default::default()
+            });
+        }
+        update_model(&self.disc_next, tiles);
+    }
+}
+
+// ---------------------------------------------------------------- Player layout
+
+/// How long a preset can play, in the Player's per-row menu.
+const PLAY_CHOICES: [Span; 9] = [
+    Span::Song,
+    Span::Bars(4.0),
+    Span::Bars(8.0),
+    Span::Bars(16.0),
+    Span::Bars(32.0),
+    Span::Bars(64.0),
+    Span::Seconds(15.0),
+    Span::Seconds(30.0),
+    Span::Seconds(60.0),
+];
+
+fn play_label(span: Span) -> String {
+    match span {
+        Span::Bars(_) => span.label(),
+        Span::Seconds(s) => format!("{s:.0} s"),
+        Span::Song => "Song".into(),
+    }
+}
+
+/// Minutes and seconds, as "1:05".
+fn clock(secs: f64) -> String {
+    let s = secs.max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+fn strings(items: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(items.into_iter().map(SharedString::from).collect::<Vec<_>>()))
+}
+
+impl App {
+    /// Adds the clip selected in the Mixer to the playlist.
+    pub fn playlist_add_selected(&mut self) {
+        let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).cloned() else {
+            self.set_status("Select a clip first, then add it to the playlist.");
+            return;
+        };
+        match self.player.add(&clip) {
+            Ok(()) => {
+                let n = self.player.playlist.presets.len();
+                self.set_status(format!("Added \"{}\" to the playlist ({n} presets).", clip.name));
+            }
+            Err(e) => self.set_status(e),
+        }
+    }
+
+    pub fn automix_toggle(&mut self) {
+        if self.player.is_live() {
+            self.player.stop();
+            self.set_status("Automix stopped.");
+            return;
+        }
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        if self.player.start(now, beat, self.comp.bpm) {
+            self.set_status("Automix playing.");
+        } else {
+            self.set_status("The playlist is empty: add a clip first.");
+        }
+    }
+
+    pub fn automix_next(&mut self) {
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        self.player.next(now, beat);
+    }
+
+    /// Launching something in the Mixer takes the output back from Automix.
+    fn stop_automix_for_mixer(&mut self) {
+        if self.player.is_live() {
+            self.player.stop();
+            self.set_status("Automix stopped: the Mixer has the output again.");
+        }
+    }
+
+    pub fn playlist_remove(&mut self, index: usize) {
+        self.player.remove(index);
+    }
+
+    pub fn playlist_move(&mut self, from: usize, to: i32) {
+        if to >= 0 {
+            self.player.move_preset(from, to as usize);
+        }
+    }
+
+    pub fn playlist_play_for(&mut self, index: usize, choice: usize) {
+        if let Some(span) = PLAY_CHOICES.get(choice) {
+            self.player.set_play_for(index, *span);
+        }
+    }
+
+    pub fn playlist_length(&mut self, choice: usize) {
+        if let Some(span) = Span::TRANSITIONS.get(choice) {
+            self.player.playlist.transition = *span;
+            self.player.edited();
+        }
+    }
+
+    pub fn playlist_style(&mut self, choice: usize) {
+        if let Some(style) = TransitionStyle::ALL.get(choice) {
+            self.player.playlist.style = *style;
+            self.player.edited();
+        }
+    }
+
+    pub fn playlist_shuffle(&mut self) {
+        self.player.playlist.shuffle = !self.player.playlist.shuffle;
+        self.player.edited();
+    }
+
+    pub fn playlist_repeat(&mut self) {
+        self.player.playlist.repeat = !self.player.playlist.repeat;
+        self.player.edited();
+    }
+
+    pub fn playlist_new(&mut self) {
+        self.player.new_playlist();
+        self.set_status("New playlist: add presets and it saves itself in the Playlists folder.");
+    }
+
+    pub fn playlist_name(&self) -> String {
+        self.player.playlist.name.clone()
+    }
+
+    /// Opens a playlist from the picker; while Automix plays, it comes in with the transition.
+    pub fn playlist_pick(&mut self, index: usize) {
+        let Some(entry) = self.player.folder.get(index).cloned() else { return };
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        match self.player.switch(&entry.path, now, beat, self.comp.bpm) {
+            Ok(()) => self.set_status(format!("Playlist \"{}\".", entry.name)),
+            Err(e) => self.set_status(format!("Could not open playlist: {e}")),
+        }
+    }
+
+    pub fn automix_prev(&mut self) {
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        if !self.player.back(now, beat) {
+            self.set_status("Nothing played before this preset.");
+        }
+    }
+
+    /// A click on a row: plays that preset (starting Automix if it was stopped).
+    pub fn automix_jump(&mut self, index: usize) {
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        self.player.jump(index, now, beat, self.comp.bpm);
+    }
+
+    /// The mouse is over row `index` (-1: no row): its preset plays on the Preview, which
+    /// that row's thumbnail shows.
+    pub fn playlist_hover(&mut self, index: i32) {
+        let clip =
+            usize::try_from(index).ok().and_then(|i| self.player.playlist.presets.get(i)).map(|p| p.clip.clone());
+        self.player.hover = clip.as_ref().map(|_| index as usize);
+        match clip {
+            Some(mut clip) => {
+                clip.id = openvj_render::AUDITION_CLIP;
+                self.engine.audition(Some(clip));
+            }
+            None => self.stop_audition(),
+        }
+        self.player.dirty = true;
+    }
+
+    /// The playing preset's progress bar and time, every frame while Automix plays.
+    fn sync_player_time(&mut self, ui: &MainWindow) {
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        let pl = ui.global::<Pl>();
+        let (progress, time) = match self.player.played(now, beat) {
+            None => (0.0, String::new()),
+            Some((p, secs)) => {
+                let song = self.player.current().and_then(|i| self.player.playlist.presets.get(i)).map(|p| p.play_for);
+                match song {
+                    Some(Span::Song) => (p, format!("Song · {}", clock(secs))),
+                    _ if p > 0.0 => (p, format!("{} left", clock(secs / p as f64 - secs))),
+                    _ => (p, String::new()),
+                }
+            }
+        };
+        if (pl.get_progress() - progress).abs() > 0.001 {
+            pl.set_progress(progress);
+        }
+        if pl.get_time().as_str() != time {
+            pl.set_time(time.into());
+        }
+    }
+
+    pub fn playlist_open(&mut self, path: &Path) {
+        match self.player.open(path) {
+            Ok(()) => self.set_status(format!("Opened playlist {}.", path.display())),
+            Err(e) => self.set_status(format!("Could not open playlist: {e}")),
+        }
+    }
+
+    pub fn playlist_save(&mut self, path: &Path) {
+        match self.player.save(path) {
+            Ok(()) => self.set_status(format!("Saved playlist {}.", path.display())),
+            Err(e) => self.set_status(format!("Could not save playlist: {e}")),
+        }
+    }
+
+    fn sync_player(&mut self, ui: &MainWindow) {
+        let thumb_ids = self.library.thumbs.want_clips(self.player.playlist.presets.iter().map(|p| &p.clip));
+        let mut thumbs = Vec::with_capacity(thumb_ids.len());
+        for id in &thumb_ids {
+            let path = self.library.thumbs.path(id);
+            let img = path.as_deref().and_then(|p| self.library.view.image(p));
+            if img.is_none()
+                && let Some(p) = path
+            {
+                self.library.view.want_image(p);
+            }
+            thumbs.push(img);
+        }
+        self.player_thumbs = thumb_ids;
+        let list = &self.player.playlist;
+        let current = self.player.current();
+        let rows: Vec<PresetRow> = list
+            .presets
+            .iter()
+            .zip(thumbs)
+            .enumerate()
+            .map(|(i, (p, thumb))| PresetRow {
+                name: p.name().into(),
+                source: p.clip.source.default_name().into(),
+                kind: kind_tag(&p.clip.source).into(),
+                play_for: PLAY_CHOICES.iter().position(|s| *s == p.play_for).unwrap_or(4) as i32,
+                play_label: play_label(p.play_for).into(),
+                current: current == Some(i),
+                has_thumb: thumb.is_some(),
+                thumb: thumb.unwrap_or_default(),
+            })
+            .collect();
+        ui.set_playlist_rows(ModelRc::new(VecModel::from(rows)));
+        let pl = ui.global::<Pl>();
+        let folder = &self.player.folder;
+        pl.set_playlists(strings(folder.iter().map(|e| e.name.clone())));
+        pl.set_counts(strings(folder.iter().map(|e| e.presets.to_string())));
+        let open = self.player.file.as_ref().and_then(|f| folder.iter().position(|e| &e.path == f));
+        pl.set_playlist(open.map_or(-1, |i| i as i32));
+        pl.set_hover(self.player.hover.map_or(-1, |i| i as i32));
+        ui.set_playlist_name(list.name.clone().into());
+        let n = list.presets.len();
+        let info = match current {
+            Some(i) => format!("{} of {n}", i + 1),
+            None if n == 1 => "1 preset".into(),
+            None => format!("{n} presets"),
+        };
+        ui.set_playlist_info(info.into());
+        ui.set_automix_on(self.player.is_live());
+        ui.set_playlist_length_names(strings(Span::TRANSITIONS.iter().map(|s| s.label())));
+        ui.set_playlist_length_headings(strings(Span::TRANSITIONS.iter().enumerate().map(|(i, s)| match s {
+            Span::Seconds(_) if i == 0 => "TIME".to_string(),
+            Span::Bars(_) if matches!(Span::TRANSITIONS[i - 1], Span::Seconds(_)) => "BARS".to_string(),
+            _ => String::new(),
+        })));
+        ui.set_playlist_length(Span::TRANSITIONS.iter().position(|s| *s == list.transition).unwrap_or(5) as i32);
+        ui.set_playlist_style_names(strings(TransitionStyle::ALL.iter().map(|s| s.name().to_string())));
+        ui.set_playlist_style(TransitionStyle::ALL.iter().position(|s| *s == list.style).unwrap_or(0) as i32);
+        ui.set_playlist_play_names(strings(PLAY_CHOICES.iter().map(|s| play_label(*s))));
+        ui.set_playlist_shuffle(list.shuffle);
+        ui.set_playlist_repeat(list.repeat);
+    }
+}
+
+/// The source-kind tag the UI colours rows by (see Theme.kind-color).
+fn kind_tag(source: &ClipSource) -> &'static str {
+    match source {
+        ClipSource::Video { .. } => "video",
+        ClipSource::Image { .. } => "image",
+        ClipSource::Camera { .. } => "camera",
+        ClipSource::Syphon { .. } => "syphon",
+        _ => "gen",
+    }
+}
+
+/// Seconds since the Unix epoch, for the library's "last used".
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}

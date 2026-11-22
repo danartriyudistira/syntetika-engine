@@ -1,0 +1,21 @@
+diff --git a/src/native/nota.engine/src/engine/Engine_Tracks.cpp b/src/native/nota.engine/src/engine/Engine_Tracks.cpp
+index 4faf33f..37f8bdb 100644
+--- a/src/native/nota.engine/src/engine/Engine_Tracks.cpp
++++ b/src/native/nota.engine/src/engine/Engine_Tracks.cpp
+@@ -1923,12 +1923,15 @@ bool Engine::moveClipBlock(const std::vector<ClipMoveReq>& moves) {
+     std::vector<int32_t> newIndex(items.size(), -1);
+ 
+     for (auto& [tid, nt] : clones) {
++        // Portability: clang < 16 has no P1091 (structured bindings in lambdas), so the
++        // lambda below takes a plain copy of the track id instead of the binding.
++        const int32_t rowTrack = tid;
+         const auto& ranges = incoming[tid];
+         auto rebuild = [&](auto& clips, auto carve) {
+             std::remove_reference_t<decltype(clips)> out;
+             out.reserve(clips.size() + 2 * ranges.size());
+             for (int32_t ci = 0; ci < static_cast<int32_t>(clips.size()); ++ci) {
+-                auto f = itemOf.find({tid, ci});
++                auto f = itemOf.find({rowTrack, ci});
+                 if (f != itemOf.end()) {
+                     auto& it = items[f->second];
+                     if (!it.sameTrack) continue; // leaves this track

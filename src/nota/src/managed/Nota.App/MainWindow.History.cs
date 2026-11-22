@@ -1,0 +1,211 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Project version history in the window: every save records a version (Save As carries
+// the history to the new bundle), "Save Version with Note…" attaches a note, and a version
+// can be switched to in place or opened as a copy. Switching writes the version's files
+// into the bundle and reopens it, so undo starts fresh — as after Open.
+
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Nota.Application;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public partial class MainWindow : IHistoryHost, Nota.Mcp.IProjectVersionsAccess
+{
+    private IProjectHistory _history = default!;
+    private HistoryView? _historyView;
+
+    string? IHistoryHost.ProjectPath => _projectPath;
+    bool IHistoryHost.KeepVersionHistory => KeepVersionHistory;
+    Task<bool> IHistoryHost.SwitchToVersionAsync(string versionId) => SwitchToVersionAsync(versionId);
+    Task<bool> IHistoryHost.OpenVersionAsCopyAsync(string versionId) => OpenVersionAsCopyAsync(versionId);
+    void IHistoryHost.ReportStatus(string text) { if (_vm is not null) _vm.StatusText = text; }
+
+    // MCP version tools (HistoryTools via ProjectVersionsBridge). No dialogs: the tool decides
+    // about unsaved changes, and an untitled project can't be saved without the file panel.
+    string? Nota.Mcp.IProjectVersionsAccess.ProjectPath => _projectPath;
+    bool Nota.Mcp.IProjectVersionsAccess.HasUnsavedChanges => HasUnsavedChanges();
+    bool Nota.Mcp.IProjectVersionsAccess.HistoryEnabled => KeepVersionHistory;
+    Task<bool> Nota.Mcp.IProjectVersionsAccess.SaveVersionAsync(string? note)
+        => _projectPath is null ? Task.FromResult(false) : DoSaveAsync(saveAs: false, note);
+    Task<bool> Nota.Mcp.IProjectVersionsAccess.SwitchToVersionAsync(string versionId)
+        => SwitchToVersionAsync(versionId, askAboutChanges: false);
+    void Nota.Mcp.IProjectVersionsAccess.NotifyHistoryChanged() => HistoryChanged?.Invoke();
+
+    /// <summary>Builds the browser's History tab and keeps it in step with the project.</summary>
+    private void SetUpHistoryTab()
+    {
+        _historyView = new HistoryView(_history, this);
+        Browser.SetHistory(_historyView);
+        HistoryChanged += _historyView.Refresh;
+    }
+
+    /// <summary>The open project's history changed (a version was recorded, switched to, or
+    /// the project itself changed). The History tab listens.</summary>
+    internal event Action? HistoryChanged;
+
+    private bool KeepVersionHistory
+        => App.Services.GetRequiredService<ISettingsService>().Current.KeepVersionHistory;
+
+    // Called by the save after the manifest and every sidecar are written. Returns a
+    // status-bar suffix when the version couldn't be recorded (the save itself stands).
+    private string RecordVersion(string dir, string? previousPath, string? note)
+    {
+        if (!KeepVersionHistory)
+        {
+            // History is off: a project that still has one loses it on save (Settings warned).
+            if (_history.Exists(dir)) EraseHistory(dir);
+            return "";
+        }
+        try
+        {
+            // Save As: the new bundle gets the whole history and the audio its versions use.
+            if (previousPath is not null && !SamePath(previousPath, dir)) _history.CopyTo(previousPath, dir);
+            var version = _history.Commit(dir, note);
+            // Nothing changed since the current version: the note goes onto that version.
+            if (version is null && note is not null && _history.Read(dir).HeadVersion is { } head)
+                _history.SetNote(dir, head.Id, head.Note is { Length: > 0 } old ? old + "\n" + note : note);
+            HistoryChanged?.Invoke();
+            return "";
+        }
+        catch (Exception ex) when (ex is ProjectHistoryException or IOException or UnauthorizedAccessException)
+        {
+            App.Services.GetRequiredService<ILogSink>().Error("Recording a project version failed", ex);
+            return Loc.F("main.history.version_not_recorded", ex.Message);
+        }
+    }
+
+    // Settings → Version history was turned off (and confirmed): erase the open project's.
+    private void OnVersionHistoryTurnedOff()
+    {
+        if (_projectPath is not { } dir || !_history.Exists(dir)) { HistoryChanged?.Invoke(); return; }
+        long freed = EraseHistory(dir);
+        if (_vm is not null) _vm.StatusText = Loc.F("main.history.version_history_turned_off_freed", NotaNum.Bytes(freed));
+    }
+
+    private long EraseHistory(string dir)
+    {
+        long freed = 0;
+        try { freed = _history.Erase(dir); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            App.Services.GetRequiredService<ILogSink>().Error("Erasing the project's version history failed", ex);
+        }
+        HistoryChanged?.Invoke();
+        return freed;
+    }
+
+    // Save As over an existing project replaces it, and its history with it — the new
+    // project's own history (if any) is carried over after the save.
+    private void DropReplacedHistory(string dir)
+    {
+        if (!Directory.Exists(dir)) return;
+        try { _history.Erase(dir); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            App.Services.GetRequiredService<ILogSink>().Error("Clearing a replaced project's history failed", ex);
+        }
+    }
+
+    private async Task SaveVersionWithNoteAsync()
+    {
+        if (_vm is null) return;
+        if (!KeepVersionHistory)
+        {
+            _vm.StatusText = Loc.T("main.history.version_history_is_turned_off");
+            return;
+        }
+        var note = await new TextPromptWindow(Loc.T("main.history.save_version"), Loc.T("main.history.what_changed_in_this_version"))
+            .ShowDialog<string?>(this);
+        if (note is null) return;
+        await DoSaveAsync(saveAs: false, note);
+    }
+
+    /// <summary>Switches the open project to <paramref name="versionId"/>: offers to save
+    /// unsaved changes first, restores the version's files and reopens the bundle.</summary>
+    internal async Task<bool> SwitchToVersionAsync(string versionId, bool askAboutChanges = true)
+    {
+        if (_vm is null || _projectPath is not { } dir) return false;
+        if (askAboutChanges && !await ConfirmLeaveChangesAsync(Loc.T("main.history.switch_version"),
+                Loc.T("main.history.save_your_changes_as_a"))) return false;
+        try
+        {
+            _history.Checkout(dir, versionId);
+        }
+        catch (Exception ex) when (ex is ProjectHistoryException or IOException or UnauthorizedAccessException)
+        {
+            App.Services.GetRequiredService<ILogSink>().Error("Switching project version failed", ex);
+            _vm.StatusText = Loc.F("main.history.couldnt_switch_version", ex.Message);
+            return false;
+        }
+        OpenProject(dir);
+        if (_history.Read(dir).HeadVersion is { } v) _vm.StatusText = Loc.F("main.history.switched_to", DescribeVersion(v));
+        return true;
+    }
+
+    /// <summary>Opens <paramref name="versionId"/> as a new project next to this one — a full
+    /// copy (history included) whose current version is the chosen one.</summary>
+    internal async Task<bool> OpenVersionAsCopyAsync(string versionId)
+    {
+        if (_vm is null || _projectPath is not { } src) return false;
+        if (!await ConfirmLeaveChangesAsync(Loc.T("main.history.open_version_as_copy"),
+                Loc.T("main.history.save_your_changes_before_opening"))) return false;
+        var version = _history.Read(src).Versions.FirstOrDefault(v => v.Id == versionId);
+        if (version is null) return false;
+
+        string suggested = $"{Path.GetFileNameWithoutExtension(src)} ({version.CreatedAt.LocalDateTime:yyyy-MM-dd HH.mm}).nota";
+        var dst = await PickProjectPathAsync(Loc.T("main.history.open_version_as_a_new"), suggested);
+        if (dst is null) return false;
+        if (SamePath(src, dst) || (Directory.Exists(dst) && Directory.EnumerateFileSystemEntries(dst).Any()))
+        {
+            _vm.StatusText = Loc.T("main.history.choose_a_new_name_for");
+            return false;
+        }
+        try
+        {
+            _history.CopyTo(src, dst);
+            _history.Checkout(dst, versionId);
+        }
+        catch (Exception ex) when (ex is ProjectHistoryException or IOException or UnauthorizedAccessException)
+        {
+            App.Services.GetRequiredService<ILogSink>().Error("Opening a project version as a copy failed", ex);
+            _vm.StatusText = Loc.F("main.history.couldnt_open_the_version", ex.Message);
+            return false;
+        }
+        OpenProject(dst);
+        _vm.StatusText = Loc.F("main.history.opened_as", DescribeVersion(version), Path.GetFileName(dst));
+        return true;
+    }
+
+    // Save / Don't Save / Cancel when leaving a project with unsaved edits. True to go on.
+    // A named project saves in place with the prompt up ("Saving…"); an untitled one needs
+    // the file panel, so the prompt closes first. A Save that is cancelled or fails stays put.
+    private async Task<bool> ConfirmLeaveChangesAsync(string title, string message)
+    {
+        if (!HasUnsavedChanges()) return true;
+        bool named = _projectPath is not null;
+        var choice = await new SaveChangesWindow(title, message, ProjectDisplayName(), UnsavedAgeText(),
+                named ? () => DoSaveAsync(saveAs: false) : null)
+            .ShowDialog<SaveChoice>(this);
+        if (choice == SaveChoice.Cancel) return false;
+        return choice != SaveChoice.Save || named || await DoSaveAsync(saveAs: false);
+    }
+
+    // "the version “With bass” (12 Oct, 14:32)" / "the version of 12 Oct, 14:32".
+    private static string DescribeVersion(ProjectVersion v)
+    {
+        string when = v.CreatedAt.LocalDateTime.ToString("d MMM, HH:mm", NotaNum.Culture);
+        return v.Label is { Length: > 0 } label ? Loc.F("main.history.the_version", label, when) : Loc.F("main.history.the_version_of", when);
+    }
+
+    private static bool SamePath(string a, string b)
+        => string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar),
+                         Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),
+                         OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
+}

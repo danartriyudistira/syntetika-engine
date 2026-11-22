@@ -1,0 +1,1363 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices — built-in Nota Aurora editor (instrument kind 5): a wavetable synth in
+// the 700 × 260 card the almanac draws for it, the same body Operator and Volt wear.
+//
+//   Wheels 56   pitch bend and mod wheel, on screen on every tab.
+//   Centre      six tabs:
+//               Osc    — both oscillators side by side (specs/053), each with its own
+//                        table window, table and warp-mode drop-downs, on switch and six
+//                        knobs; the sub and the unison stack share a row under them. Each
+//                        oscillator takes a dropped or picked audio file as its table
+//                        (WAV / FLAC / MP3), and its window follows the position the
+//                        newest sounding voice plays.
+//               Filter — the selected filter's response as a drag pad, with its type,
+//                        slope, cutoff, resonance, env / LFO / key amounts and where each
+//                        source (Osc 1 / Osc 2 / Sub) is sent.
+//               Env    — Env 1 (amp) and Env 2 (free) drawn and draggable; each stage box
+//                        under a graph has a knob, drags, and types on double-click.
+//               LFO    — both LFOs as a table, each naming where it lands, over a window
+//                        that draws the selected LFO's own shape.
+//               Mod    — the 8 × 7 matrix: drag a cell up for +, down for −.
+//               FX     — drive · chorus · reverb, each on its own switch.
+//   Rail 186    Global (voice mode, bend range, volume and pan; position, cutoff and
+//               unison detune have their one home on the Osc and Filter tabs) or Macros
+//               (eight, three to a page, each a value, an amount and one of twelve
+//               targets). Picking Mod brings the macros up, as
+//               the almanac draws that state.
+//
+// Neutral ink is the parameter itself; teal is modulation and what receives it; the accent
+// marks only live or chosen state. Everything is a
+// plugin param → automation / persist / clone, and the card follows automation live.
+//
+// The live tick runs thirty times a second, so Refresh first asks whether ANY parameter
+// moved and returns at once when none did: the readouts, the four graphs and the matrix
+// are only touched when there is something new to say.
+
+using System;
+using System.Collections.Generic;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Platform.Storage;
+using Nota.Application;
+using static Nota.App.DeviceCardKit;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+internal sealed class AuroraInstrumentCard : IInstrumentCard
+{
+    public bool BodyOnly => true;
+    public string Subtitle => "Wavetable";
+    public double CardWidth => 700;
+
+    // The synth's scope (WavetableSynth::kScopeN): live follow and table serials first, the
+    // envelope telemetry after them.
+    private const int WavetableScopeN = 6;
+    private const double WheelsW = 56, RailW = 186, TabH = 20, StatusH = 18, BodyH = 186;
+
+    private static readonly string[] TabNames = { "Osc", "Filter", "Env", "LFO", "Mod", "FX" };
+    private static readonly string[] RailTabs = { "Global", "Macros" };
+    private static readonly string[] Banks = { "Analog", "Pulse", "Formant", "Chroma" };
+    private static readonly string[] BankWords = { "analog", "pulse", "formant", "chroma" };
+    private static readonly string[] WarpModes = { "Off", "Sync", "Bend", "PWM", "Fold" };
+    private static readonly string[] FiltTypes = { "LP", "HP", "BP", "Notch", "Morph" };
+    private static readonly string[] Routes = { "F1", "F2", "1+2", "Dry" };
+    private static readonly string[] SubWaves = { "sin", "sqr", "tri" };
+    private static readonly string[] ShapeNames = { "sin", "tri", "sqr", "S&H" };
+    private static readonly string[] SyncNames = { "free", "1 bar", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64" };
+    private static readonly string[] BendNames = { "±2", "±5", "±12" };
+    private static readonly float[] BendStops = { 1f / 11f, 4f / 11f, 1f };
+    private static readonly string[] DriveModes = { "Tube", "Tape", "Fold" };
+    private static readonly string[] ChorusVoices = { "1×", "2×", "4×" };
+    private static readonly string[] ReverbModes = { "Room", "Hall", "Plate" };
+    private static readonly string[] SrcNames = { "Env 1", "Env 2", "LFO 1", "LFO 2", "Velocity", "Key", "Mod Whl", "Random" };
+    private static readonly string[] DestNames = { "Pitch", "Osc 2", "Position", "Cutoff", "Reso", "Level", "Pan" };
+
+    // The twelve macro targets in the engine's order (WavetableSynth::kMacroDests). The
+    // seven matrix destinations sit at 0, 2, 4, 6, 7, 9 and 11, so a macro saved against
+    // the old seven-entry list still points at the same one.
+    private static readonly string[] MacroDests =
+    {
+        "Pitch", "Warp", "Osc 2 pitch", "Osc 2 level", "Position", "Sub level",
+        "Cutoff", "Reso", "Unison", "Level", "Drive", "Pan",
+    };
+    // What a macro on that target is called on the patch — the word a player reads.
+    private static readonly string[] MacroWords =
+    {
+        "pitch", "shape", "interval", "layer", "shimmer", "weight",
+        "air", "edge", "width", "swell", "grit", "place",
+    };
+
+    // The engine's own maps (WavetableSynth.h), so a readout says what it does.
+    private static double ExpMap(float v, double lo, double hi) => lo * Math.Pow(hi / lo, Math.Clamp(v, 0f, 1f));
+    private static string Hz(float v) => NotaNum.Hz(ExpMap(v, 20, 18000));
+    private static string SlowHz(double hz) => hz >= 9.995 ? NotaNum.Hz(hz) : NotaNum.Unit(hz, hz < 0.995 ? "0.00" : "0.0", "Hz");
+    private static string Secs(float v, double lo, double hi) => NotaNum.Time(ExpMap(v, lo, hi));
+    private static string Pct(float v) => NotaNum.Pct(v);
+    private static string Bip(float v) => NotaNum.Unit((v - 0.5f) * 200, "+0;−0;0", "%");
+    private static string Oct(float v) => NotaNum.Str(Math.Round((v - 0.5) * 6), "+0;−0;0");
+    private static string Semi(float v) => NotaNum.Str(Math.Round((v - 0.5) * 24), "+0;−0;0");
+    private static string Cents(float v) => NotaNum.Unit(Math.Round((v - 0.5) * 100), "+0;−0;0", "c");
+    private static string Detune(float v) => NotaNum.Unit(v * 50, "0", "c");
+    private static string SubOct(float v) => NotaNum.Str(Math.Round((v - 0.5) * 4) - 1, "+0;−0;0");
+    private static int Voices(float v) => 1 + (int)Math.Round(v * 6);
+    private static int Frame(float v) => 1 + (int)Math.Round(v * 15);
+    private static string FrameText(float v) => $"{Frame(v)}/16";
+    private static string ChorusHz(float v) => SlowHz(ExpMap(v, 0.1, 6.0));
+    private static int SyncDiv(float v) => Math.Clamp((int)Math.Round(v * 7), 0, 7);
+    private static string SyncText(float v) => SyncNames[SyncDiv(v)];
+    private static int BendRange(float v) => (int)Math.Round(1 + v * 11);
+    private static string PanText(float v)
+    {
+        double p = (v - 0.5) * 200;
+        return Math.Abs(p) < 0.5 ? "C" : (p < 0 ? "L" : "R") + NotaNum.Str(Math.Abs(p), "0");
+    }
+
+    public Control Build(DeviceCardContext ctx)
+    {
+        var engine = ctx.Engine;
+        int track = ctx.TrackId;
+        int pc = engine.PluginParamCount(track, -1);
+        var idx = new Dictionary<string, int>(pc * 2);
+        for (int i = 0; i < pc; i++) idx[engine.PluginParamId(track, -1, i)] = i;
+        int I(string id) => idx.TryGetValue(id, out var i) ? i : -1;
+        float G(string id) => I(id) is var i and >= 0 ? engine.PluginParamGet(track, -1, i) : 0f;
+        void SetP(string id, float v) { if (I(id) is var i and >= 0) engine.PluginParamSet(track, -1, i, Math.Clamp(v, 0f, 1f)); }
+        void Begin(string id) { if (I(id) >= 0) engine.BeginAutomationWrite(track, AutomationTarget.PluginParam, -1, -1, id); }
+        void End(string id) { if (I(id) >= 0) engine.EndAutomationWrite(track, AutomationTarget.PluginParam, -1, -1, id); }
+        int Sel(string id, int n) => Math.Clamp((int)Math.Round(G(id) * (n - 1)), 0, n - 1);
+        (int, string) P(string id) => (I(id), id);
+
+        var readouts = new List<Action>();
+        int tab = 0, railTab = 0, fsel = 0;   // Osc · Global · Filter 1
+
+        // One table window per oscillator: both are on screen together (specs/053).
+        var stacks = new AuroraTableView[2];
+        for (int o = 0; o < 2; o++) stacks[o] = new AuroraTableView { VerticalAlignment = VerticalAlignment.Stretch, MinHeight = 40 };
+        // Imported tables (specs/053): what each oscillator holds, re-read when its serial or
+        // its source changes, or a parameter moves (an undo, a preset), plus a passing note (loading, an error, a shortened file) for the caption.
+        var tinfo = new AuroraTableInfo[2];
+        bool canImport = engine.TryGetAuroraTableInfo(track, 0, out tinfo[0]);   // false inside a rack chain
+        if (canImport) engine.TryGetAuroraTableInfo(track, 1, out tinfo[1]);
+        var knownSerial = new[] { tinfo[0].Serial & 0xFFFFFF, tinfo[1].Serial & 0xFFFFFF };
+        var note = new string?[2];
+        var noteUntil = new DateTime[2];
+        var loading = new bool[2];
+        var dragging = new bool[2];
+        var capUpdates = new Action?[2];
+        var scope = new float[WavetableScopeN];
+        bool Imported(int o) => tinfo[o].HasTable && tinfo[o].UseCustom;
+        void ReloadInfo(int o)
+        {
+            if (!canImport) return;
+            engine.TryGetAuroraTableInfo(track, o, out tinfo[o]);
+            knownSerial[o] = tinfo[o].Serial & 0xFFFFFF;
+        }
+        var oscDimmed = new List<Control>[] { new(), new() };   // what an off oscillator greys
+        var filtGraph = new VoltFilter(engine, track) { VerticalAlignment = VerticalAlignment.Stretch, MinHeight = 60, Spectrum = new FilterSpectrum(engine, track) };
+        var env1 = new VoltEnv(engine, track) { VerticalAlignment = VerticalAlignment.Stretch, MinHeight = 50 };
+        var env2 = new VoltEnv(engine, track) { VerticalAlignment = VerticalAlignment.Stretch, MinHeight = 50 };
+        var lfoStrip = new AuroraLfoStrip { VerticalAlignment = VerticalAlignment.Stretch };
+
+        var hint = new TextBlock
+        {
+            FontSize = NotaType.Axis, Foreground = TextTertiary, FontFamily = NotaFonts.ValuesFamily,
+            VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 0, 6, 0), TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Action applyFilter = () => { };
+        Action showTab = () => { };
+
+        // ---- the live tick's gate -------------------------------------------------
+        // Thirty times a second the card is asked to follow automation. Reading the
+        // parameter block is one cheap pass; repainting four graphs, a 56-cell matrix and
+        // two hundred readouts is not — so do the pass, and stop there when nothing moved.
+        var snapshot = new float[pc];
+        bool primed = false;
+        bool ParamsMoved()
+        {
+            bool moved = !primed;
+            for (int i = 0; i < pc; i++)
+            {
+                float v = engine.PluginParamGet(track, -1, i);
+                if (v != snapshot[i]) { snapshot[i] = v; moved = true; }
+            }
+            primed = true;
+            return moved;
+        }
+        // Every tick, before the gate: where the newest sounding voice reads each table
+        // (the set Position when nothing sounds), and whether a table changed underneath
+        // (an undo, a preset). The windows repaint only when their lit step moves.
+        void Follow()
+        {
+            int n = engine.InstrumentScope(track, scope);
+            for (int o = 0; o < 2; o++)
+            {
+                bool stale = n >= 4 && (uint)scope[2 + o] != knownSerial[o]
+                          || n >= 6 && ((((int)scope[5] >> o) & 1) != 0) != tinfo[o].UseCustom;
+                if (canImport && stale) { ReloadInfo(o); capUpdates[o]?.Invoke(); }
+                if (note[o] is not null && DateTime.UtcNow > noteUntil[o]) { note[o] = null; capUpdates[o]?.Invoke(); }
+                double pos = n >= 2 && scope[o] >= 0 ? scope[o] : G(o == 0 ? "position" : "osc2position");
+                if (Imported(o) && AuroraTableView.PreviewFor(tinfo[o].Serial, () => FetchPreview(o)) is { } pv)
+                    stacks[o].SetImported(tinfo[o].Serial, pv, pos);
+                else
+                    stacks[o].Set(Sel(o == 0 ? "table" : "osc2table", 4), pos);
+            }
+        }
+        AuroraTableView.Preview? FetchPreview(int o)
+        {
+            int frames = tinfo[o].Frames;
+            if (frames <= 0) return null;
+            int rep = Math.Min(frames, 16), grid = Math.Min(frames, 64);
+            const int points = 96;
+            var data = engine.AuroraTablePreview(track, o, rep, grid, points);
+            return data.Length == (rep + grid) * points ? new AuroraTableView.Preview(data, rep, grid, points, frames) : null;
+        }
+        void Refresh(bool force)
+        {
+            long t0 = UiProbe.Start();
+            Follow();
+            if (!ParamsMoved() && !force) { UiProbe.EndTick(t0); return; }
+            // A parameter moved underneath (an undo, a preset, another card): the table info
+            // may have changed with it, so read it again before the readouts use it.
+            for (int o = 0; o < 2; o++) { ReloadInfo(o); capUpdates[o]?.Invoke(); }
+            applyFilter();
+            for (int o = 0; o < 2; o++)
+                stacks[o].Dimmed = G(o == 0 ? "osc1on" : "osc2on") < 0.5f;
+            env1.Refresh(); env2.Refresh();
+            lfoStrip.Set(Sel("lfo1shape", 4), LfoCycles(0), G("lfo1depth"));
+            // Undim first so the readouts paint over the real colours, not ones saved while the
+            // oscillator was off (a cleared route would come back in its old modulation colour).
+            for (int o = 0; o < 2; o++)
+                foreach (var c in oscDimmed[o]) Inactive.Set(c, false, interactive: true);
+            foreach (var r in readouts) r();
+            // After the readouts' own paint: an oscillator that is off takes the unavailable
+            // look, its controls staying where they are and still usable.
+            for (int o = 0; o < 2; o++)
+                if (G(o == 0 ? "osc1on" : "osc2on") < 0.5f)
+                    foreach (var c in oscDimmed[o]) Inactive.Set(c, true, interactive: true);
+            hint.Text = Hint();
+            UiProbe.EndTick(t0);
+        }
+        void Touch() => Refresh(true);
+
+        // ---- shared builders ------------------------------------------------------
+        static TextBlock Cap(string t, IBrush? c = null) => new()
+        {
+            Text = NotaText.Label(t), FontSize = NotaType.KnobLabel, FontWeight = FontWeight.Medium,
+            Foreground = c ?? TextTertiary,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        static TextBlock Mono(string t, IBrush? c = null, double fs = 8) => new()
+        {
+            Text = t, FontSize = fs, Foreground = c ?? TextSecondary,
+            VerticalAlignment = VerticalAlignment.Center, FontFamily = NotaFonts.ValuesFamily,
+        };
+        static TextBlock Section(string t, IBrush? c = null) => new()
+        {
+            Text = NotaText.Label(t), FontSize = NotaType.DeviceSection, FontWeight = FontWeight.SemiBold,
+            Foreground = c ?? TextPrimary, VerticalAlignment = VerticalAlignment.Center,
+        };
+        static Border Rule() => new() { BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0) };
+
+        Control PKnob(string id, string label, string learn, Func<float, string> fmt,
+            double size = 28, double cellW = 44, IBrush? arc = null)
+        {
+            if (!idx.TryGetValue(id, out var pi)) return new Panel();
+            var value = new TextBlock
+            {
+                Text = fmt(G(id)), FontSize = NotaType.KnobValue, FontFamily = NotaFonts.ValuesFamily,
+                Foreground = TextPrimary, HorizontalAlignment = HorizontalAlignment.Center,
+                TextAlignment = TextAlignment.Center, LineHeight = 10,
+            };
+            var knob = new Knob(G(id), 1.0)
+            {
+                Accent = true, ArcColor = arc, Default = engine.InstrumentParamDefault(track, pi),
+                Width = size, Height = size, HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            knob.Format = v => fmt((float)v);
+            knob.ValueChanged += v => { engine.PluginParamSet(track, -1, pi, (float)v); value.Text = fmt((float)v); Touch(); };
+            knob.GestureBegin += () => Begin(id);
+            knob.GestureEnd += () => End(id);
+            ctx.AddInstFader(pi, knob, value, fmt);
+            MidiLearn.Bind(knob, MidiTarget.PluginParam(track, -1, pi), learn);
+            return label.Length == 0
+                ? new StackPanel { Width = cellW, Spacing = 0, Children = { knob, value } }
+                : KnobCell(label, knob, value, cellW);
+        }
+
+        // A knob with no value line: a macro box prints both its numbers beside the name,
+        // so the two knobs above them need none of their own.
+        Control BareKnob(string id, string learn, Func<float, string> fmt, double size, IBrush? arc = null)
+        {
+            if (!idx.TryGetValue(id, out var pi)) return new Panel();
+            var shadow = new TextBlock();   // not in the tree; AddInstFader needs somewhere to write
+            var knob = new Knob(G(id), 1.0)
+            {
+                Accent = true, ArcColor = arc, Default = engine.InstrumentParamDefault(track, pi),
+                Width = size, Height = size, VerticalAlignment = VerticalAlignment.Center,
+            };
+            knob.ValueChanged += v => { engine.PluginParamSet(track, -1, pi, (float)v); Touch(); };
+            knob.GestureBegin += () => Begin(id);
+            knob.GestureEnd += () => End(id);
+            ctx.AddInstFader(pi, knob, shadow, fmt);
+            readouts.Add(() => ToolTip.SetTip(knob, learn + " · " + fmt(G(id))));
+            MidiLearn.Bind(knob, MidiTarget.PluginParam(track, -1, pi), learn);
+            knob.Format = v => fmt((float)v);
+            ValueEntry.Attach(knob, learn);   // no value line: the box sits on the knob
+            return knob;
+        }
+
+        // A drag value: a caps label over a mono readout. Vertical drag moves it (a
+        // stepped param snaps to its steps), double-click puts it back to its default.
+        Control DragValue(string id, string label, string learn, Func<float, string> fmt, float step = 0, IBrush? ink = null)
+        {
+            if (!idx.TryGetValue(id, out var pi)) return new Panel();
+            var cap = Cap(label); cap.HorizontalAlignment = HorizontalAlignment.Left;
+            var value = Mono(fmt(G(id)), ink ?? TextPrimary, NotaType.RowLabel);
+            var cell = new StackPanel
+            {
+                Spacing = 0, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.SizeNorthSouth),
+                Children = { cap, value },
+            };
+            bool drag = false; double y0 = 0; float v0 = 0;
+            cell.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(cell).Properties.IsLeftButtonPressed) return;
+                if (e.ClickCount == 2)
+                {
+                    Begin(id); SetP(id, engine.InstrumentParamDefault(track, pi)); End(id);
+                    Touch(); e.Handled = true; return;
+                }
+                drag = true; y0 = e.GetPosition(cell).Y; v0 = G(id);
+                Begin(id); e.Pointer.Capture(cell); e.Handled = true;
+            };
+            cell.PointerMoved += (_, e) =>
+            {
+                if (!drag) return;
+                float v = Math.Clamp(v0 + (float)((y0 - e.GetPosition(cell).Y) / 120.0), 0f, 1f);
+                if (step > 0) v = MathF.Round(v / step) * step;
+                if (v == G(id)) return;
+                SetP(id, v); Touch();
+            };
+            void Stop(PointerEventArgs e) { if (!drag) return; drag = false; e.Pointer.Capture(null); End(id); }
+            cell.PointerReleased += (_, e) => Stop(e);
+            cell.PointerCaptureLost += (_, _) => { if (drag) { drag = false; End(id); } };
+            readouts.Add(() =>
+            {
+                value.Text = fmt(G(id));
+                bool moved = Math.Abs(G(id) - engine.InstrumentParamDefault(track, pi)) > 1e-4f;
+                cap.Foreground = moved && ink is null ? TextPrimary : TextTertiary;
+            });
+            ToolTip.SetTip(cell, learn + Loc.T("device.aurora.drag_to_change_double_click"));
+            MidiLearn.Bind(cell, MidiTarget.PluginParam(track, -1, pi), learn);
+            return cell;
+        }
+
+        Control Chips(string id, string[] names, Func<int>? current = null, Action<int>? pick = null, bool fill = false)
+        {
+            int n = names.Length;
+            var seg = Segments(names, current ?? (() => Sel(id, n)),
+                pick ?? (iv => { SetP(id, iv / (float)(n - 1)); Touch(); }), out var sync, fill: fill);
+            readouts.Add(sync);
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(seg, MidiTarget.PluginParam(track, -1, pi), id);
+            return seg;
+        }
+        Control StopChips(string id, string[] names, float[] stops, bool fill = false)
+            => Chips(id, names, () => NearestExact(G(id), stops), iv => { SetP(id, stops[iv]); Touch(); }, fill);
+
+        Control Toggle(string label, string id, Func<string>? live = null)
+        {
+            var host = Switch(label, () => G(id) >= 0.5f, () => { SetP(id, G(id) >= 0.5f ? 0f : 1f); Touch(); }, out var sync, liveLabel: live);
+            readouts.Add(sync);
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(host, MidiTarget.PluginParam(track, -1, pi), label);
+            return host;
+        }
+
+        // Where a modulator actually lands: its strongest route in the matrix, or the
+        // filter it is wired to by the fixed amounts. One that goes nowhere says so.
+        string LfoDest(int src)
+        {
+            int best = -1; double mag = 0.02;
+            for (int d = 0; d < DestNames.Length; d++)
+            {
+                double a = Math.Abs(G($"mtx{src}_{d}") - 0.5) * 2;
+                if (a > mag) { mag = a; best = d; }
+            }
+            string fixedId = src == 2 ? "fil1lfo" : "fil2lfo";
+            double fixedAmt = Math.Abs(G(fixedId) - 0.5) * 2;
+            if (fixedAmt > mag) return $"→ Filter {(src == 2 ? 1 : 2)}";
+            return best < 0 ? "unrouted" : "→ " + DestNames[best];
+        }
+        string EnvDest(int src)
+        {
+            var hits = new List<string>(2);
+            for (int d = 0; d < DestNames.Length; d++)
+                if (Math.Abs(G($"mtx{src}_{d}") - 0.5) * 2 > 0.02) hits.Add(DestNames[d]);
+            if (src == 1)
+            {
+                if (Math.Abs(G("fil1env") - 0.5) * 2 > 0.02 && !hits.Contains("Cutoff")) hits.Add("Cutoff");
+                else if (Math.Abs(G("fil2env") - 0.5) * 2 > 0.02 && !hits.Contains("Cutoff")) hits.Add("Cutoff");
+            }
+            if (src == 0) return "→ Amp";
+            return hits.Count == 0 ? "unrouted" : "→ " + string.Join(" · ", hits);
+        }
+        // How many cycles of an LFO fill the shape window: about two seconds of it, or
+        // four bars' worth when it is locked to the grid.
+        double LfoCycles(int lfo)
+        {
+            string pre = lfo == 0 ? "lfo1" : "lfo2";
+            int div = SyncDiv(G(pre + "sync"));
+            if (div > 0) { double[] beats = { 0, 4, 2, 1, 0.5, 0.25, 0.125, 0.0625 }; return Math.Clamp(16.0 / beats[div] / 4.0, 0.5, 16); }
+            return Math.Clamp(ExpMap(G(pre + "rate"), 0.05, 20.0) * 2.0, 0.5, 16);
+        }
+        int RouteCount()
+        {
+            int n = 0;
+            for (int s = 0; s < SrcNames.Length; s++)
+                for (int d = 0; d < DestNames.Length; d++)
+                    if (Math.Abs(G($"mtx{s}_{d}") - 0.5) > 0.01) n++;
+            return n;
+        }
+        int MacroDest(int m) => Math.Clamp((int)Math.Round(G($"mac{m}dest") * (MacroDests.Length - 1)), 0, MacroDests.Length - 1);
+        bool MacroOn(int m) => Math.Abs(G($"mac{m}amt") - 0.5f) > 0.01f;
+        int MacroAssigned() { int n = 0; for (int m = 0; m < 8; m++) if (MacroOn(m)) n++; return n; }
+        static string Plural(int n, string one, string many) => n + " " + (n == 1 ? one : many);
+
+        // ---- the wheels rail ------------------------------------------------------
+        Control Wheel(string id, double def, bool spring)
+        {
+            var w = new PerformWheel { Default = def, Spring = spring, VerticalAlignment = VerticalAlignment.Stretch, Norm = G(id), HorizontalAlignment = HorizontalAlignment.Center };
+            w.ValueChanged += v => { SetP(id, (float)v); Touch(); };
+            w.GestureBegin += () => Begin(id);
+            w.GestureEnd += () => End(id);
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(w, MidiTarget.PluginParam(track, -1, pi), id);
+            readouts.Add(() => { if (!w.Dragging) w.Norm = G(id); });
+            if (!spring) ValueEntry.Attach(w, w.EntryField(id == "modwheel" ? "Mod wheel" : id, NotaNum.Pct));   // the bend wheel springs back
+            return w;
+        }
+        var bendWheel = Wheel("bend", 0.5, true);
+        var modWheel = Wheel("modwheel", 0, false);
+        var bendVal = Mono("", TextSecondary, NotaType.KnobValue);
+        var modVal = Mono("", TextSecondary, NotaType.KnobValue);
+        bendVal.HorizontalAlignment = modVal.HorizontalAlignment = HorizontalAlignment.Center;
+        readouts.Add(() =>
+        {
+            int range = BendRange(G("bendrange"));
+            double semis = (G("bend") - 0.5) * 2 * range;
+            bool centred = Math.Abs(semis) < 0.05;
+            bendVal.Text = centred ? $"±{range} st" : NotaNum.Unit(semis, "+0.0;−0.0;0", "st");
+            bendVal.Foreground = centred ? TextSecondary : TextPrimary;
+            modVal.Text = NotaNum.Pct(G("modwheel"));
+            modVal.Foreground = G("modwheel") > 1e-3f ? TextPrimary : TextSecondary;
+        });
+        static Grid Pair(Control a, Control b)
+        {
+            var g = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+            g.Children.Add(a); Grid.SetColumn(b, 1); g.Children.Add(b);
+            return g;
+        }
+        var pitchCap = Cap("PITCH"); pitchCap.HorizontalAlignment = HorizontalAlignment.Center;
+        var modCap = Cap("MOD"); modCap.HorizontalAlignment = HorizontalAlignment.Center;
+        var wheelsCap = Cap("WHEELS"); wheelsCap.HorizontalAlignment = HorizontalAlignment.Center;
+        var wheelsGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), RowSpacing = 4, Margin = new Thickness(4, 5) };
+        var wheelRows = new Control[] { wheelsCap, Pair(bendWheel, modWheel), Pair(pitchCap, modCap), Pair(bendVal, modVal) };
+        for (int i = 0; i < wheelRows.Length; i++) { Grid.SetRow(wheelRows[i], i); wheelsGrid.Children.Add(wheelRows[i]); }
+        var wheelsPanel = SectionBox(wheelsGrid);
+        wheelsPanel.Width = WheelsW;
+
+        // ---- Osc tab --------------------------------------------------------------
+        // Both oscillators side by side, nothing behind a pick (specs/053): each column
+        // carries its name and on switch, its table and warp-mode drop-downs, its table
+        // window and its six knobs. Under both, a line of drag values for the sub and the
+        // unison stack. Four banks and five warp modes would not fit as segments in a
+        // 210 px column, so both are drop-downs (more than four choices is one anyway).
+
+        // A drop-down on a stepped parameter: the picked name in a groove with a chevron.
+        // A click opens the list, the wheel steps through it, right-click bubbles to the
+        // parameter menu; MIDI learn and automation follow as for the chips it replaces.
+        Control Drop(string id, string[] names, string learn, double width)
+        {
+            int n = names.Length;
+            var name = Mono("", TextPrimary, NotaType.RowLabel);
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
+            var chev = new Glyph(GlyphKind.ChevronDown, 7)
+            {
+                Foreground = TextTertiary, Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            };
+            DockPanel.SetDock(chev, Dock.Right);
+            var box = new Border
+            {
+                Height = 16, Width = width, Background = NotaPalette.Groove, CornerRadius = NotaRadius.Cell,
+                Padding = new Thickness(6, 0, 5, 0), Cursor = new Cursor(StandardCursorType.Hand),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new DockPanel { Children = { chev, name } },
+            };
+            box.BindResource(Border.BoxShadowProperty, "Shadow.Groove");
+            void Pick(int iv) { SetP(id, iv / (float)(n - 1)); Touch(); }
+            box.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(box).Properties.IsLeftButtonPressed) return;
+                var fly = new MenuFlyout();
+                int cur = Sel(id, n);
+                for (int i = 0; i < n; i++)
+                {
+                    int iv = i;
+                    var mi = new MenuItem { Header = names[i], ToggleType = MenuItemToggleType.Radio, IsChecked = i == cur };
+                    mi.Click += (_, _) => Pick(iv);
+                    fly.Items.Add(mi);
+                }
+                fly.ShowAt(box);
+                e.Handled = true;
+            };
+            box.PointerWheelChanged += (_, e) =>
+            {
+                if (WheelInput.Step(e, box) is not { } st) return;
+                e.Handled = true; if (st == 0) return;
+                Pick(Math.Clamp(Sel(id, n) - st, 0, n - 1));
+            };
+            readouts.Add(() => name.Text = names[Sel(id, n)]);
+            ToolTip.SetTip(box, learn + Loc.T("device.aurora.click_to_pick_scroll_to_step"));
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(box, MidiTarget.PluginParam(track, -1, pi), learn);
+            return box;
+        }
+
+        // ---- imported tables (specs/053) ---------------------------------------------
+        // A position as the frame it lands on, out of the table the oscillator plays.
+        string PosText(int o, float pos)
+        {
+            if (!Imported(o)) return FrameText(pos);
+            int frames = Math.Max(1, tinfo[o].Frames);
+            return frames == 1 ? Loc.T("device.aurora.one_frame") : $"{1 + (int)Math.Round(pos * (frames - 1))}/{frames}";
+        }
+        void Note(int o, string text, double seconds = 4)
+        {
+            note[o] = text.Length == 0 ? null : text;
+            noteUntil[o] = DateTime.UtcNow.AddSeconds(seconds);
+            capUpdates[o]?.Invoke();
+        }
+        async void Import(int o, string path)
+        {
+            if (!canImport || loading[o]) return;
+            loading[o] = true; capUpdates[o]?.Invoke();
+            AuroraImportResult r;
+            try { r = await AuroraTableImporter.ImportAsync(engine, track, o, path); }
+            finally { loading[o] = false; }
+            ReloadInfo(o);
+            Note(o, r.Message);
+            if (r.Loaded) ctx.NotifyChanged();
+            Touch();
+        }
+        async void PickFile(Control anchor, int o)
+        {
+            if (TopLevel.GetTopLevel(anchor) is not { } top) return;
+            var files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = Loc.F("device.aurora.import_a_wavetable_into_osc", o + 1), AllowMultiple = false,
+                FileTypeFilter = new[] { new FilePickerFileType(Loc.T("common.audio")) { Patterns = new[] { "*.wav", "*.flac", "*.mp3" } } },
+            });
+            if (files.Count > 0 && files[0].TryGetLocalPath() is { } p) Import(o, p);
+        }
+        void AcceptDrops(Control target, int o)
+        {
+            if (!canImport) return;
+            DragDrop.SetAllowDrop(target, true);
+            void Hover(bool on) { dragging[o] = on; stacks[o].DragOver = on; capUpdates[o]?.Invoke(); }
+            DragDrop.AddDragOverHandler(target, (_, e) =>
+            {
+                if (!BrowserView.IsAcceptableDrag(e)) return;
+                e.DragEffects = DragDropEffects.Copy; Hover(true); ctx.HideDropGlow(); e.Handled = true;
+            });
+            DragDrop.AddDragLeaveHandler(target, (_, _) => Hover(false));
+            DragDrop.AddDropHandler(target, (_, e) =>
+            {
+                Hover(false);
+                foreach (var it in BrowserView.DroppedItems(e))
+                    if (it.Kind is not (Nota.Presentation.BrowserItemKind.MidiFile or Nota.Presentation.BrowserItemKind.Preset
+                            or Nota.Presentation.BrowserItemKind.Project)
+                        && it.Path is { Length: > 0 } p && AuroraTableImporter.IsSupported(p))
+                    {
+                        Import(o, p);
+                        break;
+                    }
+                e.Handled = true;
+            });
+        }
+
+        // The table drop-down: the four banks, then (when the oscillator can hold one) the
+        // imported table by name, Import… and Remove. While the imported table plays, the
+        // bank row it would fall back to is shown greyed (FR-010).
+        Control TableDrop(int o, string id, string learn)
+        {
+            const int n = 4;
+            var name = Mono("", TextPrimary, NotaType.RowLabel);
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
+            var chev = new Glyph(GlyphKind.ChevronDown, 7)
+            {
+                Foreground = TextTertiary, Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            };
+            DockPanel.SetDock(chev, Dock.Right);
+            var box = new Border
+            {
+                Height = 16, Width = 74, Background = NotaPalette.Groove, CornerRadius = NotaRadius.Cell,
+                Padding = new Thickness(6, 0, 5, 0), Cursor = new Cursor(StandardCursorType.Hand),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new DockPanel { Children = { chev, name } },
+            };
+            box.BindResource(Border.BoxShadowProperty, "Shadow.Groove");
+            void Pick(int iv)
+            {
+                bool was = Imported(o);
+                if (I(id) >= 0) AuroraTableImporter.PickBank(engine, track, o, I(id), id, iv / (float)(n - 1));
+                if (was) { ReloadInfo(o); ctx.NotifyChanged(); }
+                Touch();
+            }
+            box.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(box).Properties.IsLeftButtonPressed) return;
+                var fly = new MenuFlyout();
+                int cur = Sel(id, n);
+                bool imp = Imported(o);
+                for (int i = 0; i < n; i++)
+                {
+                    int iv = i;
+                    var mi = new MenuItem { Header = Banks[i], ToggleType = MenuItemToggleType.Radio, IsChecked = !imp && i == cur };
+                    if (imp && i == cur) mi.Foreground = TextTertiary;   // what it falls back to
+                    mi.Click += (_, _) => Pick(iv);
+                    fly.Items.Add(mi);
+                }
+                if (canImport)
+                {
+                    fly.Items.Add(new Separator());
+                    if (tinfo[o].HasTable)
+                    {
+                        var own = new MenuItem { Header = tinfo[o].Name, ToggleType = MenuItemToggleType.Radio, IsChecked = imp };
+                        own.Click += (_, _) => { engine.AuroraSetSource(track, o, true, undoable: true); ReloadInfo(o); ctx.NotifyChanged(); Touch(); };
+                        fly.Items.Add(own);
+                    }
+                    var import = new MenuItem { Header = Loc.T("device.aurora.import") };
+                    import.Click += (_, _) => PickFile(box, o);
+                    fly.Items.Add(import);
+                    if (tinfo[o].HasTable)
+                    {
+                        fly.Items.Add(new Separator());
+                        fly.Items.Add(MenuKit.Danger(Loc.T("device.aurora.remove_imported_table"), null,
+                            () => { engine.AuroraClearTable(track, o); ReloadInfo(o); ctx.NotifyChanged(); Touch(); }));
+                    }
+                }
+                fly.ShowAt(box);
+                e.Handled = true;
+            };
+            box.PointerWheelChanged += (wt, e) =>
+            {
+                if (WheelInput.Step(e, wt ?? box) is not { } st) return;
+                e.Handled = true; if (st == 0) return;
+                Pick(Math.Clamp(Sel(id, n) - st, 0, n - 1));
+            };
+            readouts.Add(() =>
+            {
+                name.Text = Imported(o) ? tinfo[o].Name : Banks[Sel(id, n)];
+                ToolTip.SetTip(box, Imported(o)
+                    ? Loc.F("device.aurora.imported_click_for_the_banks", learn, tinfo[o].Name)
+                    : learn + Loc.T("device.aurora.click_to_pick_or_import"));
+            });
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(box, MidiTarget.PluginParam(track, -1, pi), learn);
+            return box;
+        }
+
+        // What steers the position: the strongest matrix route into Position (it moves
+        // both oscillators, so both windows name it).
+        string PosModText()
+        {
+            int best = -1; double mag = 0.02;
+            for (int s = 0; s < SrcNames.Length; s++)
+            {
+                double a = Math.Abs(G($"mtx{s}_2") - 0.5) * 2;
+                if (a > mag) { mag = a; best = s; }
+            }
+            return best < 0 ? "" : SrcNames[best].ToLowerInvariant() + " → pos";
+        }
+
+        Control OscColumn(int o)
+        {
+            string pre = o == 0 ? "osc1" : "osc2";
+            string nm = Loc.F("device.aurora.osc_n", o + 1);
+            string tableId = o == 0 ? "table" : "osc2table";
+            string posId = o == 0 ? "position" : "osc2position";
+
+            var head = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto,Auto"), ColumnSpacing = 5, Height = 18 };
+            var tableDrop = TableDrop(o, tableId, Loc.F("device.aurora.osc_table", nm));
+            var warpDrop = Drop(pre + "warpmode", WarpModes, Loc.F("device.aurora.osc_warp_mode", nm), 52);
+            var headCells = new Control[] { Section(nm), Toggle("", pre + "on", () => G(pre + "on") >= 0.5f ? "on" : "off"), new Panel(), tableDrop, warpDrop };
+            for (int i = 0; i < headCells.Length; i++) { Grid.SetColumn(headCells[i], i); head.Children.Add(headCells[i]); }
+
+            // The window's caption, one line in its title row: the bank, the frame and what
+            // modulates the position.
+            var bankCap = Mono("", TextSecondary, NotaType.Axis);
+            var frameCap = Mono("", TextPrimary, NotaType.Axis);
+            var modCap = Mono("", Teal, NotaType.Axis);
+            modCap.HorizontalAlignment = HorizontalAlignment.Right;
+            // The caption names the source and its frame, or what is happening to it: a drop
+            // about to land, a file loading, why one was refused, a table a project lost.
+            void UpdateCap()
+            {
+                string? state = dragging[o] ? Loc.F("device.aurora.drop_to_load_into", nm)
+                    : loading[o] ? Loc.T("device.aurora.loading")
+                    : note[o];
+                if (state is null && tinfo[o].Missing && !tinfo[o].HasTable) state = Loc.F("device.aurora.missing", tinfo[o].Name);
+                if (state is not null) { bankCap.Text = state; frameCap.Text = ""; return; }
+                if (Imported(o))
+                {
+                    bankCap.Text = tinfo[o].Name;
+                    frameCap.Text = PosText(o, G(posId));
+                }
+                else
+                {
+                    bankCap.Text = Banks[Sel(tableId, 4)];
+                    frameCap.Text = FrameText(G(posId));
+                }
+            }
+            capUpdates[o] = UpdateCap;
+            readouts.Add(() =>
+            {
+                UpdateCap();
+                // Nothing drives Position: say so, greyed, as the single window did.
+                string mod = PosModText();
+                modCap.Text = mod.Length > 0 ? mod : Loc.T("device.aurora.no_modulation");
+                modCap.Foreground = mod.Length > 0 ? Teal : TextDisabled;
+            });
+            bankCap.TextTrimming = TextTrimming.CharacterEllipsis;
+            var capRow = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"), ColumnSpacing = 5,
+                Margin = new Thickness(7, 3, 7, 0), VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false,
+            };
+            capRow.Children.Add(bankCap);
+            Grid.SetColumn(frameCap, 1); capRow.Children.Add(frameCap);
+            Grid.SetColumn(modCap, 2); capRow.Children.Add(modCap);
+            stacks[o].TopInset = 12;   // the caption line in the window's top edge
+            var window = new Panel { Children = { stacks[o], capRow } };
+
+            // Position is what the modulators reach for on this synth.
+            var knobs = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*,*,*") };
+            var cells = new[]
+            {
+                PKnob(posId, "Position", nm + " Position", v => PosText(o, v), 34, 35, Teal),   // what the modulators reach for: the modulation mark
+                PKnob(o == 0 ? "warp" : "osc2warp", "Warp", nm + " Warp", Pct, 34, 35),
+                PKnob(pre + "level", "Level", nm + " Level", Pct, 34, 35),
+                PKnob(pre + "oct", Loc.T("device.aurora.oct"), nm + " Octave", Oct, 34, 35),
+                PKnob(pre + "semi", Loc.T("device.aurora.semi"), nm + " Semi", Semi, 34, 35),
+                PKnob(pre + "detune", Loc.T("device.aurora.fine"), nm + " Fine", Cents, 34, 35),
+            };
+            for (int i = 0; i < cells.Length; i++)
+            {
+                cells[i].HorizontalAlignment = HorizontalAlignment.Center;
+                Grid.SetColumn(cells[i], i); knobs.Children.Add(cells[i]);
+            }
+
+            var col = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 3 };
+            Grid.SetRow(window, 1); Grid.SetRow(knobs, 2);
+            col.Children.Add(head); col.Children.Add(window); col.Children.Add(knobs);
+            // Off: everything but the name and the switch takes the unavailable look (the
+            // stack greys itself through Dimmed).
+            oscDimmed[o].AddRange(new Control[] { tableDrop, warpDrop, capRow, knobs });
+            col.Background = Brushes.Transparent;   // the whole column takes a dropped file
+            AcceptDrops(col, o);
+            return col;
+        }
+
+        // The sub and the unison stack are drag values, as the almanac draws them: a caps
+        // label over a mono readout, dragged up or down, double-clicked back to default.
+        var subUni = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9, VerticalAlignment = VerticalAlignment.Center };
+        foreach (var c in new Control[]
+        {
+            Cap("SUB"), Chips("subwave", SubWaves),
+            DragValue("sublevel", "LEVEL", "Sub Level", Pct),
+            DragValue("suboct", "OCT", "Sub Octave", SubOct, 1f / 4f),
+            new Border { Width = 1, Margin = new Thickness(2, 3), Background = NotaPalette.GraphBorder },
+            Cap("UNI"),
+            DragValue("unison", "VOICES", "Unison Voices", v => NotaNum.Str(Voices(v), "0"), 1f / 6f),
+            DragValue("unidetune", "DETUNE", "Unison Detune", Detune, 0, Teal),
+            DragValue("unispread", "SPREAD", "Unison Spread", Pct, 0, Teal),
+        }) subUni.Children.Add(c);
+        var subUniRow = new Border
+        {
+            BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(0, 3, 0, 0), Child = subUni,
+        };
+
+        var oscPair = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*"), ColumnSpacing = 5 };
+        var col1 = OscColumn(0);
+        var oscRule = new Border { Width = 1, Background = NotaPalette.GraphBorder, Margin = new Thickness(0, 1) };
+        var col2 = OscColumn(1);
+        Grid.SetColumn(oscRule, 1); Grid.SetColumn(col2, 2);
+        oscPair.Children.Add(col1); oscPair.Children.Add(oscRule); oscPair.Children.Add(col2);
+        var oscBodyGrid = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = 3 };
+        Grid.SetRow(subUniRow, 1);
+        oscBodyGrid.Children.Add(oscPair); oscBodyGrid.Children.Add(subUniRow);
+        var oscBody = new Border { Padding = new Thickness(5, 3), Child = oscBodyGrid };
+
+        // ---- Filter tab -----------------------------------------------------------
+        // Both filters share one column of controls; picking 1 or 2 swaps which set is on
+        // screen — a knob is bound to one param index for its life.
+        var filtCells = new Panel[5];
+        var filtStack = new Control[2, 5];
+        string[] filtIds = { "freq", "reso", "env", "lfo", "key" };
+        string[] filtLbl = { "Freq", "Reso", "Env", "LFO", "Key" };
+        var filtKnobRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*,*"), VerticalAlignment = VerticalAlignment.Center };
+        for (int k = 0; k < 5; k++)
+        {
+            filtCells[k] = new Panel();
+            Grid.SetColumn(filtCells[k], k);
+            filtKnobRow.Children.Add(filtCells[k]);
+        }
+        for (int f = 0; f < 2; f++)
+        {
+            for (int k = 0; k < 5; k++)
+            {
+                // Filter 1's cutoff and resonance kept the ids the first Aurora shipped.
+                string id = f == 0
+                    ? k switch { 0 => "cutoff", 1 => "resonance", _ => "fil1" + filtIds[k] }
+                    : "fil2" + filtIds[k];
+                Func<float, string> fmt = k switch { 0 => Hz, 1 => Pct, 4 => Pct, _ => Bip };
+                Control cell = PKnob(id, filtLbl[k], $"Filter {f + 1} {filtLbl[k]}", fmt, 24, 33, k >= 2 ? Teal : null);
+                cell.IsVisible = false;
+                filtStack[f, k] = cell;
+                filtCells[k].Children.Add(cell);
+            }
+        }
+        var filtTypeHosts = new Panel[2];
+        var filtSlopeHosts = new Panel[2];
+        for (int f = 0; f < 2; f++)
+        {
+            string pre = f == 0 ? "fil1" : "fil2";
+            filtTypeHosts[f] = new Panel { Children = { Chips(pre + "type", FiltTypes) } };
+            filtSlopeHosts[f] = new Panel
+            {
+                Children =
+                {
+                    Chips(pre + "slope", new[] { "12 dB", "24 dB" }, () => G(pre + "slope") >= 0.5f ? 1 : 0,
+                        iv => { SetP(pre + "slope", iv); Touch(); }),
+                },
+            };
+        }
+        var filtPick = Segments(new[] { "1", "2" }, () => fsel, iv => { fsel = iv; Touch(); }, out var filtPickSync);
+        readouts.Add(filtPickSync);
+        var filtTypeStack = new Panel();
+        foreach (var h in filtTypeHosts) filtTypeStack.Children.Add(h);
+        var filtSlopeStack = new Panel();
+        foreach (var h in filtSlopeHosts) filtSlopeStack.Children.Add(h);
+        filtSlopeStack.HorizontalAlignment = HorizontalAlignment.Right;
+
+        var filtHead = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"), ColumnSpacing = 5 };
+        var filtHeadCells = new Control[] { Cap("FILTER"), filtPick, filtSlopeStack };
+        for (int i = 0; i < filtHeadCells.Length; i++) { Grid.SetColumn(filtHeadCells[i], i); filtHead.Children.Add(filtHeadCells[i]); }
+
+        Control RouteRow(string title, string id)
+        {
+            var chips = Chips(id, Routes, fill: true);
+            var g = new Grid { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 4 };
+            g.Children.Add(Cap(title));
+            Grid.SetColumn(chips, 1); g.Children.Add(chips);
+            return g;
+        }
+        var modeChips = Chips("filseries", new[] { "Parallel", "Series" }, () => G("filseries") >= 0.5f ? 1 : 0,
+            iv => { SetP("filseries", iv); Touch(); }, fill: true);
+        var modeRow = new Grid { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 4 };
+        modeRow.Children.Add(Cap("MODE"));
+        Grid.SetColumn(modeChips, 1); modeRow.Children.Add(modeChips);
+
+        // No "ROUTING" caption: three rows named OSC 1 / OSC 2 / SUB over F1 · F2 · 1+2 ·
+        // Dry say what they are, and the line it would cost is the line MODE needs.
+        var routing = new StackPanel
+        {
+            Spacing = 2, VerticalAlignment = VerticalAlignment.Center,
+            Children = { RouteRow("OSC 1", "routeosc1"), RouteRow("OSC 2", "routeosc2"), RouteRow("SUB", "routesub"), modeRow },
+        };
+        var routingFrame = new Border
+        {
+            BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(0, 3, 0, 0), Child = routing,
+        };
+        var filtRight = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*"), RowSpacing = 3, Width = 186 };
+        var filtRightRows = new Control[] { filtHead, filtTypeStack, filtKnobRow, routingFrame };
+        for (int i = 0; i < filtRightRows.Length; i++) { Grid.SetRow(filtRightRows[i], i); filtRight.Children.Add(filtRightRows[i]); }
+
+        applyFilter = () =>
+        {
+            string pre = fsel == 0 ? "fil1" : "fil2";
+            string freq = fsel == 0 ? "cutoff" : "fil2freq", res = fsel == 0 ? "resonance" : "fil2reso";
+            filtGraph.Target($"FILTER {fsel + 1}", P(freq), P(res), Sel(pre + "type", 5));
+            filtGraph.Refresh();
+            for (int f = 0; f < 2; f++)
+            {
+                filtTypeHosts[f].IsVisible = filtSlopeHosts[f].IsVisible = f == fsel;
+                for (int k = 0; k < 5; k++) filtStack[f, k].IsVisible = f == fsel;
+            }
+        };
+        var filtGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 7 };
+        filtGrid.Children.Add(filtGraph);
+        Grid.SetColumn(filtRight, 1); filtGrid.Children.Add(filtRight);
+        var filtBody = new Border { Padding = new Thickness(7, 5), Child = filtGrid };
+
+        // ---- Env tab --------------------------------------------------------------
+        // Env 1 (amp) and Env 2 (free) side by side on one time scale (#531): drag the curve,
+        // bend decay and release by their diamonds, Lin / Exp in each header.
+        var envScale = new EnvTimeScale();
+        Control EnvKnobCell(string id, string label, string learn, Func<float, string> fmt) => PKnob(id, label, learn, fmt, 24, 40);
+        Control EnvRoute(Func<string> route)
+        {
+            var dest = Mono("", Teal, NotaType.Axis);
+            readouts.Add(() => dest.Text = route());
+            return dest;
+        }
+        var envPanel1 = EnvPanel.Build(env1, new EnvPanel.Spec("ENV 1", new[] { "attack", "decay", "sustain", "release" },
+                new[] { "dcurve", "rcurve", "envexp" }, (0.001, 2.0), (0.002, 3.0), (0.002, 4.0)),
+            P, EnvKnobCell, (id, names) => Chips(id, names), EnvRoute(() => "→ Amp"), envScale);
+        var envPanel2 = EnvPanel.Build(env2, new EnvPanel.Spec("ENV 2", new[] { "env2attack", "env2decay", "env2sustain", "env2release" },
+                new[] { "env2dcurve", "env2rcurve", "env2exp" }, (0.001, 2.0), (0.002, 3.0), (0.002, 4.0)),
+            P, EnvKnobCell, (id, names) => Chips(id, names), EnvRoute(() => EnvDest(1)), envScale);
+        EnvPanel.FollowVoice(ctx, WavetableScopeN, () => tab == 2, env1, env2);
+        var env2Host = new Border
+        {
+            BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(1, 0, 0, 0),
+            Padding = new Thickness(6, 0, 0, 0), Child = envPanel2,
+        };
+        var envGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 6 };
+        envGrid.Children.Add(envPanel1);
+        Grid.SetColumn(env2Host, 1); envGrid.Children.Add(env2Host);
+        var envBody = new Border { Padding = new Thickness(7, 5), Child = envGrid };
+
+        // ---- LFO tab --------------------------------------------------------------
+        var lfoGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("48,Auto,*,*,*,Auto"), ColumnSpacing = 5,
+            RowDefinitions = new RowDefinitions("*,*"),
+        };
+        for (int l = 0; l < 2; l++)
+        {
+            string pre = l == 0 ? "lfo1" : "lfo2";
+            string nm = l == 0 ? "LFO 1" : "LFO 2";
+            int src = l + 2;
+            if (l > 0) { var rule = Rule(); Grid.SetRow(rule, 1); Grid.SetColumnSpan(rule, 6); lfoGrid.Children.Add(rule); }
+            void Cell(Control c, int col) { Grid.SetRow(c, l); Grid.SetColumn(c, col); lfoGrid.Children.Add(c); }
+            Cell(Section(nm), 0);
+            Cell(Chips(pre + "shape", ShapeNames), 1);
+            string rateId = pre + "rate", syncId = pre + "sync";
+            Cell(PKnob(rateId, "RATE", nm + " Rate", v => SyncDiv(G(syncId)) > 0 ? SyncText(G(syncId)) : SlowHz(ExpMap(v, 0.05, 20)), 28, 46), 2);
+            Cell(PKnob(pre + "depth", "DEPTH", nm + " Depth", Pct, 28, 46, Teal), 3);
+            Cell(PKnob(syncId, "SYNC", nm + " Sync", SyncText, 28, 46), 4);
+            var dest = Mono("", Teal, NotaType.Axis);
+            dest.Width = 58; dest.TextAlignment = TextAlignment.Right;
+            readouts.Add(() => dest.Text = LfoDest(src));
+            Cell(dest, 5);
+        }
+        // The shape window follows whichever LFO you last touched — the pick doubles as
+        // the label, so the picture is never anonymous.
+        int lfoShown = 0;
+        var lfoShapeCap = Cap(Loc.T("device.aurora.shape_lfo_1_caps"));
+        var lfoShapeSum = Mono("", TextSecondary, NotaType.Axis);
+        var lfoPick = Segments(new[] { "1", "2" }, () => lfoShown, iv => { lfoShown = iv; Touch(); }, out var lfoPickSync);
+        readouts.Add(lfoPickSync);
+        readouts.Add(() =>
+        {
+            string pre = lfoShown == 0 ? "lfo1" : "lfo2";
+            lfoShapeCap.Text = Loc.F("device.aurora.shape_lfo", lfoShown + 1);
+            lfoStrip.Set(Sel(pre + "shape", 4), LfoCycles(lfoShown), G(pre + "depth"));
+            lfoShapeSum.Text = $"{ShapeNames[Sel(pre + "shape", 4)]} · "
+                + (SyncDiv(G(pre + "sync")) > 0 ? SyncText(G(pre + "sync")) : SlowHz(ExpMap(G(pre + "rate"), 0.05, 20)))
+                + $" · depth {Pct(G(pre + "depth"))}";
+        });
+        var lfoShapeRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto"), ColumnSpacing = 6, Height = 40 };
+        var lfoShapeCells = new Control[] { lfoShapeCap, lfoPick, lfoStrip, lfoShapeSum };
+        for (int i = 0; i < lfoShapeCells.Length; i++) { Grid.SetColumn(lfoShapeCells[i], i); lfoShapeRow.Children.Add(lfoShapeCells[i]); }
+        lfoStrip.Margin = new Thickness(0, 5);
+        var lfoShapeFrame = new Border
+        {
+            BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0), Child = lfoShapeRow,
+        };
+        var lfoOuter = new Grid { RowDefinitions = new RowDefinitions("*,Auto") };
+        lfoOuter.Children.Add(lfoGrid);
+        Grid.SetRow(lfoShapeFrame, 1); lfoOuter.Children.Add(lfoShapeFrame);
+        var lfoBody = new Border { Padding = new Thickness(7, 3), Child = lfoOuter };
+
+        // ---- Mod tab --------------------------------------------------------------
+        var mtxIdx = new int[SrcNames.Length, DestNames.Length];
+        for (int s = 0; s < SrcNames.Length; s++)
+            for (int d = 0; d < DestNames.Length; d++) mtxIdx[s, d] = I($"mtx{s}_{d}");
+        var matrix = new VoltMatrix(engine, track, mtxIdx, SrcNames, DestNames) { VerticalAlignment = VerticalAlignment.Stretch };
+        matrix.Changed += Touch;
+        readouts.Add(matrix.Refresh);
+        var modHint = new TextBlock
+        {
+            Text = MenuKit.Keys(Loc.T("device.aurora.drag_a_cell_up_adds")), FontSize = NotaType.Axis,
+            Foreground = TextDisabled, VerticalAlignment = VerticalAlignment.Center,
+        };
+        var modGrid = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = 1 };
+        modGrid.Children.Add(matrix);
+        Grid.SetRow(modHint, 1); modGrid.Children.Add(modHint);
+        var modBody = new Border { Padding = new Thickness(7, 3), Child = modGrid };
+
+        // ---- FX tab ---------------------------------------------------------------
+        Control FxBlock(string title, string onId, string[] modes, string modeId, params Control[] knobs)
+        {
+            var chips = Chips(modeId, modes, fill: true);
+            var head = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            var cap = Cap(title, NotaPalette.TextStrong);
+            head.Children.Add(cap);
+            var sw = Toggle("", onId);
+            Grid.SetColumn(sw, 1); head.Children.Add(sw);
+            var row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            foreach (var k in knobs) row.Children.Add(k);
+            var g = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*"), RowSpacing = 4 };
+            g.Children.Add(head);
+            Grid.SetRow(chips, 1); g.Children.Add(chips);
+            Grid.SetRow(row, 2); g.Children.Add(row);
+            var box = new Border
+            {
+                Background = NotaPalette.SurfaceRaised, BorderBrush = BorderDef, BorderThickness = new Thickness(1),
+                CornerRadius = NotaRadius.Field, Padding = new Thickness(6, 5), Child = g,
+            };
+            readouts.Add(() =>
+            {
+                bool on = G(onId) >= 0.5f;
+                box.Background = on ? NotaPalette.SurfaceRaised : NotaPalette.BgSunken;
+                box.BorderBrush = on ? BorderDef : NotaPalette.GraphBorder;
+                cap.Foreground = on ? NotaPalette.TextStrong : TextDisabled;
+            });
+            return box;
+        }
+        var fxGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*"), ColumnSpacing = 6 };
+        var fxBlocks = new[]
+        {
+            FxBlock("DRIVE", "fxdriveon", DriveModes, "fxdrivemode",
+                PKnob("fxdrive", "AMOUNT", "Drive", Pct, 32, 48),
+                PKnob("fxtone", "TONE", "Drive Tone", Bip, 28, 44)),
+            FxBlock("CHORUS", "fxchoruson", ChorusVoices, "fxchorusvoices",
+                PKnob("fxchorus", "AMOUNT", "Chorus", Pct, 32, 48),
+                PKnob("fxchorusrate", "RATE", "Chorus Rate", ChorusHz, 28, 44)),
+            FxBlock("REVERB", "fxreverbon", ReverbModes, "fxreverbmode",
+                PKnob("fxreverb", "AMOUNT", "Reverb", Pct, 32, 48),
+                PKnob("fxreverbsize", "SIZE", "Reverb Size", Pct, 28, 44)),
+        };
+        for (int i = 0; i < fxBlocks.Length; i++) { Grid.SetColumn(fxBlocks[i], i); fxGrid.Children.Add(fxBlocks[i]); }
+        var fxBody = new Border { Padding = new Thickness(7, 5), Child = fxGrid };
+
+        // ---- the tab strip --------------------------------------------------------
+        var bodies = new Control[] { oscBody, filtBody, envBody, lfoBody, modBody, fxBody };
+        var tabCells = new Border[TabNames.Length];
+        var tabTexts = new TextBlock[TabNames.Length];
+        var clearAll = TextButton(Loc.T("common.clear_all"));
+        clearAll.Margin = new Thickness(0, 0, 6, 0);
+        ToolTip.SetTip(clearAll, Loc.T("device.aurora.zero_every_route_in_the"));
+        clearAll.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(clearAll).Properties.IsLeftButtonPressed) return;
+            matrix.ClearAll(); Touch(); e.Handled = true;
+        };
+        var tabRow = new StackPanel { Orientation = Orientation.Horizontal };
+        for (int i = 0; i < TabNames.Length; i++)
+        {
+            int iv = i;
+            var tb = new TextBlock { Text = TabNames[i], FontSize = NotaType.DeviceSection, VerticalAlignment = VerticalAlignment.Center };
+            var cell = new Border
+            {
+                Padding = new Thickness(7, 0), BorderThickness = new Thickness(0, 0, 0, 2),
+                Cursor = new Cursor(StandardCursorType.Hand), Child = tb,
+            };
+            cell.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(cell).Properties.IsLeftButtonPressed) return;
+                tab = iv; showTab(); e.Handled = true;
+            };
+            tabCells[i] = cell; tabTexts[i] = tb; tabRow.Children.Add(cell);
+        }
+        var tabStrip = new Grid { Height = TabH, ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        tabStrip.Children.Add(tabRow);
+        Grid.SetColumn(hint, 1); tabStrip.Children.Add(hint);
+        Grid.SetColumn(clearAll, 2); tabStrip.Children.Add(clearAll);
+
+        Action showRailTab = () => { };
+        showTab = () =>
+        {
+            for (int i = 0; i < TabNames.Length; i++)
+            {
+                bool on = i == tab;
+                tabCells[i].Background = on ? NotaPalette.SurfaceRaised : Brushes.Transparent;
+                tabCells[i].BorderBrush = on ? Brass : Brushes.Transparent;
+                tabTexts[i].Foreground = on ? TextPrimary : TextTertiary;
+                tabTexts[i].FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal;
+                bodies[i].IsVisible = on;
+            }
+            clearAll.IsVisible = tab == 4;
+            // The matrix and the macros are one subject: opening Mod brings the macros up
+            // beside it, the way the almanac draws that state.
+            if (tab == 4 && railTab != 1) { railTab = 1; showRailTab(); return; }
+            Touch();
+        };
+        var tabHost = new Panel { MinHeight = BodyH - TabH };
+        foreach (var b in bodies) tabHost.Children.Add(b);
+        var tabGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        tabGrid.Children.Add(HeaderStrip(tabStrip));
+        Grid.SetRow(tabHost, 1); tabGrid.Children.Add(tabHost);
+        var tabPanel = SectionBox(tabGrid);
+
+        // ---- rail · Global --------------------------------------------------------
+        var monoChips = Chips("mono", new[] { "Poly", "Mono" }, () => G("mono") >= 0.5f ? 1 : 0, iv => { SetP("mono", iv); Touch(); });
+        monoChips.HorizontalAlignment = HorizontalAlignment.Right;
+        var monoRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        monoRow.Children.Add(Cap("VOICES"));
+        Grid.SetColumn(monoChips, 1); monoRow.Children.Add(monoChips);
+
+        var bendChips = StopChips("bendrange", BendNames, BendStops);
+        bendChips.HorizontalAlignment = HorizontalAlignment.Right;
+        var bendRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        bendRow.Children.Add(Cap("BEND"));
+        Grid.SetColumn(bendChips, 1); bendRow.Children.Add(bendChips);
+
+        // Volume · Pan centred in the rail — the track meter already shows the level.
+        var globalBottom = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 4,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                PKnob("gain", "VOLUME", "Volume", Pct, NotaSize.KnobMain, 46),
+                PKnob("outpan", "PAN", "Out Pan", PanText, NotaSize.KnobRegular, 42),
+            },
+        };
+
+        var globalTop = new StackPanel
+        {
+            Spacing = 4, Margin = new Thickness(8, 5, 8, 0),
+            Children =
+            {
+                monoRow,
+                bendRow,
+            },
+        };
+        var globalGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        globalGrid.Children.Add(globalTop);
+        var globalBottomFrame = new Border
+        {
+            BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0),
+            Margin = new Thickness(8, 4, 8, 4), Padding = new Thickness(0, 3, 0, 0), Child = globalBottom,
+        };
+        Grid.SetRow(globalBottomFrame, 1); globalGrid.Children.Add(globalBottomFrame);
+
+        // ---- rail · Macros --------------------------------------------------------
+        // Three to a page, as the almanac draws them: a value knob, an amount knob and the
+        // target it names. The dashed strip under them names the next page and whether
+        // anything on it is in use; clicking it turns the page (right-click turns back).
+        const int MacrosPerPage = 3;
+        int macroPage = 0;
+        int MacroPages() => (8 + MacrosPerPage - 1) / MacrosPerPage;
+        var macroBoxes = new Border[8];
+        var macroList = new StackPanel { Spacing = 3 };
+        for (int m = 0; m < 8; m++)
+        {
+            int mv = m;
+            string destId = $"mac{mv}dest";
+            var name = new TextBlock
+            {
+                FontSize = NotaType.KnobLabel, FontWeight = FontWeight.Medium,
+                Foreground = NotaPalette.TextStrong, TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            var dest = new TextBlock
+            {
+                FontSize = NotaType.Axis, Foreground = Teal, Background = Brushes.Transparent,
+                Cursor = new Cursor(StandardCursorType.Hand), TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            var nums = Mono("", TextSecondary, NotaType.Axis);
+            ToolTip.SetTip(dest, Loc.T("device.aurora.click_for_the_next_target"));
+            void Step(int dir)
+            {
+                int n = MacroDests.Length;
+                Begin(destId);
+                SetP(destId, ((MacroDest(mv) + dir % n + n) % n) / (float)(n - 1));
+                End(destId);
+                Touch();
+            }
+            dest.PointerPressed += (_, e) =>
+            {
+                var pt = e.GetCurrentPoint(dest).Properties;
+                if (pt.IsLeftButtonPressed) { Step(+1); e.Handled = true; }
+                else if (pt.IsRightButtonPressed) { Step(-1); e.Handled = true; }
+            };
+            if (I(destId) is var dpi and >= 0) MidiLearn.Bind(dest, MidiTarget.PluginParam(track, -1, dpi), $"Macro {mv + 1} Dest");
+
+            var words = new StackPanel { Spacing = 0, VerticalAlignment = VerticalAlignment.Center, Children = { name, dest, nums } };
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"), ColumnSpacing = 3 };
+            var valKnob = BareKnob($"mac{mv}val", $"Macro {mv + 1}", Pct, 34);
+            var amtKnob = BareKnob($"mac{mv}amt", $"Macro {mv + 1} Amount", Bip, 34, Teal);
+            row.Children.Add(valKnob);
+            Grid.SetColumn(amtKnob, 1); row.Children.Add(amtKnob);
+            words.Margin = new Thickness(3, 0, 0, 0);
+            Grid.SetColumn(words, 2); row.Children.Add(words);
+            var box = new Border
+            {
+                Background = NotaPalette.SurfaceRaised, BorderBrush = BorderDef, BorderThickness = new Thickness(1),
+                CornerRadius = NotaRadius.Field, Padding = new Thickness(3, 2), Child = row,
+            };
+            readouts.Add(() =>
+            {
+                bool on = MacroOn(mv);
+                int d = MacroDest(mv);
+                name.Text = on ? $"M{mv + 1} · {MacroWords[d]}" : $"M{mv + 1}";
+                name.Foreground = on ? NotaPalette.TextStrong : TextDisabled;
+                dest.Text = on ? "→ " + MacroDests[d] : "→ " + MacroDests[d] + " · off";
+                dest.Foreground = on ? Teal : TextDisabled;
+                nums.Text = $"{Pct(G($"mac{mv}val"))} · {Bip(G($"mac{mv}amt"))}";
+                nums.Foreground = on ? TextSecondary : TextDisabled;
+                box.Background = on ? NotaPalette.SurfaceRaised : NotaPalette.BgSunken;
+                box.BorderBrush = on ? BorderDef : NotaPalette.GraphBorder;
+                box.IsVisible = mv / MacrosPerPage == macroPage;
+            });
+            macroBoxes[m] = box;
+            macroList.Children.Add(box);
+        }
+        var pagerText = new TextBlock
+        {
+            FontSize = NotaType.Axis, Foreground = TextTertiary,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        };
+        var pager = new Panel
+        {
+            Height = 20, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Rectangle
+                {
+                    Stroke = BorderDef, StrokeThickness = 1, RadiusX = 4, RadiusY = 4,
+                    StrokeDashArray = new Avalonia.Collections.AvaloniaList<double> { 3, 2.5 },
+                },
+                pagerText,
+            },
+        };
+        ToolTip.SetTip(pager, Loc.T("device.aurora.click_for_the_next_macros"));
+        pager.PointerPressed += (_, e) =>
+        {
+            var pt = e.GetCurrentPoint(pager).Properties;
+            int n = MacroPages();
+            if (pt.IsLeftButtonPressed) macroPage = (macroPage + 1) % n;
+            else if (pt.IsRightButtonPressed) macroPage = (macroPage + n - 1) % n;
+            else return;
+            e.Handled = true; Touch();
+        };
+        readouts.Add(() =>
+        {
+            int next = (macroPage + 1) % MacroPages();
+            int first = next * MacrosPerPage, last = Math.Min(8, first + MacrosPerPage) - 1;
+            int used = 0;
+            for (int m = first; m <= last; m++) if (MacroOn(m)) used++;
+            pagerText.Text = $"M{first + 1} — M{last + 1} · " + (used == 0 ? "free" : $"{used} in use");
+            pagerText.Foreground = used == 0 ? TextTertiary : Teal;
+        });
+        var macroGrid = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = 3, Margin = new Thickness(6, 4) };
+        macroGrid.Children.Add(macroList);
+        Grid.SetRow(pager, 1); macroGrid.Children.Add(pager);
+
+        // ---- the rail's own two tabs ----------------------------------------------
+        var railBodies = new Control[] { globalGrid, macroGrid };
+        var railCells = new Border[RailTabs.Length];
+        var railTexts = new TextBlock[RailTabs.Length];
+        var railCount = Mono("", TextTertiary, NotaType.Axis);
+        railCount.HorizontalAlignment = HorizontalAlignment.Right;
+        railCount.Margin = new Thickness(0, 0, 7, 0);
+        readouts.Add(() => railCount.Text = railTab == 1 ? Loc.F("device.aurora.8_in_use", MacroAssigned()) : "");
+        var railTabGrid = new Grid { Height = TabH, ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
+        showRailTab = () =>
+        {
+            for (int i = 0; i < RailTabs.Length; i++)
+            {
+                bool on = i == railTab;
+                railCells[i].Background = on ? NotaPalette.SurfaceRaised : Brushes.Transparent;
+                railCells[i].BorderBrush = on ? Brass : Brushes.Transparent;
+                railTexts[i].Foreground = on ? TextPrimary : TextTertiary;
+                railTexts[i].FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal;
+                railBodies[i].IsVisible = on;
+            }
+            Touch();
+        };
+        for (int i = 0; i < RailTabs.Length; i++)
+        {
+            int iv = i;
+            var tb = new TextBlock
+            {
+                Text = RailTabs[i], FontSize = NotaType.DeviceSection,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            };
+            var cell = new Border
+            {
+                Padding = new Thickness(9, 0), BorderThickness = new Thickness(0, 0, 0, 2),
+                Cursor = new Cursor(StandardCursorType.Hand), Child = tb,
+            };
+            cell.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(cell).Properties.IsLeftButtonPressed) return;
+                railTab = iv; showRailTab(); e.Handled = true;
+            };
+            railCells[i] = cell; railTexts[i] = tb;
+            Grid.SetColumn(cell, i); railTabGrid.Children.Add(cell);
+        }
+        Grid.SetColumn(railCount, 2); railTabGrid.Children.Add(railCount);
+        var railHost = new Panel();
+        foreach (var b in railBodies) railHost.Children.Add(b);
+        var railGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        railGrid.Children.Add(HeaderStrip(railTabGrid));
+        Grid.SetRow(railHost, 1); railGrid.Children.Add(railHost);
+        var rail = SectionBox(railGrid);
+        rail.Width = RailW;
+
+        string OscWord(int o) => Imported(o) ? tinfo[o].Name : BankWords[Sel(o == 0 ? "table" : "osc2table", 4)];
+        string FiltPre() => fsel == 0 ? "fil1" : "fil2";
+
+        string Hint() => tab switch
+        {
+            0 => $"{OscWord(0)} · {OscWord(1)} · sub {SubWaves[Sel("subwave", 3)]}",
+            1 => $"{FiltTypes[Sel(FiltPre() + "type", 5)]} {(G(FiltPre() + "slope") >= 0.5f ? "24" : "12")} dB/oct",
+            2 => "amp · free",
+            3 => $"{(SyncDiv(G("lfo1sync")) > 0 ? SyncText(G("lfo1sync")) : "free")} · {(SyncDiv(G("lfo2sync")) > 0 ? SyncText(G("lfo2sync")) : "free")}",
+            4 => Plural(RouteCount(), "route", "routes"),
+            _ => $"{(G("fxdriveon") >= 0.5f && G("fxdrive") > 1e-3f ? "drive" : "—")} → "
+               + $"{(G("fxchoruson") >= 0.5f && G("fxchorus") > 1e-3f ? "chorus" : "—")} → "
+               + $"{(G("fxreverbon") >= 0.5f && G("fxreverb") > 1e-3f ? "reverb" : "—")}",
+        };
+
+        // ---- assembly -------------------------------------------------------------
+        var body = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = NotaSpace.DeviceGap,
+            Margin = new Thickness(NotaSpace.DeviceGap),
+        };
+        body.Children.Add(wheelsPanel);
+        Grid.SetColumn(tabPanel, 1); body.Children.Add(tabPanel);
+        Grid.SetColumn(rail, 2); body.Children.Add(rail);
+
+        var root = new Border { Background = NotaPalette.SurfaceCard, Child = body };
+
+        ctx.SetInstLiveViz(() => Refresh(false));
+        showRailTab();
+        showTab();
+        return root;
+    }
+
+    // A device section: card ground, hairline, radius 6 — the almanac's section box.
+    private static Decorator SectionBox(Control child) => DeviceCardKit.Section(child);
+
+    // A section's own header strip: a hairline under it, nothing else.
+    private static Border HeaderStrip(Control child) => new()
+    {
+        BorderBrush = BorderDef, BorderThickness = new Thickness(0, 0, 0, 1), Child = child,
+    };
+
+}

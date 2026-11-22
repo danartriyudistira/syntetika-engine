@@ -1,0 +1,402 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices — built-in Nota Forge body (multi-stage saturator, device kind 17), a build of
+// the "Nota Forge" mockup (700 × 260) in the EQ-8 language: on the left the routing (Serial /
+// Parallel / M/S / Multi) over the three stages — each with its on dot, its type and the role it
+// plays in the routing, a draggable output trim (drag the dB up / down), Drive and a teal
+// Feedback; a click selects the stage. In the centre Amount / Wet / Out over the transfer curve
+// (the whole device — the selected stage in M/S and Multi — every stage alone faintly, the
+// LFO-modulated curve dashed teal, a node where the input sits; drag it for Amount) and the
+// harmonics of a −6 dB sine with THD. On the right the selected stage's shape (type, Bias, Tone,
+// Width), the modulation (LFO → Drive, Env → Tone, Rate, Sync) and Oversampling. Curves, harmonics and meters come from the engine (Forge.h scopeRead). Every
+// control is a device param (normalized 0..1), so automation / MIDI learn / presets / A-B /
+// persistence come for free. Double-click resets a control. S (260, #531): the transfer curve and
+// the harmonics over Amount, Wet and Out knobs.
+// FullBleed — the shared shell draws the header (name · preset · badge · bypass).
+
+using System;
+using System.Collections.Generic;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application;
+using static Nota.App.DeviceCardKit;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+internal sealed class ForgeDeviceBody : IDeviceBody
+{
+    // ── Parameter indices (must match Forge.h) ───────────────────────────────
+    private const int Amount = 0, Tone = 1, Wet = 2, Output = 3, Bias = 4, WidthP = 5, Routing = 6,
+        LfoDrive = 7, EnvTone = 8, LfoRate = 9, LfoSync = 10, S1Type = 11, OS = 26, S1Bias = 27;
+    private static int TypeP(int s) => S1Type + s * 5;
+    private static int DriveP(int s) => S1Type + 1 + s * 5;
+    private static int OutP(int s) => S1Type + 2 + s * 5;
+    private static int FbP(int s) => S1Type + 3 + s * 5;
+    private static int OnP(int s) => S1Type + 4 + s * 5;
+    private static int BiasP(int s) => S1Bias + s * 3;
+    private static int ToneP(int s) => S1Bias + 1 + s * 3;
+    private static int WidthSP(int s) => S1Bias + 2 + s * 3;
+
+    private static readonly string[] RouteNames = { "Serial", "Parallel", "M/S", "Multi" };
+    private static readonly string[] OsNames = { "Off", "2×", "4×", "8×" };
+
+    public double Width => 700;
+    public double WidthFor(IAudioEngine engine, int trackId, int deviceIndex) => CardLayout.WidthFor(engine, trackId, deviceIndex, Width);
+    public Control? HeaderAccessory(DeviceCardContext ctx, int deviceIndex) => CardLayout.SizeToggle(ctx, deviceIndex);
+    public bool FullBleed => true;
+    public string? Subtitle => "Saturation";
+
+    public Control Build(DeviceCardContext ctx, int index)
+    {
+        var engine = ctx.Engine;
+        int track = ctx.TrackId, di = index;
+        int pc = engine.DeviceParamCount(track, di);
+        float P(int p) => p < pc ? engine.DeviceGetParam(track, di, p) : 0.5f;
+        void Begin(int p) => engine.BeginAutomationWrite(track, AutomationTarget.DeviceParam, di, p, "");
+        void End(int p) => engine.EndAutomationWrite(track, AutomationTarget.DeviceParam, di, p, "");
+        void Raw(int p, double v) { if (p < pc) engine.DeviceSetParam(track, di, p, (float)Math.Clamp(v, 0, 1)); }
+        // A discrete edit (a click) is one automation gesture, so it records while the transport does.
+        void SetP(int p, float v) { Begin(p); Raw(p, v); End(p); }
+        void Reset(int p) { Begin(p); Raw(p, engine.DeviceParamDefault(track, di, p)); End(p); }
+        double Def(int p) => engine.DeviceParamDefault(track, di, p);
+        bool On(int p) => P(p) >= 0.5f;
+        void Learn(Control c, int p) => MidiLearn.Bind(c, MidiTarget.DeviceParam(track, di, p), engine.DeviceParamName(track, di, p));
+
+        var readouts = new List<Action>();
+        // MIDI learn on a control whose param follows the selected stage: rebinds when it moves.
+        void LearnFollow(Control c, Func<int> param)
+        {
+            int bound = param();
+            Learn(c, bound);
+            readouts.Add(() => { int p = param(); if (p != bound) { bound = p; Learn(c, p); } });
+        }
+        void RefreshAll() { for (int i = 0; i < readouts.Count; i++) readouts[i](); }
+        var scope = new float[ForgeMath.kScope];
+        int scN = 0;
+        double Sc(int i) => scN > i ? scope[i] : 0;
+
+        int sel = 0;   // the stage the SHAPE panel edits (UI state)
+        Action refreshNow = () => { };
+        void Refresh() => refreshNow();
+        int RouteI() => Math.Clamp((int)Math.Round(P(Routing) * 3), 0, 3);
+        int TypeI(int s) => Math.Clamp((int)Math.Round(P(TypeP(s)) * 5), 0, 5);
+        bool Single() => RouteI() >= 2;
+        bool Active() => !engine.DeviceBypassed(track, di);
+        int OsI() => Math.Clamp((int)Math.Round(P(OS) * 3), 0, 3);
+
+        // ---- units (Forge.h) ----------------------------------------------------------------
+        static string Sgn(double v) => NotaNum.F($"{v:+0.0;−0.0;0.0}");
+        static string SgnI(double v) => NotaNum.F($"{v:+0;−0;0}");
+        static string AmtF(double v) => Sgn(v * 30) + " dB";
+        static string OutF(double v) => Sgn((v - 0.5) * 48) + " dB";
+        static string TrimF(double v) => Sgn((v - 0.5) * 24) + " dB";
+        static string PctF(double v) => NotaNum.F($"{v * 100:0} %");
+        static string FbF(double v) => v < 0.005 ? "—" : PctF(v);
+        static string BiasF(double v) => SgnI((v - 0.5) * 200) + " %";
+        static string ToneF(double v) => Sgn((v - 0.5) * 24) + " dB";
+        static string WidthF(double v) => NotaNum.F($"{v * 200:0} %");
+        string RateF(double v) => On(LfoSync) ? ForgeMath.DivNames[Math.Clamp((int)Math.Round(v * 7), 0, 7)] + " sync"
+            : NotaNum.F($"{0.05 * Math.Pow(400, v):0.00} Hz");
+
+        // ---- small builders -----------------------------------------------------------------
+        static TextBlock Caps(string t, IBrush? c = null, double fs = NotaType.KnobLabel) => new()
+        { Text = NotaText.Label(t), FontSize = fs, FontWeight = FontWeight.Medium, Foreground = c ?? TextTertiary, VerticalAlignment = VerticalAlignment.Center };
+        static TextBlock Mono(string t, double fs, IBrush c)
+        { var tb = new TextBlock { Text = t, FontSize = fs, Foreground = c, VerticalAlignment = VerticalAlignment.Center }; tb.BindResource(TextBlock.FontFamilyProperty, "Font.Measure"); return tb; }
+        static T Docked<T>(T c, Dock d) where T : Control { DockPanel.SetDock(c, d); return c; }
+        static T Col<T>(T c, int col) where T : Control { Grid.SetColumn(c, col); return c; }
+        static T GRow<T>(T c, int row) where T : Control { Grid.SetRow(c, row); return c; }
+        static RuleSection Island(Control child, double width = double.NaN) => new() { Width = width, Child = child };
+        static Border Bar(Control child, Thickness pad) => new()
+        { Height = 20, BorderBrush = BorderDef, BorderThickness = new Thickness(0, 0, 0, 1), Padding = pad, Child = child };
+
+        // Slider row, as the mockup draws it inside the card: caps 7 label · 3px track · mono 8 value
+        // (primary ink once moved off its default). The param is chosen at paint time — the selected
+        // stage's, or a fixed one. Double-click resets.
+        Control Slider(string label, Func<int> param, Func<double, string> fmt, string tip, double labelW, double valueW,
+            bool teal = false, bool bipolar = false)
+        {
+            var lbl = Caps(label, teal ? Teal : TextTertiary);
+            lbl.TextTrimming = TextTrimming.None;
+            var track = new SliderTrack { Bipolar = bipolar, Modulation = teal, Reset = () => { Reset(param()); Refresh(); }, VerticalAlignment = VerticalAlignment.Center };
+            track.Changed += v => { Raw(param(), v); Refresh(); };
+            track.GestureBegin += () => Begin(param());
+            track.GestureEnd += () => End(param());
+            var val = Mono("", 8, TextPrimary);
+            val.TextAlignment = TextAlignment.Right;
+            val.HorizontalAlignment = HorizontalAlignment.Right;
+            ValueEntry.Attach(val, () => P(param()), v => Raw(param(), v), () => fmt(P(param())), () => Begin(param()), () => End(param()), Refresh, control: track);
+            static ColumnDefinition Fixed(double w) => new(w > 0 ? new GridLength(w) : GridLength.Auto);
+            var g = new Grid { ColumnSpacing = 5, VerticalAlignment = VerticalAlignment.Center, Background = Brushes.Transparent };
+            g.ColumnDefinitions.Add(Fixed(labelW));
+            g.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            g.ColumnDefinitions.Add(Fixed(valueW));
+            g.Children.Add(lbl); g.Children.Add(Col(track, 1)); g.Children.Add(Col(val, 2));
+            readouts.Add(() =>
+            {
+                int p = param();
+                if (!track.Dragging) track.Norm = P(p);
+                val.Text = fmt(P(p));
+                val.Foreground = Math.Abs(P(p) - Def(p)) > 0.003 ? TextPrimary : TextSecondary;
+            });
+            LearnFollow(g, param);
+            ToolTip.SetTip(g, tip);
+            return g;
+        }
+
+        // ======================================================================
+        // LEFT — routing + the three stages
+        // ======================================================================
+        var routeSeg = Segments(RouteNames, RouteI, i => { SetP(Routing, i / 3f); Refresh(); }, out var routeSync, fill: true, padX: 2);
+        readouts.Add(routeSync);
+        Learn(routeSeg, Routing);
+        ToolTip.SetTip(routeSeg, Loc.T("device.forge.routing_serial_1_2_3"));
+
+        Control StageTile(int s)
+        {
+            var dot = new Border { Width = 7, Height = 7, CornerRadius = NotaRadius.Group, VerticalAlignment = VerticalAlignment.Center, Cursor = new Cursor(StandardCursorType.Hand) };
+            var num = Mono((s + 1).ToString(), 8, TextSecondary); num.FontWeight = FontWeight.Bold;
+            var name = new TextBlock { FontSize = 9, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+            var role = new TextBlock { FontSize = 7, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center };
+            var outTxt = Mono("", 8, TextSecondary);
+            var outBox = new Border
+            {
+                Background = Sunken, CornerRadius = NotaRadius.Field, Padding = new Thickness(2, 0), VerticalAlignment = VerticalAlignment.Center,
+                Cursor = new Cursor(StandardCursorType.SizeNorthSouth), Child = outTxt,
+            };
+            var head = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,*,Auto"), ColumnSpacing = 5 };
+            head.Children.Add(dot); head.Children.Add(Col(num, 1)); head.Children.Add(Col(name, 2)); head.Children.Add(Col(role, 3)); head.Children.Add(Col(outBox, 4));
+
+            bool Lit() => On(OnP(s)) && Active();
+            var drive = Slider("DRIVE", () => DriveP(s), PctF, Loc.F("device.forge.stage_drive_how_hard_the", s + 1), 42, 32);
+            var fb = Slider("FEEDBACK", () => FbP(s), FbF, Loc.F("device.forge.stage_feedback_its_output_back", s + 1), 44, 30, teal: true);
+            var rows = new StackPanel { Spacing = 1, Children = { drive, fb } };
+            var body = new DockPanel { Children = { Docked(head, Dock.Top), new Border { VerticalAlignment = VerticalAlignment.Bottom, Child = rows } } };
+            var tile = new Border
+            {
+                BorderThickness = new Thickness(1), CornerRadius = NotaRadius.Cell, Padding = new Thickness(6, 3), Background = Sunken,
+                Cursor = new Cursor(StandardCursorType.Hand), Child = body,
+            };
+
+            tile.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(tile).Properties.IsLeftButtonPressed) return;
+                if (sel != s) { sel = s; Refresh(); }
+            };
+            dot.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(dot).Properties.IsLeftButtonPressed) return;
+                SetP(OnP(s), On(OnP(s)) ? 0f : 1f); Refresh(); e.Handled = true;
+            };
+            Learn(dot, OnP(s));
+            ToolTip.SetTip(dot, Loc.F("device.forge.stage_on_off", s + 1));
+
+            // Output trim: drag the dB up / down; double-click resets.
+            bool od = false; double oy = 0, ov = 0;
+            outBox.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(outBox).Properties.IsLeftButtonPressed) return;
+                sel = s;
+                if ((e.ClickCount == 2 || (e.KeyModifiers & KeyModifiers.Alt) != 0)) { Reset(OutP(s)); Refresh(); e.Handled = true; return; }
+                od = true; oy = e.GetPosition(outBox).Y; ov = P(OutP(s)); Begin(OutP(s)); e.Pointer.Capture(outBox); e.Handled = true; Refresh();
+            };
+            outBox.PointerMoved += (_, e) =>
+            {
+                if (!od) return;
+                Raw(OutP(s), ov + (oy - e.GetPosition(outBox).Y) / 120.0); Refresh();
+            };
+            outBox.PointerReleased += (_, e) => { if (od) { od = false; End(OutP(s)); e.Pointer.Capture(null); } };
+            outBox.PointerCaptureLost += (_, _) => { if (od) { od = false; End(OutP(s)); } };
+            Learn(outBox, OutP(s));
+            ToolTip.SetTip(outBox, MenuKit.Keys(Loc.F("device.forge.stage_output_12_12_db", s + 1)));
+            ValueEntry.Attach(outBox, ValueEntry.DeviceParam(engine, track, di, OutP(s), $"Stage {s + 1} output", OutF, Refresh), outTxt);
+
+            readouts.Add(() =>
+            {
+                bool lit = Lit(), isSel = s == sel;
+                dot.Background = lit ? Brass : BorderStrong;
+                num.Foreground = lit ? TextSecondary : TextDisabled;
+                name.Text = ForgeMath.AlgoNames[TypeI(s)];
+                name.Foreground = lit ? TextPrimary : TextTertiary;
+                role.Text = NotaText.Label(ForgeMath.Role(RouteI(), s));
+                role.Foreground = lit ? DeviceCardKit.ModInkBright : TextDisabled;
+                double trim = (P(OutP(s)) - 0.5) * 24;
+                outTxt.Text = TrimF(P(OutP(s)));
+                outTxt.Foreground = Math.Abs(trim) > 0.05 ? TextPrimary : lit ? TextSecondary : TextDisabled;
+                tile.BorderBrush = isSel ? Brass : NotaPalette.GraphBorder;
+                tile.Background = isSel ? Raised : Sunken;
+                rows.Opacity = lit ? 1 : 0.45;
+            });
+            return tile;
+        }
+        var stageGrid = new Grid { RowDefinitions = new RowDefinitions("*,*,*"), RowSpacing = 4, Margin = new Thickness(4) };
+        for (int s = 0; s < 3; s++) stageGrid.Children.Add(GRow(StageTile(s), s));
+        var left = Island(new DockPanel { Children = { Docked(Bar(routeSeg, new Thickness(3, 0)), Dock.Top), stageGrid } }, 186);
+        DockPanel.SetDock(left, Dock.Left);
+
+        // ======================================================================
+        // CENTRE — Amount / Wet / Out over the transfer curve and the harmonics
+        // ======================================================================
+        var macros = new Grid { ColumnDefinitions = new ColumnDefinitions("13*,10*,10*"), ColumnSpacing = 8, VerticalAlignment = VerticalAlignment.Center };
+        macros.Children.Add(Slider("AMOUNT", () => Amount, AmtF, Loc.T("device.forge.amount_0_30_db_into"), 0, 0));
+        macros.Children.Add(Col(Slider("WET", () => Wet, PctF, Loc.T("device.forge.wet_the_forged_signal_against"), 0, 0), 1));
+        macros.Children.Add(Col(Slider("OUT", () => Output, OutF, Loc.T("device.forge.output_24_24_db"), 0, 0, bipolar: true), 2));
+
+        var transfer = new FgTransferView { Value = _ => P(Amount) };
+        transfer.GestureBegin += _ => Begin(Amount);
+        transfer.GestureEnd += _ => End(Amount);
+        transfer.Changed += (_, v) => { Raw(Amount, v); Refresh(); };
+        transfer.ResetRequested += _ => { Reset(Amount); Refresh(); };
+        Learn(transfer, Amount);
+        ToolTip.SetTip(transfer, MenuKit.Keys(Loc.T("device.forge.input_output_through_the_device")));
+        ValueEntry.Attach(transfer, new ValueField("Amount", () => P(Amount), AmtF, v => Raw(Amount, v), () => Begin(Amount), () => End(Amount), engine.DeviceParamDefault(track, di, Amount)) { After = Refresh });
+        var harm = new FgHarmonicsView { Height = 50 };
+        ToolTip.SetTip(harm, Loc.T("device.forge.harmonics_2_9_of_a"));
+        var graphs = new DockPanel
+        {
+            Margin = new Thickness(5), LastChildFill = true,
+            Children = { Docked(new Border { Margin = new Thickness(0, 4, 0, 0), Child = harm }, Dock.Bottom), transfer },
+        };
+        var centre = Island(new DockPanel { Children = { Docked(Bar(macros, new Thickness(6, 0)), Dock.Top), graphs } });
+        centre.Margin = new Thickness(5, 0);
+
+        // ======================================================================
+        // RIGHT — the selected stage's shape, modulation, oversampling
+        // ======================================================================
+        var badgeTxt = Mono("", 8, OnAccent); badgeTxt.FontWeight = FontWeight.Bold; badgeTxt.HorizontalAlignment = HorizontalAlignment.Center;
+        var badge = new Border { Width = 13, Height = 13, CornerRadius = NotaRadius.Group, VerticalAlignment = VerticalAlignment.Center, Child = badgeTxt };
+        var stName = new TextBlock { FontSize = 9, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        var shapeHead = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 6 };
+        shapeHead.Children.Add(badge); shapeHead.Children.Add(Col(stName, 1)); shapeHead.Children.Add(Col(Caps("SHAPE"), 2));
+        readouts.Add(() =>
+        {
+            bool lit = On(OnP(sel));
+            badgeTxt.Text = (sel + 1).ToString();
+            badge.Background = lit ? AccentBright : TextDisabled;
+            stName.Text = ForgeMath.AlgoNames[TypeI(sel)];
+            stName.Foreground = lit ? TextPrimary : TextTertiary;
+        });
+
+        var typeSeg = Segments(ForgeMath.ChipNames, () => Array.IndexOf(ForgeMath.ChipAlgo, TypeI(sel)),
+            i => { SetP(TypeP(sel), ForgeMath.ChipAlgo[i] / 5f); Refresh(); }, out var typeSync, fill: true, padX: 1);
+        readouts.Add(typeSync);
+        ToolTip.SetTip(typeSeg, Loc.T("device.forge.the_selected_stages_type_tube"));
+
+        // Gauge knob on the selected stage's param.
+        Control StageKnob(Func<int> param, string label, Func<double, string> fmt, string tip)
+        {
+            var val = Mono(fmt(P(param())), 7, TextPrimary);
+            var knob = new Knob(P(param()), 1.0) { Accent = true, Default = Def(param()), Width = 30, Height = 30 };
+            knob.Format = v => fmt(v);   // read-out at any value: typing searches it
+            knob.ValueChanged += v => { Raw(param(), v); val.Text = fmt(P(param())); Refresh(); };
+            knob.GestureBegin += () => Begin(param());
+            knob.GestureEnd += () => End(param());
+            LearnFollow(knob, param);
+            ToolTip.SetTip(knob, tip);
+            readouts.Add(() =>
+            {
+                if (!knob.Dragging) { double c = P(param()); if (Math.Abs(c - knob.Value) > 1e-4) knob.Value = c; }
+                val.Text = fmt(P(param()));
+                val.Foreground = Math.Abs(P(param()) - Def(param())) > 0.003 ? TextPrimary : TextSecondary;
+            });
+            return KnobCell(label, knob, val, 46);
+        }
+        var knobs = new UniformGrid
+        {
+            Rows = 1,
+            Children =
+            {
+                StageKnob(() => BiasP(sel), "BIAS", BiasF, Loc.T("device.forge.bias_the_stages_asymmetry_100")),
+                StageKnob(() => ToneP(sel), "TONE", ToneF, Loc.T("device.forge.tone_a_tilt_after_the")),
+                StageKnob(() => WidthSP(sel), "WIDTH", WidthF, Loc.T("device.forge.width_the_stages_stereo_image")),
+            },
+        };
+
+        var syncSw = Switch("Sync", () => On(LfoSync), () => { SetP(LfoSync, On(LfoSync) ? 0f : 1f); Refresh(); }, out var syncSync);
+        readouts.Add(syncSync);
+        Learn(syncSw, LfoSync);
+        ToolTip.SetTip(syncSw, Loc.T("device.forge.sync_the_lfo_rate_as"));
+        var modHead = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        modHead.Children.Add(Caps("MODULATION", Teal)); modHead.Children.Add(Col(syncSw, 1));
+        var mods = new StackPanel
+        {
+            Spacing = 2,
+            Children =
+            {
+                Slider("LFO → DRIVE", () => LfoDrive, PctF, Loc.T("device.forge.lfo_drive_the_lfo_sweeps"), 50, 40, teal: true),
+                Slider("ENV → TONE", () => EnvTone, PctF, Loc.T("device.forge.env_tone_loud_parts_push"), 50, 40, teal: true),
+                Slider("RATE", () => LfoRate, RateF, Loc.T("device.forge.lfo_rate_free_0_05"), 50, 40, teal: true),
+            },
+        };
+        var osSeg = Segments(OsNames, OsI, i => { SetP(OS, i / 3f); Refresh(); }, out var osSync, fill: true, padX: 2);
+        readouts.Add(osSync);
+        Learn(osSeg, OS);
+        ToolTip.SetTip(osSeg, Loc.T("device.forge.oversampling_runs_the_stages_at"));
+        var osRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 6 };
+        osRow.Children.Add(Caps("OVERSAMPLE")); osRow.Children.Add(Col(osSeg, 1));
+        static Control Rule(Control c) => new Border { BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(0, 4, 0, 0), Child = c };
+
+        var rightBody = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,*,Auto,Auto,*,Auto"), Margin = new Thickness(8, 6) };
+        rightBody.Children.Add(GRow(typeSeg, 0));
+        rightBody.Children.Add(GRow(knobs, 2));
+        rightBody.Children.Add(GRow(Rule(modHead), 4));
+        rightBody.Children.Add(GRow(new Border { Margin = new Thickness(0, 3, 0, 0), Child = mods }, 5));
+        rightBody.Children.Add(GRow(Rule(osRow), 7));
+        var right = Island(new DockPanel { Children = { Docked(Bar(shapeHead, new Thickness(8, 0)), Dock.Top), rightBody } }, 184);
+        DockPanel.SetDock(right, Dock.Right);
+
+        // ---- assemble ---------------------------------------------------------------
+        Control root;
+        if (CardLayout.IsMini(ctx, di))
+        {
+            // S (#531): the transfer curve and the harmonics over Amount · Wet · Out.
+            Control MK(int p, string name, Func<double, string> fmt, bool bipolar = false)
+            {
+                var val = Mono(fmt(P(p)), 7, TextPrimary);
+                var knob = new Knob(P(p), 1.0) { Accent = true, Bipolar = bipolar, Default = Def(p), Width = 34, Height = 34 };
+                knob.Format = fmt;
+                knob.ValueChanged += v => { Raw(p, v); Refresh(); };
+                knob.GestureBegin += () => Begin(p);
+                knob.GestureEnd += () => End(p);
+                Learn(knob, p);
+                readouts.Add(() => { if (!knob.Dragging) { double c = P(p); if (Math.Abs(c - knob.Value) > 1e-4) knob.Value = c; } val.Text = fmt(P(p)); });
+                return KnobCell(name, knob, val, 60);
+            }
+            graphs.Children.Clear();
+            if (harm.Parent is Border hb) hb.Child = null;   // the harmonics move under the mini curve
+            graphs.Margin = new Thickness(0);
+            var miniGraph = new DockPanel { LastChildFill = true, Children = { Docked(new Border { Margin = new Thickness(0, 4, 0, 0), Child = harm }, Dock.Bottom), transfer } };
+            root = CardLayout.Mini(miniGraph, null, MK(Amount, "AMOUNT", AmtF), MK(Wet, "DRY/WET", PctF), MK(Output, "OUT", OutF, bipolar: true));
+        }
+        else
+        {
+            var bodyRow = new DockPanel { LastChildFill = true, Margin = new Thickness(5), Children = { left, right, centre } };
+            root = new Border { Background = NotaPalette.SurfaceCard, Child = bodyRow };
+        }
+
+        var onArr = new bool[3];
+        refreshNow = () =>
+        {
+            scN = engine.DeviceScope(track, di, scope, ForgeMath.kScope);
+            for (int s = 0; s < 3; s++) onArr[s] = On(OnP(s));
+            bool single = Single(), active = Active();
+            string mainLbl = single ? Loc.F("device.forge.stage", sel + 1, ForgeMath.Role(RouteI(), sel).Split(' ')[0].ToLowerInvariant()) : "static";
+            transfer.Set(scope, scN, onArr, sel, single, active, P(LfoDrive) > 0.005f, mainLbl);
+            int set = single ? sel + 1 : 0;
+            int thdSlot = single ? ForgeMath.S_ThdS1 + sel : ForgeMath.S_ThdChain;
+            int flSlot = single ? ForgeMath.S_FlavorS1 + sel : ForgeMath.S_FlavorChain;
+            harm.Set(scope, scN, set, !active ? "bypass"
+                : NotaNum.F($"THD {Sc(thdSlot):0.0} % · {ForgeMath.Flavors[Math.Clamp((int)Sc(flSlot), 0, 3)]}"));
+            RefreshAll();
+        };
+        ctx.AddDeviceRefresher(Refresh);
+        Refresh();
+        return root;
+    }
+}

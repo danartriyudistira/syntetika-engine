@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Geometry for code-built views — the C# mirror of the Radius.* / Control.* / Space.*
+// keys in Theme/NotaTheme.axaml, the way NotaPalette mirrors Brush.*. Geometry does not
+// change with the variant, so these are plain constants. The smoke test fails if a value
+// here and its XAML key drift apart.
+//
+// Radius follows the style guide's scale (spec 038): 9 on the largest surfaces down to 2 on
+// the smallest parts, and 0 for docked panels, which meet their neighbours on a seam.
+//
+// A skin can re-round the scale (spec 087). The CornerRadius values below stay the design
+// values — NotaSkin coerces every control's CornerRadius from them — while the *Value numbers
+// custom-drawn views read at render time are the skin's (they repaint on every theme change).
+
+using Avalonia;
+using Nota.Application.Themes;
+
+namespace Nota.App;
+
+internal static class NotaRadius
+{
+    public const double DockedValue = 0;
+
+    // Custom-drawn radii, as the worn skin draws them.
+    public static double CardValue => NotaSkin.Radius(RadiusStep.Card);
+    public static double GroupValue => NotaSkin.Radius(RadiusStep.Group);
+    public static double FieldValue => NotaSkin.Radius(RadiusStep.Field);
+    public static double CellValue => NotaSkin.Radius(RadiusStep.Cell);
+    public static double ValueBarValue => NotaSkin.Radius(RadiusStep.ValueBar);
+    public static double SwitchValue => NotaSkin.Radius(RadiusStep.Switch);
+    public static double FineValue => NotaSkin.Radius(RadiusStep.Fine);
+
+    private static CornerRadius Design(RadiusStep step) => new(SkinGeometry.Design(step));
+
+    /// <summary>0 — a docked panel; it meets its neighbours on a 1px seam.</summary>
+    public static readonly CornerRadius Docked = new(DockedValue);
+    /// <summary>9 — device card, toolbar view group, modal window.</summary>
+    public static readonly CornerRadius Card = Design(RadiusStep.Card);
+    /// <summary>7 — icon button, chip, segment group, device section, search, menu.</summary>
+    public static readonly CornerRadius Group = Design(RadiusStep.Group);
+    /// <summary>6 — field, dropdown, clip, toggle pill, row highlight, graph window.</summary>
+    public static readonly CornerRadius Field = Design(RadiusStep.Field);
+    /// <summary>5 — one segment cell, track button, EQ band cell, tooltip, inner key.</summary>
+    public static readonly CornerRadius Cell = Design(RadiusStep.Cell);
+    /// <summary>4 — value bar, fader cap, overview strip.</summary>
+    public static readonly CornerRadius ValueBar = Design(RadiusStep.ValueBar);
+    /// <summary>3 — switch track.</summary>
+    public static readonly CornerRadius Switch = Design(RadiusStep.Switch);
+    /// <summary>2 — switch knob, notes, bars inside a plot.</summary>
+    public static readonly CornerRadius Fine = Design(RadiusStep.Fine);
+
+    /// <summary>Rounded top only — a header strip or a stripe sitting on a body.</summary>
+    public static CornerRadius Top(double r) => new(r, r, 0, 0);
+
+    /// <summary>Rounded bottom only — a key hanging from a rail.</summary>
+    public static CornerRadius Bottom(double r) => new(0, 0, r, r);
+}
+
+internal static class NotaSize
+{
+    public const double Chip = 24;        // filter chip
+    public const double Seg = 20;         // one segment cell
+    public const double Shell = 26;       // shell button, field, dropdown
+    public const double SegGroup = 24;    // segment group: a 20 cell in a 2px well
+    public const double Dropdown = 22;    // dropdown menu
+    public const double Search = 30;      // browser search
+    public const double Icon = 28;        // icon button: toolbar, rail
+    public const double Transport = 28;   // transport key, an icon button
+    public const double Play = 36;        // Play is the one wide transport key
+    public const double Console = 32;     // the transport keys' well: 28px icon buttons in 2px of well
+    public const double TransportBar = 44; // the docked transport row
+    public const double KnobSecondary = 34;
+    public const double KnobRegular = 36;
+    public const double KnobMain = 44;
+    public const double KnobInline = 24;  // a knob inside a table row (Consort oscillators, ADSR strip)
+    public const double KnobFlat = 28;    // a knob outside a device card: no cap
+    public const double ParamCell = 53;   // knob 34 + value line 10 + label line 9
+}
+
+internal static class NotaSpace
+{
+    // Inside a device: 2px units.
+    public const double DeviceHair = 2;
+    public const double DeviceGap = 5;
+    public const double DeviceInset = 6;
+    public const double DeviceInsetWide = 8;
+    // In the shell: 4px units.
+    public const double Tile = 8;
+    public const double Gutter = 1;       // between docked panels: the seam
+    public const double Inset = 20;
+}

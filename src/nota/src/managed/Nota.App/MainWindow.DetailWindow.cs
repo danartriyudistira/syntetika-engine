@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Pop the Devices/Clip detail panel out into its own window (piano roll on top, device
+// chain on the bottom — no tabs). While floating, the detail-panel routing sends the clip
+// editor and device chain to the window's two hosts instead of the docked DetailBody; the
+// docked panel is hidden and the tick loop keeps updating whichever control is visible
+// (keyed off IsEffectivelyVisible). Closing the window re-docks.
+
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public partial class MainWindow
+{
+    private DetailWindow? _detailWindow;
+    private Control? _lastClipEditor;   // most recently shown clip editor (MIDI or audio)
+    private bool _shuttingDown;
+
+    private bool DetailFloating => _detailWindow is not null;
+    // Where the two detail contents go: separate hosts while floating, the shared tabbed
+    // DetailBody while docked.
+    private ContentControl DeviceHost => _detailWindow?.ChainHost ?? DetailBody;
+    private ContentControl ClipDetailHost => _detailWindow?.ClipHost ?? DetailBody;
+
+    // Assign a control to a ContentControl host, detaching it from any previous host first
+    // (a control can have only one parent). Each window keeps its own layout queue, and an
+    // entry left in one window's queue for a control that now lives in another throws
+    // "InvalidateArrange on wrong LayoutManager" on a later frame and aborts the app (#83 on
+    // Linux, #164 on macOS). So before the attach, every other open window runs its pending
+    // layout while the control is detached, which drops those entries. That covers more than
+    // the old host's window: the control may have left its previous host earlier (a tab switch
+    // detaches the clip editor, _lastClipEditor is re-hosted later), and Avalonia re-queues a
+    // control caught in a layout cycle after the pass without scheduling another one, so an
+    // entry can sit in a window's queue long after the control left it.
+    private static void SetHost(ContentControl host, Control? content)
+    {
+        if (content?.Parent is ContentControl prev && !ReferenceEquals(prev, host)) prev.Content = null;
+        if (ReferenceEquals(host.Content, content)) return;
+        if (content is not null) FlushOtherWindows(TopLevel.GetTopLevel(host));
+        host.Content = content;
+    }
+
+    // Run the pending layout of every open window except `keep` (see SetHost).
+    private static void FlushOtherWindows(TopLevel? keep)
+    {
+        if (Avalonia.Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) return;
+        foreach (var w in desktop.Windows)
+            if (!ReferenceEquals(w, keep)) w.UpdateLayout();
+    }
+
+    private void OnToggleDetailWindow(object? sender, RoutedEventArgs e)
+    {
+        if (_detailWindow is not null) { _detailWindow.Close(); return; }   // → DockDetail
+
+        var win = new DetailWindow(this);
+        win.DockRequested += DockDetail;
+        win.EnableMidiLearn(_learn);   // so the popped-out chain/clip editor can be mapped
+        _controllerMenu?.Attach(win);  // …and rebound from a control's menu (specs/051 Story 7)
+        if (NewControllerOverlay() is { } chainOverlay) win.AddBodyOverlay(chainOverlay);   // knob numbers, pickup hints
+        _detailWindow = win;
+
+        // Move current content across: device chain → bottom pane, current clip editor → top.
+        if (_deviceChain is not null) SetHost(win.ChainHost, _deviceChain);
+        Control? clip = DetailBody.Content is ClipEditorView or AudioClipEditorView or DrumPatternView
+            ? (Control)DetailBody.Content! : _lastClipEditor;
+        if (clip is not null) SetHost(win.ClipHost, clip);
+        else win.ClipHost.Content = ClipPlaceholder();
+
+        // Hide the docked panel — state is preserved, it just lives in the window now.
+        DetailPanel.IsVisible = false;
+        DetailSplitter.IsVisible = false;
+        var row = _detailRow;
+        row.MinHeight = 0;
+        row.Height = new GridLength(0);
+
+        win.Show(this);
+    }
+
+    private void DockDetail()
+    {
+        _detailWindow = null;
+        if (_shuttingDown) return;
+        // Re-open docked on the Devices tab; the clip editor stays reachable via the Clip tab.
+        int t = Timeline.SelectedTrackId > 0 ? Timeline.SelectedTrackId : LastInstrumentTrack();
+        if (t > 0) ShowDevices(t);
+        SyncClipTab();
+    }
+
+    // Top-pane hint shown when the window opens with no clip selected.
+    private Control ClipPlaceholder() => new Border
+    {
+        Child = new TextBlock
+        {
+            Text = Loc.T("main.detail_window.select_a_clip_in_the"),
+            FontSize = 11,
+            Foreground = NotaPalette.TextTertiary,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        },
+    };
+
+    // Called from OnMainWindowClosing: drop the floating window without re-docking.
+    private void CloseFloatingDetail()
+    {
+        _shuttingDown = true;
+        _detailWindow?.Close();
+    }
+}

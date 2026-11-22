@@ -1,0 +1,385 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System.Runtime.InteropServices;
+
+namespace Nota.Infrastructure;
+
+/// <summary>
+/// Raw P/Invoke bindings to nota.engine's C ABI (see nota_engine.h).
+/// Mirrors the header exactly; do not add logic here — wrap it in
+/// <see cref="NotaEngine"/> instead. Bindings are split by domain across
+/// the NativeMethods.*.cs partials; this file holds the shared plumbing and
+/// the engine-global slice (lifecycle, transport, master, realtime, render).
+/// </summary>
+internal static partial class NativeMethods
+{
+    // Resolves to libnota_engine.dylib on macOS (placed next to the app binary).
+    private const string Lib = "nota_engine";
+
+    internal enum NotaResult
+    {
+        Ok = 0,
+        Unknown = 1,
+        InvalidArg = 2,
+        AudioDevice = 3,
+        AlreadyRunning = 4,
+        NotRunning = 5,
+    }
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_version")]
+    internal static partial IntPtr Version();
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_create")]
+    internal static partial IntPtr Create();
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_destroy")]
+    internal static partial void Destroy(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_set_data_dir", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult SetDataDir(string path);
+
+    [LibraryImport(Lib, EntryPoint = "nota_get_data_dir")]
+    internal static partial IntPtr GetDataDir();
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_start")]
+    internal static partial NotaResult Start(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_stop")]
+    internal static partial NotaResult Stop(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_test_tone")]
+    internal static partial NotaResult SetTestTone(IntPtr engine, int enabled);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_frequency")]
+    internal static partial NotaResult SetFrequency(IntPtr engine, float hz);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_sample_rate")]
+    internal static partial double SampleRate(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_is_running")]
+    internal static partial int IsRunning(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_play")]
+    internal static partial NotaResult TransportPlay(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_stop")]
+    internal static partial NotaResult TransportStop(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_set_bpm")]
+    internal static partial NotaResult SetBpm(IntPtr engine, double bpm);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_bpm")]
+    internal static partial double TransportBpm(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_set_time_signature")]
+    internal static partial NotaResult SetTimeSignature(IntPtr engine, int num, int denom);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_set_loop")]
+    internal static partial NotaResult SetLoop(IntPtr engine, int enabled, double startBeat, double endBeat);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_play_count_in")]
+    internal static partial NotaResult TransportPlayCountIn(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_set_count_in")]
+    internal static partial NotaResult SetCountIn(IntPtr engine, int bars);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_count_in_beats")]
+    internal static partial double CountInBeats(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_set_loop_record_mode")]
+    internal static partial NotaResult SetLoopRecordMode(IntPtr engine, int mode);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_loop_record_mode")]
+    internal static partial int LoopRecordMode(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_set_metronome")]
+    internal static partial NotaResult SetMetronome(IntPtr engine, int enabled);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_seek")]
+    internal static partial NotaResult Seek(IntPtr engine, double beat);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_position_beats")]
+    internal static partial double PositionBeats(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_snapshot")]
+    internal static partial int TransportSnapshot(IntPtr engine, out NotaTransportSnapshot snapshot);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_is_playing")]
+    internal static partial int IsPlaying(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_loop_enabled")]
+    internal static partial int LoopEnabled(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_loop_start")]
+    internal static partial double LoopStart(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_loop_end")]
+    internal static partial double LoopEnd(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_master_volume")]
+    internal static partial NotaResult SetMasterVolume(IntPtr engine, float volume);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_track_meter")]
+    internal static partial int TrackMeter(IntPtr engine, int trackId, out NotaMeter meter);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_master_meter")]
+    internal static partial NotaResult MasterMeter(IntPtr engine, out NotaMeter meter);
+
+    // --- Cue (specs/089) ---
+    [LibraryImport(Lib, EntryPoint = "nota_engine_cue_meter")]
+    internal static partial NotaResult CueMeter(IntPtr engine, out NotaMeter meter);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_cue_volume")]
+    internal static partial NotaResult SetCueVolume(IntPtr engine, float gain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_cue_volume")]
+    internal static partial float CueVolume(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_set_click_destination")]
+    internal static partial NotaResult SetClickDestination(IntPtr engine, int dest);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_click_destination")]
+    internal static partial int ClickDestination(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_transport_set_click_volume")]
+    internal static partial NotaResult SetClickVolume(IntPtr engine, float gain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_note_on")]
+    internal static partial NotaResult NoteOn(IntPtr engine, int pitch, float velocity);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_note_off")]
+    internal static partial NotaResult NoteOff(IntPtr engine, int pitch);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_note_off_velocity")]
+    internal static partial NotaResult NoteOffVelocity(IntPtr engine, int pitch, float releaseVelocity);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_note_off_velocity")]
+    internal static partial NotaResult TrackNoteOffVelocity(IntPtr engine, int trackId, int pitch, float releaseVelocity);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_note_on")]
+    internal static partial NotaResult TrackNoteOn(IntPtr engine, int trackId, int pitch, float velocity);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_note_off")]
+    internal static partial NotaResult TrackNoteOff(IntPtr engine, int trackId, int pitch);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_note_expression")]
+    internal static partial NotaResult NoteExpression(IntPtr engine, int pitch, int dim, float value);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_note_expression")]
+    internal static partial NotaResult TrackNoteExpression(IntPtr engine, int trackId, int pitch, int dim, float value);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_controller")]
+    internal static partial NotaResult Controller(IntPtr engine, int ctl, float value);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_controller")]
+    internal static partial NotaResult TrackController(IntPtr engine, int trackId, int ctl, float value);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_delivered_controller")]
+    internal static partial float TrackDeliveredController(IntPtr engine, int trackId, int ctl);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_midi_ctl_selftest")]
+    internal static partial int MidiCtlSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_audition_track")]
+    internal static partial void SetAuditionTrack(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_recording")]
+    internal static partial NotaResult SetRecording(IntPtr engine, int enabled);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_is_recording")]
+    internal static partial int IsRecording(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_retry_take")]
+    internal static partial int RetryTake(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_record_start_status")]
+    internal static partial int RecordStartStatus(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_session_pass_selftest")]
+    internal static partial int SessionPassSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_session_pass_spans")]
+    internal static partial int SessionPassSpans(IntPtr engine, [Out] NotaPassSpan[] buf, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_audio_record_track")]
+    internal static partial int AudioRecordTrack(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_audio_record_start_beat")]
+    internal static partial double AudioRecordStartBeat(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_audio_record_length_beats")]
+    internal static partial double AudioRecordLengthBeats(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_master_track_id")]
+    internal static partial int MasterTrackId(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_audio_record_peaks")]
+    internal static partial int AudioRecordPeaks(IntPtr engine, [Out] float[] outMinMax, int maxPoints);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_recording_tracks")]
+    internal static partial int RecordingTracks(IntPtr engine, [Out] int[]? outIds, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_audio_record_length_beats_of")]
+    internal static partial double AudioRecordLengthBeatsOf(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_audio_record_peaks_of")]
+    internal static partial int AudioRecordPeaksOf(IntPtr engine, int trackId, [Out] float[] outMinMax, int maxPoints);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_record_skipped")]
+    internal static partial int RecordSkipped(IntPtr engine, [Out] int[]? trackIds, [Out] int[]? reasons, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_take_record_test_armed")]
+    internal static partial int TakeRecordTestArmed(IntPtr engine, float[] interleaved, int channels, int frames, double startBeat);
+
+    [LibraryImport(Lib, EntryPoint = "nota_take_record_test_armed_disarm")]
+    internal static partial int TakeRecordTestArmedDisarm(IntPtr engine, float[] interleaved, int channels, int frames, double startBeat, int disarmTrackId, int disarmAtFrame);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_input_block_test")]
+    internal static partial void InputBlockTest(IntPtr engine, float[] interleaved, int frames, int channels);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_record_held_notes")]
+    internal static partial int RecordHeldNotes(IntPtr engine, [Out] NotaRecordHeldNote[] outNotes, int maxN,
+                                                out int trackId, out int sessionScene, out double nowBeat);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_poll")]
+    internal static partial NotaResult Poll(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_undo")]
+    internal static partial NotaResult Undo(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_redo")]
+    internal static partial NotaResult Redo(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_can_undo")]
+    internal static partial int CanUndo(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_can_redo")]
+    internal static partial int CanRedo(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_undo_group_begin")]
+    internal static partial void UndoGroupBegin(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_undo_group_end")]
+    internal static partial void UndoGroupEnd(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_clear_undo_history")]
+    internal static partial void ClearUndoHistory(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_pan_law")]
+    internal static partial NotaResult SetPanLaw(IntPtr engine, int law, int checkpoint);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_pan_law")]
+    internal static partial int PanLaw(IntPtr engine);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal readonly record struct NotaSection(double StartBeat, double LengthBeats, IntPtr Name);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_section_count")]
+    internal static partial int SectionCount(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_section_start")]
+    internal static partial double SectionStart(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_section_length")]
+    internal static partial double SectionLength(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_section_name")]
+    internal static partial IntPtr SectionName(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_sections")]
+    internal static partial NotaResult SetSections(IntPtr engine, [In] NotaSection[] sections, int count, int checkpoint);
+
+    [LibraryImport(Lib, EntryPoint = "nota_section_move")]
+    internal static partial NotaResult SectionMove(IntPtr engine, int index, int toBoundary);
+
+    [LibraryImport(Lib, EntryPoint = "nota_section_duplicate_with_content")]
+    internal static partial NotaResult SectionDuplicateWithContent(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_section_delete_with_content")]
+    internal static partial NotaResult SectionDeleteWithContent(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_section_overlaps")]
+    internal static partial int SectionOverlaps(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_mix_gesture_begin")]
+    internal static partial int MixGestureBegin(IntPtr engine, [In] MixTarget[] targets, int count);
+
+    [LibraryImport(Lib, EntryPoint = "nota_mix_gesture_end")]
+    internal static partial void MixGestureEnd(IntPtr engine, int handle);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_master_volume")]
+    internal static partial float MasterVolume(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_stereo_measures")]
+    internal static partial int StereoMeasures(IntPtr engine, [Out] StereoMeasure[] rows, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_mix_undo_selftest")]
+    internal static partial int MixUndoSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_reset")]
+    internal static partial void Reset(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_render_offline")]
+    internal static partial NotaResult RenderOffline(IntPtr engine, [Out] float[] outBuffer, int frames);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_render_device_block")]
+    internal static partial NotaResult RenderDeviceBlock(IntPtr engine, [Out] float[] outBuffer, int frames);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_render_device_block_cue")]
+    internal static partial NotaResult RenderDeviceBlockCue(IntPtr engine, [Out] float[] mainOut, [Out] float[]? cueOut, int frames);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_render_offline_at")]
+    internal static partial NotaResult RenderOfflineAt(IntPtr engine, [Out] float[] outBuffer, int frames, double sampleRate);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_preview_file", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult PreviewFile(IntPtr engine, string path);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_stop_preview")]
+    internal static partial NotaResult StopPreview(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_preview_active")]
+    internal static partial int PreviewActive(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_preview_file_at", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult PreviewFileAt(IntPtr engine, string path, double startSeconds);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_preview_loop")]
+    internal static partial NotaResult SetPreviewLoop(IntPtr engine, int on);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_preview_gain")]
+    internal static partial NotaResult SetPreviewGain(IntPtr engine, float gain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_preview_position")]
+    internal static partial double PreviewPosition(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_preview_selftest")]
+    internal static partial int PreviewSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_xrun_count")]
+    internal static partial int XrunCount(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_xrun_selftest")]
+    internal static partial int XrunSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_graph_retire_selftest")]
+    internal static partial int GraphRetireSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_timed_events_selftest")]
+    internal static partial int TimedEventsSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_articulation_selftest")]
+    internal static partial int ArticulationSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_cpu_load")]
+    internal static partial float CpuLoad(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_render_threads")]
+    internal static partial NotaResult SetRenderThreads(IntPtr engine, int count);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_render_threads")]
+    internal static partial int RenderThreads(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_render_threads_cpu_seconds")]
+    internal static partial double RenderThreadsCpuSeconds(IntPtr engine);
+}

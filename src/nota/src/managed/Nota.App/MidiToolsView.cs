@@ -1,0 +1,382 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// The clip-tools panel on the right of the piano roll (nota-design "Nota Clip Editor" 1a):
+// Generate / Transform segments, the tool list (the chosen one on Brass Wash with a 2px
+// brass bar), a parameter list built from the tool's own descriptor (no per-tool panel),
+// the seed, the Replace / Add output, and at the foot the result line, Apply — solid brass
+// only while something is pending — and Revert / Defaults. Every knob move re-runs the
+// tool and previews the result in the roll (brass outlines over the notes) — audible,
+// undo-free — so Apply is a decision the user has already heard.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application;
+using Nota.Application.Editing;
+using Nota.Application.Midi;
+using static Nota.App.ClipEditorKit;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public sealed class MidiToolsView : UserControl
+{
+    private readonly PianoRollView _roll;
+
+    public ColumnFlow Flow { get; }
+    private readonly Dictionary<string, MidiToolSettings> _settings = new(StringComparer.Ordinal);
+
+    private readonly StackPanel _toolList = new();
+    private readonly StackPanel _paramList = new() { Spacing = 9 };
+    private readonly TextBlock _paramTitle = new();
+    private readonly TextBlock _scopeText = Meta("");
+    private readonly TextBlock _seedText = Mono("1");
+    private readonly TextBlock _resultText = Mono("", 10, NotaPalette.TextMuted);
+    private readonly Button _applyButton;
+    private Action<int> _setKind = _ => { };
+
+    private MidiToolKind _kind = MidiToolKind.Generate;
+    private MidiTool? _tool;
+    private MidiToolBlend _blend = MidiToolBlend.Replace;
+    private int _seed = 1;
+
+    // The clip as it stood before the preview, plus the selection the tool is scoped to.
+    // The working set: each clip the tool runs on — its notes (clip-local beats), the selected
+    // ones among them, and its length. One clip normally; with several clips open (specs/029)
+    // every clip that has selected notes, or the active clip when none is selected, each run
+    // on its own so what a tool adds stays in that clip.
+    private List<(ClipNotes Clip, HashSet<int> Scope, double Length)> _work = new();
+    private int SourceCount => _work.Sum(w => w.Clip.Notes.Count);
+    private bool _suppressResync;
+
+    public MidiToolsView(PianoRollView roll)
+    {
+        _roll = roll;
+        Background = NotaPalette.Panel;
+        BorderBrush = NotaPalette.BorderDefault;
+        BorderThickness = new Thickness(1, 0, 0, 0);
+
+        var kinds = Segments(new[] { Loc.T("midi_tools.generate"), Loc.T("midi_tools.transform") }, 0, i =>
+        {
+            var kind = i == 0 ? MidiToolKind.Generate : MidiToolKind.Transform;
+            if (_kind == kind) return;
+            _kind = kind;
+            SelectTool(null);
+        }, out _setKind, fill: true);
+
+        var title = SectionTitle("");
+        _paramTitle = (TextBlock)title.Children[0];
+        var seedBox = Field(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8,
+            Children = { CapsLabel(Loc.T("midi_tools.seed")), _seedText },
+        });
+        var reroll = ClipEditorKit.Button(Loc.T("midi_tools.reroll"), () =>
+        {
+            _seed = Random.Shared.Next(1, 9999);
+            _seedText.Text = _seed.ToString(NotaNum.Culture);
+            Preview();
+        });
+        reroll.HorizontalAlignment = HorizontalAlignment.Right;
+        var seedRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 6, Margin = new Thickness(0, 2, 0, 0) };
+        seedRow.Children.Add(seedBox);
+        Grid.SetColumn(reroll, 1); seedRow.Children.Add(reroll);
+        var parameters = Section(title, 9, _paramList, seedRow);
+
+        var output = Section(SectionTitle(Loc.T("common.output"), _scopeText), 8,
+            Segments(new[] { Loc.T("midi_tools.replace"), Loc.T("midi_tools.add") }, 0, i =>
+            {
+                _blend = i == 0 ? MidiToolBlend.Replace : MidiToolBlend.Add;
+                Preview();
+            }, out _, fill: true));
+
+        _applyButton = new Button { Content = Loc.T("midi_tools.apply"), Height = 30, FontSize = NotaType.Name, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Stretch, Classes = { "primary" } };
+        _applyButton.Click += (_, _) => Apply();
+        _resultText.HorizontalAlignment = HorizontalAlignment.Center;
+        var foot = new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                _resultText, _applyButton,
+                Pair(ClipEditorKit.Button(Loc.T("midi_tools.revert"), Revert), ClipEditorKit.Button(Loc.T("midi_tools.defaults"), ResetTool)),
+            },
+        };
+        foot.Margin = new Thickness(14, 10, 14, 12);
+
+        // The right padding keeps 8px clear of the overlay scrollbar. Like the inspector, the
+        // panel takes a second column when one would scroll (specs/055).
+        var tools = new StackPanel { Spacing = 10, Children = { kinds, _toolList } };
+        Flow = new ColumnFlow(new SectionColumns(10, tools, parameters, output), foot, new Thickness(14, 12, 14, 0), ToolsW - 1)
+        {
+            Reserve = MinCanvasW,
+        };
+        Content = Flow;
+
+        RebuildToolList();
+        RebuildParams();
+        _roll.Changed += OnRollChanged;
+        // A preview must not outlive the rail: switching clips replaces the whole editor,
+        // and the engine is still holding the previewed notes with nothing in undo to get
+        // back from them.
+        DetachedFromVisualTree += (_, _) => _roll.CancelPreview();
+        Resync();
+        PaintResult(null);
+    }
+
+    /// <summary>Called by the clip editor when the rail is shown or hidden. Hiding drops any
+    /// preview, so a tool the user walked away from never silently sticks.</summary>
+    public void SetActive(bool active)
+    {
+        if (active) { Resync(); Preview(); }
+        else { _roll.CancelPreview(); PaintResult(null); }
+    }
+
+    // --- state ------------------------------------------------------------
+
+    private void OnRollChanged()
+    {
+        // ShowPreview raises Changed too; re-reading then would capture the preview as the
+        // source and the tool would compound on its own output.
+        if (_suppressResync || _roll.Previewing) return;
+        Resync();
+        PaintApply();
+    }
+
+    /// <summary>Re-reads the clip and the selection as the working set for the next run.</summary>
+    private void Resync()
+    {
+        var (clips, selected) = _roll.SourceByClip();
+        var set = _roll.Clips;
+        _work = new();
+        for (int k = 0; k < clips.Count; k++)
+            if (selected[k].Count > 0) _work.Add((clips[k], selected[k], set.Clips[k].LengthBeats));
+        if (_work.Count == 0 && set.Active < clips.Count)
+            _work.Add((clips[set.Active], new HashSet<int>(), set.ActiveClip.LengthBeats));
+        int scoped = _work.Sum(w => w.Scope.Count);
+        _scopeText.Text = scoped > 0
+            ? Loc.F("midi_tools.selected", scoped)
+            : Loc.F("midi_tools.clip", SourceCount);
+    }
+
+    private MidiToolContext Context(double lengthBeats) => new()
+    {
+        LengthBeats = lengthBeats,
+        Grid = _roll.Grids.Quantize.Beats(_roll.BeatsPerBar),   // like Quantize: never the zoom's step
+        ScaleOn = _roll.ScaleOn,
+        ScaleRoot = _roll.ScaleRoot,
+        ScaleMask = MidiScales.MaskAt(_roll.ScaleIndex),
+        Seed = _seed,
+    };
+
+    private MidiToolSettings SettingsFor(MidiTool tool)
+    {
+        if (!_settings.TryGetValue(tool.Id, out var s)) _settings[tool.Id] = s = tool.NewSettings();
+        return s;
+    }
+
+    private void Preview()
+    {
+        if (_tool is null) { _roll.CancelPreview(); PaintResult(null); return; }
+        // A tool must not build on notes still stacked under a pending placement: let it go
+        // first (its Changed re-reads the working set through OnRollChanged).
+        if (!_roll.Previewing) _roll.SettlePlacement();
+        var results = _work.Select(w => new ClipNotes(w.Clip.TrackId, w.Clip.ClipIndex,
+            MidiToolRunner.Apply(_tool, w.Clip.Notes, w.Scope, SettingsFor(_tool), Context(w.Length), _blend))).ToList();
+        _suppressResync = true;
+        _roll.ShowPreview(results);
+        _suppressResync = false;
+        PaintResult(results.Sum(r => r.Notes.Count));
+    }
+
+    private void Apply()
+    {
+        if (_tool is null || !_roll.Previewing) return;
+        _suppressResync = true;
+        _roll.ApplyPreview();
+        _suppressResync = false;
+        Resync();
+        // Deliberately no re-preview: the applied result is the new source, so running the
+        // tool again here would show it applied twice before the user asked for anything.
+        // The next knob move (or Reroll) arms a fresh preview from the new source.
+        _resultText.Text = Loc.F("midi_tools.notes_applied", SourceCount);
+        _resultText.Foreground = NotaPalette.TextMuted;
+        PaintApply();
+    }
+
+    private void Revert()
+    {
+        _roll.CancelPreview();
+        Resync();
+        PaintResult(null);
+    }
+
+    private void ResetTool()
+    {
+        _seed = 1;
+        _seedText.Text = "1";
+        if (_tool is null) return;
+        SettingsFor(_tool).Reset();
+        RebuildParams();
+        Preview();
+    }
+
+    /// <summary>The line over Apply: what the pending result does, or what to do first.</summary>
+    private void PaintResult(int? resultCount)
+    {
+        if (resultCount is not int count)
+            _resultText.Text = _tool is null ? Loc.T("midi_tools.pick_a_tool") : "—";
+        else
+        {
+            int delta = count - SourceCount;
+            _resultText.Text = _blend == MidiToolBlend.Add
+                ? Loc.F("midi_tools.notes", delta)
+                : Loc.F("midi_tools.notes_was", count, SourceCount);
+        }
+        _resultText.Foreground = NotaPalette.TextMuted;
+        PaintApply();
+    }
+
+    /// <summary>Apply is solid brass only while something is actually pending.</summary>
+    private void PaintApply() => _applyButton.IsEnabled = _roll.Previewing && _tool is not null;
+
+    private void SelectTool(MidiTool? tool)
+    {
+        _roll.CancelPreview();
+        Resync();
+        _tool = tool;
+        RebuildToolList();
+        RebuildParams();
+        Preview();
+    }
+
+    // --- tool list --------------------------------------------------------
+
+    private void RebuildToolList()
+    {
+        _setKind(_kind == MidiToolKind.Generate ? 0 : 1);
+        _toolList.Children.Clear();
+        foreach (var tool in MidiToolCatalog.All.Where(t => t.Kind == _kind))
+        {
+            bool active = _tool?.Id == tool.Id;
+            var name = new TextBlock
+            {
+                Text = tool.Name, FontSize = NotaType.Name, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center,
+                Foreground = active ? NotaPalette.TextPrimary : NotaPalette.TextSecondary,
+            };
+            var row = new Border
+            {
+                Height = 26, CornerRadius = NotaRadius.Cell, Padding = new Thickness(10, 0),
+                Background = active ? NotaPalette.SurfaceHover : Brushes.Transparent,
+                Cursor = new Cursor(StandardCursorType.Hand),
+                Child = new Grid
+                {
+                    Children =
+                    {
+                        new Border
+                        {
+                            Width = 2, Margin = new Thickness(-10, 4, 0, 4), HorizontalAlignment = HorizontalAlignment.Left,
+                            Background = active ? NotaPalette.Accent : Brushes.Transparent,
+                        },
+                        name,
+                    },
+                },
+            };
+            if (!string.IsNullOrEmpty(tool.Blurb)) ToolTip.SetTip(row, tool.Blurb);
+            if (!active)
+            {
+                row.PointerEntered += (_, _) => row.Background = NotaPalette.SurfaceRaised;
+                row.PointerExited += (_, _) => row.Background = Brushes.Transparent;
+            }
+            var captured = tool;
+            row.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(row).Properties.IsLeftButtonPressed) return;
+                e.Handled = true;
+                SelectTool(captured);
+            };
+            _toolList.Children.Add(row);
+        }
+    }
+
+    // --- parameter list ---------------------------------------------------
+
+    private void RebuildParams()
+    {
+        _paramList.Children.Clear();
+        _paramTitle.Text = _tool is null ? Loc.T("midi_tools.parameters") : _tool.Name;
+        if (_tool is null)
+        {
+            _paramList.Children.Add(new TextBlock { Text = Loc.T("midi_tools.pick_a_tool_to_see"), FontSize = NotaType.Body, Foreground = NotaPalette.TextTertiary });
+            return;
+        }
+        var settings = SettingsFor(_tool);
+        foreach (var p in _tool.Params) _paramList.Children.Add(ParamRow(p, settings));
+    }
+
+    private Control ParamRow(MidiToolParam p, MidiToolSettings settings)
+    {
+        switch (p.Kind)
+        {
+            case MidiParamKind.Choice:
+            {
+                var value = Mono(p.Display(settings[p.Id]));
+                var drop = Dropdown(value, a => ShowMenu(a, p.Choices ?? Array.Empty<string>(), (int)Math.Round(settings[p.Id]), i =>
+                {
+                    settings.Set(p.Id, i);
+                    value.Text = p.Display(settings[p.Id]);
+                    Preview();
+                }));
+                return Labelled(p.Name, drop);
+            }
+
+            case MidiParamKind.Toggle:
+            {
+                return SwitchRow(p.Name, () => settings.Flag(p.Id), () =>
+                {
+                    settings.Set(p.Id, settings.Flag(p.Id) ? 0 : 1);
+                    Preview();
+                }, out _, height: 20);
+            }
+
+            default:
+            {
+                double span = Math.Max(1e-9, p.Max - p.Min);
+                return SliderRow(NotaText.Label(p.Name), 62,
+                    () => (settings[p.Id] - p.Min) / span,
+                    v =>
+                    {
+                        double raw = p.Min + v * span;
+                        if (p.Kind is MidiParamKind.Int or MidiParamKind.Note) raw = Math.Round(raw);
+                        if (Math.Abs(raw - settings[p.Id]) < 1e-9) return;
+                        settings.Set(p.Id, raw);
+                        Preview();
+                    },
+                    () => p.Display(settings[p.Id]), out _,
+                    reset: () => { settings.Set(p.Id, p.Default); Preview(); });
+            }
+        }
+    }
+
+    // A label in the slider-label column, then a control filling the rest.
+    private static Control Labelled(string label, Control control)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("62,*"), ColumnSpacing = 10 };
+        grid.Children.Add(CapsLabel(NotaText.Label(label)));
+        Grid.SetColumn(control, 1); grid.Children.Add(control);
+        return grid;
+    }
+
+    private static TextBlock CapsLabel(string text) => new()
+    {
+        Text = text, FontSize = 8.5, FontWeight = FontWeight.Medium, Foreground = NotaPalette.TextTertiary,
+        VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+    };
+}

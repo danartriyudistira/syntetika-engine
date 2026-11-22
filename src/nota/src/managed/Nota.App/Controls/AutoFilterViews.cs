@@ -1,0 +1,285 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Auto Filter card views (besides the response curve; the Shape faders are upright value bars):
+//  • AfEnvView   — the Envelope tab's window: the input envelope (a darker grey) and the cutoff it
+//                  drives (neutral ink) over the last few hundred ms, with the base cutoff dashed;
+//                  drag up / down for the amount;
+//  • AfLfoView   — the LFO tab's window: the LFO's cutoff motion over two bars (or a few
+//                  cycles in free time), raw shape dashed in a darker grey, the smoothed motion in
+//                  neutral ink, the stereo offset's right channel in the darker grey,
+//                  a playhead dot at the live phase; drag up / down for the amount, sideways
+//                  for the start phase.
+
+using System;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Media;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+// Shared by the two time windows: a vertical drag gesture on the whole window.
+internal abstract class AfWindowBase : Control
+{
+    private bool _drag;
+    private Point _start;
+    private double _v0, _h0;
+
+    public event Action? GestureBegin;
+    public event Action? GestureEnd;
+    /// <summary>Vertical drag: the new value for the dragged param (from DragStart's start value).</summary>
+    public event Action<double>? DragV;
+    /// <summary>Horizontal drag: the new value (0..1, wraps) — only raised when HorizontalDrag.</summary>
+    public event Action<double>? DragH;
+    public Func<double>? StartV { get; set; }
+    public Func<double>? StartH { get; set; }
+    public bool Dragging => _drag;
+
+    /// <summary>A title that is also a control (the modulation target): drawn with a chevron,
+    /// a click on it raises this with its bounds instead of starting a drag.</summary>
+    public event Action<Rect>? TitleClicked;
+    protected Rect TitleRect;
+    private bool _titleHover;
+
+    protected AfWindowBase() { ClipToBounds = true; Cursor = new Cursor(StandardCursorType.SizeAll); MinHeight = 36; }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        if (TitleClicked is not null && TitleRect.Contains(e.GetPosition(this))) { TitleClicked(TitleRect); e.Handled = true; return; }
+        _drag = true; _start = e.GetPosition(this);
+        _v0 = StartV?.Invoke() ?? 0; _h0 = StartH?.Invoke() ?? 0;
+        GestureBegin?.Invoke(); e.Pointer.Capture(this); e.Handled = true;
+    }
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        if (!_drag)
+        {
+            bool hover = TitleClicked is not null && TitleRect.Contains(e.GetPosition(this));
+            if (hover != _titleHover) { _titleHover = hover; Cursor = new Cursor(hover ? StandardCursorType.Hand : StandardCursorType.SizeAll); InvalidateVisual(); }
+            return;
+        }
+        var p = e.GetPosition(this);
+        double dy = (_start.Y - p.Y) / Math.Max(40, Bounds.Height), dx = (p.X - _start.X) / Math.Max(40, Bounds.Width);
+        DragV?.Invoke(Math.Clamp(_v0 + dy * 0.5, 0, 1));
+        if (StartH is not null) { double h = _h0 + dx; DragH?.Invoke(h - Math.Floor(h)); }
+    }
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        if (!_drag) return;
+        _drag = false; InvalidateVisual(); e.Pointer.Capture(null); GestureEnd?.Invoke();
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        if (_titleHover) { _titleHover = false; Cursor = new Cursor(StandardCursorType.SizeAll); InvalidateVisual(); }
+        base.OnPointerExited(e);
+    }
+
+    /// <summary>The window's title; with a TitleClicked listener, a chevron follows it and it
+    /// lifts to ink 2 under the pointer. Returns its bounds.</summary>
+    protected Rect DrawTitle(DrawingContext ctx, Rect frame, string title)
+    {
+        bool live = TitleClicked is not null;
+        var ink = live && _titleHover ? NotaPalette.TextSecondary : NotaGraph.TitleInk;
+        var r = NotaGraph.Title(ctx, frame, title, ink);
+        if (live)
+        {
+            double cx = r.Right + 6, cy = r.Center.Y + 0.5;
+            var g = new StreamGeometry();
+            using (var c = g.Open())
+            {
+                c.BeginFigure(new Point(cx - 2.5, cy - 1.2), false);
+                c.LineTo(new Point(cx, cy + 1.3));
+                c.LineTo(new Point(cx + 2.5, cy - 1.2));
+                c.EndFigure(false);
+            }
+            ctx.DrawGeometry(null, new Pen(ink, 1.1), g);
+            r = new Rect(r.X - 3, r.Y - 2, r.Width + 15, r.Height + 4);
+        }
+        TitleRect = live ? r : default;
+        return r;
+    }
+
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        if (_drag) { _drag = false; InvalidateVisual(); GestureEnd?.Invoke(); }
+        base.OnPointerCaptureLost(e);
+    }
+
+    protected static void Grid(DrawingContext ctx, double w, double h, int cols)
+    {
+        for (int i = 1; i < 4; i++) ctx.DrawLine(NotaGraph.GridPen, new Point(0, h * i / 4), new Point(w, h * i / 4));
+        for (int i = 1; i < cols; i++) ctx.DrawLine(NotaGraph.GridPen, new Point(w * i / cols, 0), new Point(w * i / cols, h));
+    }
+}
+
+internal sealed class AfEnvView : AfWindowBase
+{
+    private float[] _env = Array.Empty<float>(), _cut = Array.Empty<float>();
+    private int _n;
+    private double _base = 0.5, _peakHz, _windowMs = 600;
+    private string _baseText = "", _winText = "";
+    /// <summary>The window's title (the card names the modulation target in it).</summary>
+    public string Title { get; set; } = "";
+
+    /// <summary>The last <paramref name="n"/> history points (1 ms each), oldest first.</summary>
+    public void Set(float[] env, float[] cut, int n, double baseNorm, string baseText, double windowMs, double peakHz)
+    {
+        _env = env; _cut = cut; _n = n; _base = baseNorm; _baseText = baseText; _windowMs = windowMs; _peakHz = peakHz;
+        _winText = windowMs >= 1000 ? NotaNum.F($"{windowMs / 1000:0.#} s") : NotaNum.F($"{windowMs:0} ms");
+        InvalidateVisual();
+    }
+
+    public override void Render(DrawingContext ctx)
+    {
+        double w = Bounds.Width, h = Bounds.Height;
+        if (w <= 0 || h <= 0) return;
+        var frame = new Rect(0, 0, w, h);
+        NotaGraph.Window(ctx, frame);
+        Grid(ctx, w, h, 6);
+        double top = NotaGraph.PlotTop, bot = h - NotaGraph.PlotFloor, span = Math.Max(1, bot - top);
+        double YCut(double norm) => bot - Math.Clamp(norm, 0, 1) * span;
+        double YEnv(double lin) { double db = lin > 1e-6 ? 20 * Math.Log10(lin) : -120; return bot - Math.Clamp((db + 48) / 48, 0, 1) * span; }
+
+        // base cutoff, dashed
+        double by = YCut(_base);
+        ctx.DrawLine(new Pen(NotaPalette.BorderStrong, 1, new DashStyle(new double[] { 2, 4 }, 0)), new Point(0, by), new Point(w, by));
+
+        if (_n > 1)
+        {
+            StreamGeometry Line(float[] src, Func<double, double> y)
+            {
+                var g = new StreamGeometry();
+                using var c = g.Open();
+                c.BeginFigure(new Point(0, y(src[0])), false);
+                // at most one vertex per pixel: the peak of the points under it keeps transients
+                int px = Math.Max(2, (int)w);
+                for (int x = 1; x < px; x++)
+                {
+                    int a = (int)((double)(x - 1) / px * _n), b = Math.Max(a + 1, (int)((double)x / px * _n));
+                    double best = src[Math.Min(a, _n - 1)];
+                    for (int k = a; k < b && k < _n; k++) best = Math.Max(best, src[k]);
+                    c.LineTo(new Point(x * w / (px - 1), y(best)));
+                }
+                c.EndFigure(false);
+                return g;
+            }
+            ctx.DrawGeometry(null, NotaGraph.SecondaryPen(NotaPalette.TextTertiary, 1.1), Line(_env, v => YEnv(v)));
+            ctx.DrawGeometry(null, NotaGraph.PrimaryPen, Line(_cut, v => YCut(v)));
+        }
+
+        DrawTitle(ctx, frame, Title.Length > 0 ? Title : Loc.T("device.auto_filter.cutoff_over_time"));
+        string pk = NotaNum.Hz(_peakHz);
+        NotaGraph.Axis(ctx, frame, NotaGraph.Corner.TopRight, pk, Dragging ? NotaPalette.AccentBright : NotaPalette.TextSecondary);
+        // The legend shares the title row, left of the peak read-out, above the plot.
+        NotaGraph.Legend(ctx, w - 14 - NotaGraph.AxisText(pk).Width, 3, ("input", NotaPalette.TextTertiary, NotaGraph.Mark.Line));
+        NotaGraph.Axis(ctx, frame, NotaGraph.Corner.BottomLeft, "0");
+        NotaGraph.Axis(ctx, frame, NotaGraph.Corner.BottomRight, _winText);
+        var bt = NotaGraph.AxisText(_baseText);
+        ctx.DrawText(bt, new Point((w - bt.Width) / 2, h - bt.Height - 3));
+    }
+}
+
+internal sealed class AfLfoView : AfWindowBase
+{
+    private int _wave;
+    private double _morph, _amount, _offset, _stereo, _smoothCycles, _cycles = 8, _phase = double.NaN;
+    private bool _on = true;
+    private string _title = "LFO → Freq", _amt = "", _morphText = "", _mid = "", _end = "";
+    private readonly Random _rng = new(7);
+    private readonly double[] _sh = new double[64];
+
+    public AfLfoView() { for (int i = 0; i < _sh.Length; i++) _sh[i] = _rng.NextDouble() * 2 - 1; }
+
+    /// <summary>
+    /// Shape, depth (0..1), start offset and stereo offset (cycles), the smoothing time in
+    /// cycles, how many cycles the window shows, and the live phase within the current
+    /// cycle (NaN hides the playhead). Labels are pre-formatted by the card.
+    /// </summary>
+    public void Set(bool on, int wave, double morph, double amount, double offset, double stereo, double smoothCycles,
+        double cycles, double livePhase, string title, string amt, string morphText, string mid, string end)
+    {
+        _on = on; _wave = wave; _morph = morph; _amount = amount; _offset = offset; _stereo = stereo;
+        _smoothCycles = smoothCycles; _cycles = Math.Max(0.25, cycles); _phase = livePhase;
+        _title = title; _amt = amt; _morphText = morphText; _mid = mid; _end = end;
+        InvalidateVisual();
+    }
+
+    private double Shape(double ph, int cycle)
+    {
+        ph -= Math.Floor(ph);
+        return _wave switch
+        {
+            0 => Math.Sin(2 * Math.PI * ph),
+            1 => 4 * Math.Abs(ph - 0.5) - 1,
+            2 => 2 * ph - 1,
+            3 => ph < 0.5 + _morph * 0.49 ? 1 : -1,
+            _ => _sh[((cycle % _sh.Length) + _sh.Length) % _sh.Length],
+        };
+    }
+
+    public override void Render(DrawingContext ctx)
+    {
+        double w = Bounds.Width, h = Bounds.Height;
+        if (w <= 0 || h <= 0) return;
+        var frame = new Rect(0, 0, w, h);
+        NotaGraph.Window(ctx, frame);
+        int cols = _cycles <= 16 && Math.Abs(_cycles - Math.Round(_cycles)) < 1e-6 ? (int)Math.Round(_cycles) : 8;
+        Grid(ctx, w, h, Math.Clamp(cols, 2, 16));
+        double mid = h / 2, amp = (h / 2 - 12) * Math.Max(0.04, _amount);
+        ctx.DrawLine(new Pen(NotaPalette.BorderStrong, 1, new DashStyle(new double[] { 2, 4 }, 0)), new Point(0, mid), new Point(w, mid));
+
+        int px = Math.Max(8, (int)w);
+        double a = _smoothCycles <= 1e-4 ? 0 : Math.Exp(-(_cycles / px) / _smoothCycles);   // one-pole per pixel
+        StreamGeometry Trace(double extra, bool smooth)
+        {
+            var g = new StreamGeometry();
+            using var c = g.Open();
+            // run the smoother over one cycle first so the drawn part starts settled
+            double s = 0;
+            if (smooth) for (int x = -px; x < 0; x++) { double ph = x * _cycles / px + _offset + extra; s = Shape(ph, (int)Math.Floor(ph)) + a * (s - Shape(ph, (int)Math.Floor(ph))); }
+            for (int x = 0; x <= px; x++)
+            {
+                double ph = x * _cycles / px + _offset + extra;
+                double v = Shape(ph, (int)Math.Floor(ph));
+                if (smooth) { s = v + a * (s - v); v = s; }
+                var p = new Point(x * w / px, mid - v * amp);
+                if (x == 0) c.BeginFigure(p, false); else c.LineTo(p);
+            }
+            c.EndFigure(false);
+            return g;
+        }
+        if (_on)
+        {
+            var dashed = new Pen(NotaPalette.TextTertiary, 1.1, new DashStyle(new double[] { 4, 4 }, 0));
+            ctx.DrawGeometry(null, dashed, Trace(0, false));
+            if (_stereo > 1e-4) ctx.DrawGeometry(null, NotaGraph.SecondaryPen(NotaPalette.TextTertiary, 1.2), Trace(_stereo, a > 0));
+            ctx.DrawGeometry(null, NotaGraph.PrimaryPen, Trace(0, a > 0));
+
+            if (!double.IsNaN(_phase))
+            {
+                // the playhead sits in the first cycle of the window at the live phase
+                double rel = _phase - _offset; rel -= Math.Floor(rel);
+                double x = rel / _cycles * w;
+                double v = Shape(_phase, 0);
+                ctx.DrawLine(new Pen(NotaPalette.Accent, 1), new Point(x, NotaGraph.PlotTop - 2), new Point(x, h - NotaGraph.PlotFloor + 2));   // clear of the title and the axis labels
+                ctx.DrawEllipse(NotaPalette.Accent, null, new Point(x, mid - v * amp), 3, 3);
+            }
+        }
+
+        var tr = DrawTitle(ctx, frame, _title);
+        NotaGraph.Axis(ctx, frame, NotaGraph.Corner.TopRight, _amt, Dragging ? NotaPalette.AccentBright : NotaPalette.TextSecondary);
+        if (_morphText.Length > 0)
+        {
+            var t = NotaGraph.AxisText(_morphText, NotaPalette.TextSecondary);
+            ctx.DrawText(t, new Point(tr.Right + 12, 3));
+        }
+        NotaGraph.Axis(ctx, frame, NotaGraph.Corner.BottomLeft, "1");
+        var m = NotaGraph.AxisText(_mid);
+        ctx.DrawText(m, new Point(w / 2 + 2, h - m.Height - 3));
+        NotaGraph.Axis(ctx, frame, NotaGraph.Corner.BottomRight, _end);
+    }
+}

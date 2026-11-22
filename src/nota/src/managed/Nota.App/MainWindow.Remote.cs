@@ -1,0 +1,276 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Nota Remote in the window: the top-bar Remote button (off / the number of phones, a dot that
+// flashes on every touch, like the MIDI dot), the Connect Phone popup it opens, and the
+// window's side of the hub — it is the IRemoteHost, and it ticks the hub on the UI clock.
+// A phone is one more controller: transport through the transport view-model, mapped controls
+// through MIDI Learn, notes into the engine on the socket thread (see RemoteHub).
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Interactivity;
+using Microsoft.Extensions.DependencyInjection;
+using Nota.Application;
+using Nota.Remote;
+using Nota.Application.Localization;
+using Nota.Application.Themes;
+
+namespace Nota.App;
+
+public partial class MainWindow : IRemoteHost
+{
+    private RemoteService? _remote;
+    private int _remoteSeenActivity;
+    private DateTime _remoteLastActivity;
+
+    private void InitRemote()
+    {
+        if (_vm is null) return;
+        _remote = App.Services.GetRequiredService<RemoteService>();
+        _remote.Hub.Host = this;
+        _remote.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(SyncRemoteButton);
+        Timeline.PlayerBadge = id => _remote?.Hub.PlayersOf(id) is { Count: > 0 } p ? string.Join(", ", p) : null;
+        _vm.PlayheadUpdated += _ =>
+        {
+            _remote?.Hub.Tick();
+            SyncRemoteDot();
+        };
+        // Learn armed / a control picked: the phones show the banner and dashed outlines.
+        SyncRemoteButton();
+        _ = _remote.ApplyAsync();
+    }
+
+    private void OnRemoteClick(object? sender, RoutedEventArgs e) => ShowConnectPhone();
+
+    private void OnMenuConnectPhone(object? sender, EventArgs e) => ShowConnectPhone();
+
+    private void ShowConnectPhone()
+    {
+        if (_remote is null || _vm is null) return;
+        var flyout = new Flyout
+        {
+            Placement = PlacementMode.BottomEdgeAlignedRight,
+            Content = new ConnectPhoneView(_remote, _vm.Settings, Engine),
+            FlyoutPresenterClasses = { "bare" },
+        };
+        flyout.ShowAt(RemoteBtn);
+    }
+
+    private void SyncRemoteButton()
+    {
+        if (_remote is null || _vm is null) return;
+        bool on = _vm.Settings.Current.RemoteEnabled && _remote.Running;
+        int n = _remote.Hub.Devices.Count;
+        RemoteCount.Text = on ? n.ToString() : Loc.T("main.off_remote");   // short: the bar sheds this button when it is too wide
+        RemoteBtn.Classes.Set("lit", on);
+        ToolTip.SetTip(RemoteBtn, !_vm.Settings.Current.RemoteEnabled ? Loc.T("main.play_and_control_nota_from")
+            : _remote.Error ?? (n == 0 ? Loc.T("main.remote.remote_is_on_scan_the") : Loc.Plural("main.remote.phones_connected", n)));
+        Timeline.Refresh();
+    }
+
+    private void SyncRemoteDot()
+    {
+        if (_remote is null) return;
+        int a = _remote.Hub.ActivityCount;
+        if (a != _remoteSeenActivity) { _remoteSeenActivity = a; _remoteLastActivity = DateTime.UtcNow; }
+        bool connected = _remote.Running && _remote.Hub.Devices.Count > 0;
+        bool lit = connected && (DateTime.UtcNow - _remoteLastActivity).TotalMilliseconds < 150;
+        var want = lit ? NotaPalette.AccentBright : connected ? NotaPalette.Success : NotaPalette.BorderStrong;
+        if (!ReferenceEquals(RemoteDot.Fill, want)) RemoteDot.Fill = want;
+    }
+
+    private void ShutdownRemote()
+    {
+        if (_remote is null) return;
+        _remote.Hub.Host = null;
+        _remote.ShutdownAsync().Wait(TimeSpan.FromSeconds(2));
+    }
+
+    // ---- IRemoteHost --------------------------------------------------------------
+
+    string IRemoteHost.HostName => _remote?.Hub.HostName ?? Environment.MachineName;
+
+    // The phone wears the theme the window wears, or under Follow phone one of the user's two
+    // picks (spec 014). Built once per theme and once per change, so the hub's reference check
+    // costs nothing on the ticks in between.
+    // Keyed by the worn theme object: the same theme in another accent (spec 084) is another
+    // entry, so an accent change re-sends the phone its colours.
+    private readonly Dictionary<NotaColourTheme, RemoteTheme> _remoteThemes = new(ReferenceEqualityComparer.Instance);
+    private RemoteAppearance? _remoteLook;
+    private (NotaColourTheme, AppearanceChoice, AccentChoice)? _remoteLookFor;
+
+    RemoteAppearance IRemoteHost.Appearance
+    {
+        get
+        {
+            var key = (NotaPalette.Theme ?? NotaThemes.Default, NotaThemeService.Choice, NotaThemeService.Accent);
+            if (_remoteLook is null || !key.Equals(_remoteLookFor))
+            {
+                // A new accent makes every cached theme stale; drop them rather than keep a
+                // copy per colour a picker drag went through.
+                if (_remoteLookFor is { } was && was.Item3 != key.Item3) _remoteThemes.Clear();
+                // The phone's own dark/light picks wear the accent too.
+                RemoteTheme Of(NotaColourTheme? t) => RemoteThemeOf(NotaThemeService.Worn(t ?? NotaThemes.Default));
+                _remoteLook = new RemoteAppearance(Of(key.Item1), Of(NotaThemes.Find(key.Item2.Dark)), Of(NotaThemes.Find(key.Item2.Light)),
+                    CssHex(NotaPalette.InkDark), CssHex(NotaPalette.InkLight));
+                _remoteLookFor = key;
+            }
+            return _remoteLook;
+        }
+    }
+
+    private RemoteTheme RemoteThemeOf(NotaColourTheme t)
+    {
+        if (!_remoteThemes.TryGetValue(t, out var r))
+            _remoteThemes[t] = r = new RemoteTheme(t.Id, t.Name, t.IsDark, Enumerable.ToDictionary(t.Colors, c => c.Key, c => CssHex(c.Value)),
+                t.Geometry.FontFamily, RemoteRadii(t.Geometry));
+        return r;
+    }
+
+    // A skin's corners as the desktop draws them (spec 090): every step, or null when the
+    // skin keeps the design scale, so a built-in theme's message is unchanged.
+    private static IReadOnlyDictionary<string, double>? RemoteRadii(SkinGeometry g)
+    {
+        var steps = Enum.GetValues<RadiusStep>();
+        if (steps.All(s => g.RadiusOf(s) == SkinGeometry.Design(s))) return null;
+        return steps.ToDictionary(SkinGeometry.Key, g.RadiusOf);
+    }
+
+    // CSS order: #RRGGBB, or #RRGGBBAA when translucent (Avalonia writes #AARRGGBB).
+    private static string CssHex(Avalonia.Media.Color c) =>
+        c.A == 0xFF ? $"#{c.R:X2}{c.G:X2}{c.B:X2}" : $"#{c.R:X2}{c.G:X2}{c.B:X2}{c.A:X2}";
+
+    string IRemoteHost.ClipColor(int trackId, int scene)
+    {
+        if (Engine.TryGetSessionClipProps(trackId, scene, out var p) && p.Color >= 0)
+        {
+            var c = ArrangementView.TrackBrush(p.Color).Color;
+            return $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+        }
+        return ((IRemoteHost)this).TrackColor(trackId);
+    }
+
+    string IRemoteHost.TrackColor(int trackId)
+    {
+        var c = ArrangementView.TrackBrush(ArrangementView.EffectiveColorIndex(Engine, trackId)).Color;
+        return $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+    }
+
+    int IRemoteHost.SelectedTrackId => Timeline.SelectedTrackId;
+
+    // specs/107: what the phone outlines on its Scenes grid and shows as the controller's focus.
+    RemoteSessionSelection IRemoteHost.SessionSelection
+    {
+        get
+        {
+            if (_session is not { IsEffectivelyVisible: true } s) return RemoteSessionSelection.None;
+            var sel = s.CurrentSelection;
+            return sel.Kind switch
+            {
+                SessionView.SelKind.Slot when sel.TrackId > 0 => new RemoteSessionSelection(true, false, sel.TrackId, sel.Scene),
+                SessionView.SelKind.Scene => new RemoteSessionSelection(false, true, 0, sel.Scene),
+                _ => RemoteSessionSelection.None,
+            };
+        }
+    }
+
+    // specs/108: the desktop's Session grid orientation, for remotes set to "As in Nota".
+    bool IRemoteHost.SessionAcross => Nota.Application.Editing.SessionGridNav.IsAcross(
+        (App.Services?.GetService(typeof(ISettingsService)) as ISettingsService)?.Current.SessionGrid);
+
+    RemoteControllerFocus? IRemoteHost.ControllerFocus
+    {
+        get
+        {
+            if (_controllers?.CurrentSummary is not { } f) return null;
+            string mode = f.Mode.Kind switch
+            {
+                Nota.Application.Controllers.KnobModeKind.Volume => "volume",
+                Nota.Application.Controllers.KnobModeKind.Pan => "pan",
+                Nota.Application.Controllers.KnobModeKind.Send => "send",
+                _ => "device",
+            };
+            // The phone's Macros list for a track: the instrument (or rack) at −1, then the audio effects.
+            // A device inside a rack shows as its rack (the same index); MIDI effects aren't on the phone.
+            int? md = f.Address?.Section switch
+            {
+                Nota.Application.Controllers.FocusSection.Instrument => -1,
+                Nota.Application.Controllers.FocusSection.Audio => f.Address.Index,
+                _ => null,
+            };
+            return new RemoteControllerFocus(f.Controller, mode, f.Mode.Send, f.TrackId, f.TrackName, f.Device, md,
+                f.Page, f.PageCount, f.PageName, f.BankFirst, f.BankLast);
+        }
+    }
+    int IRemoteHost.ProjectKeyCode => _vm?.Transport.KeyCode ?? -1;
+
+    IReadOnlyList<(string Name, double StartBeat)> IRemoteHost.Sections =>
+        Timeline.SectionList.Select((s, i) => (SectionNames.Display(s.Name, i), s.StartBeat)).ToList();
+
+    bool IRemoteHost.Recording => _vm?.Transport.RecordOn ?? false;
+    bool IRemoteHost.LoopOn => _vm?.Transport.LoopOn ?? false;
+    bool IRemoteHost.MetronomeOn => _vm?.Transport.MetronomeOn ?? false;
+
+    void IRemoteHost.Play() { if (_vm is { } vm && !Engine.IsPlaying) vm.Transport.PlayCommand.Execute(null); }
+
+    // Stop as the transport bar does: a take ends first; pressed when stopped, back to the start.
+    void IRemoteHost.Stop() => _vm?.Transport.StopCommand.Execute(null);
+
+    void IRemoteHost.SetRecord(bool on) { if (_vm is { } vm) vm.Transport.RecordOn = on; }
+    void IRemoteHost.SetLoop(bool on) { if (_vm is { } vm) vm.Transport.LoopOn = on; }
+
+    void IRemoteHost.SetLoopRange(double startBeat, double endBeat)
+    {
+        Engine.SetLoop(Engine.LoopEnabled, startBeat, endBeat);
+        _vm?.Transport.SyncLoop();
+        Timeline.Refresh(rebuildHeaders: false);
+    }
+
+    void IRemoteHost.SetMetronome(bool on) { if (_vm is { } vm) vm.Transport.MetronomeOn = on; }
+    void IRemoteHost.SetBpm(double bpm) { if (_vm is { } vm) vm.Transport.Bpm = (decimal)bpm; }
+
+    double IRemoteHost.MasterVolume
+    {
+        get => _vm?.Transport.MasterVolume ?? 1.0;
+        set { if (_vm is { } vm) vm.Transport.MasterVolume = value; }
+    }
+
+    bool IRemoteHost.Undo()
+    {
+        _editorRoll?.EndVelocityWheel();
+        if (!Engine.Undo()) return false;
+        RefreshAfterUndoRedo();
+        if (_vm is not null) _vm.StatusText = Loc.T("main.remote.undo_from_a_phone");
+        return true;
+    }
+
+    void IRemoteHost.Refresh()
+    {
+        Timeline.Refresh();
+        _session?.Refresh();
+        if (_mixer?.IsVisible == true) _mixer.Refresh();
+        if (DetailBody.Content is MixerView mx && mx.IsEffectivelyVisible) mx.Refresh();
+        if (_deviceChain is { } dc && dc.TrackId > 0) dc.Refresh();
+    }
+
+    bool IRemoteHost.LearnArmed => _learn?.Armed ?? false;
+    string? IRemoteHost.LearnPendingName => _learn?.Pending?.Name;
+
+    PhoneControlResult IRemoteHost.PhoneControl(int controlId, int trackId, double norm)
+    {
+        if (_learn is null) return PhoneControlResult.None;
+        var r = _learn.HandlePhoneControl(controlId, trackId, norm);
+        if (r == PhoneControlResult.Bound) { LearnOverlay.Refresh(); Browser.ShowMidiMap(); }
+        return r;
+    }
+
+    string? IRemoteHost.PhoneMappingName(int controlId, int trackId) => _learn?.PhoneMappingFor(controlId, trackId)?.DisplayName;
+
+    void IRemoteHost.DevicesChanged() => _remote?.RaiseChanged();
+
+    void IRemoteHost.Activity() { }
+}

@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Media;
+using Nota.Application;
+
+namespace Nota.App;
+
+    // The mix-sum bar under Volt's noise panel: Osc1 / Osc2 / Noise levels as
+    // proportional neutral segments (bright → faint) — a reading, not a live control.
+    internal sealed class MixBar : Control
+    {
+        private static readonly IBrush Sunken = NotaPalette.BgSunken;
+        private readonly IAudioEngine _e; private readonly int _t; private readonly int[] _ix;
+        private static readonly IBrush S0 = NotaPalette.VizInk;
+        private static readonly IBrush S1 = NotaPalette.Wash(NotaPalette.VizInk, 0x8C);
+        private static readonly IBrush S2 = NotaPalette.Wash(NotaPalette.VizInk, 0x47);
+        public MixBar(IAudioEngine e, int t, int[] ix) { _e = e; _t = t; _ix = ix; Height = 6; }
+        public void Refresh() => InvalidateVisual();
+        private float V(int k) => _ix[k] >= 0 ? _e.PluginParamGet(_t, -1, _ix[k]) : 0f;
+        public override void Render(DrawingContext ctx)
+        {
+            double w = Bounds.Width, h = Bounds.Height;
+            ctx.DrawRectangle(Sunken, null, new Rect(0, 0, w, h), NotaRadius.FieldValue, NotaRadius.FieldValue);
+            float a = V(0), b = V(1), c = V(2), sum = a + b + c;
+            if (sum <= 1e-4f) return;
+            var cols = new[] { S0, S1, S2 }; var v = new[] { a, b, c };
+            double x = 0;
+            for (int i = 0; i < 3; i++) { double seg = w * v[i] / sum; if (seg > 0.5) ctx.FillRectangle(cols[i], new Rect(x, 0, seg, h)); x += seg; }
+        }
+    }

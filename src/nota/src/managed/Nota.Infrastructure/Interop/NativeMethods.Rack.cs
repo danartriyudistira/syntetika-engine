@@ -1,0 +1,373 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System.Runtime.InteropServices;
+
+namespace Nota.Infrastructure;
+
+/// <summary>Instrument Rack: parallel chains (instrument + devices), per-chain controls, 8 macros + mappings.</summary>
+/// <remarks>Part of <see cref="NotaEngine"/>'s P/Invoke surface; see nota_engine.h. Boolean ABI calls return 1/0.</remarks>
+internal static partial class NativeMethods
+{
+    [LibraryImport(Lib, EntryPoint = "nota_engine_add_instrument_rack_track")]
+    internal static partial int AddInstrumentRackTrack(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_add_drum_rack_track")]
+    internal static partial int AddDrumRackTrack(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_add_sampler_chain", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int RackAddSamplerChain(IntPtr engine, int trackId, string path, int rootNote, int loop);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_sampler_sample", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int RackSetChainSamplerSample(IntPtr engine, int trackId, int chain, string path, int rootNote);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_open_chain_instrument_editor")]
+    internal static partial void RackOpenChainInstrumentEditor(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_open_chain_device_editor")]
+    internal static partial void RackOpenChainDeviceEditor(IntPtr engine, int trackId, int chain, int dev);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_plugin_id")]
+    internal static partial IntPtr RackChainInstrumentPluginId(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_get_state")]
+    internal static partial int RackChainInstrumentGetState(IntPtr engine, int trackId, int chain, [Out] byte[]? outBuffer, int capacity);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_param_default")]
+    internal static partial float RackChainInstrumentParamDefault(IntPtr engine, int trackId, int chain, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_scope")]
+    internal static partial int RackChainInstrumentScope(IntPtr engine, int trackId, int chain, [Out] float[] outv, int maxN);
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_voice_count")]
+    internal static partial int RackChainInstrumentVoiceCount(IntPtr engine, int trackId, int chain);
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_held_notes")]
+    internal static partial int RackChainInstrumentHeldNotes(IntPtr engine, int trackId, int chain, [Out] int[] outNotes, int maxN);
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_action")]
+    internal static partial void RackChainInstrumentAction(IntPtr engine, int trackId, int chain, int id, int iarg, float farg);
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_record_state_undo")]
+    internal static partial int RackChainInstrumentRecordStateUndo(IntPtr engine, int trackId, int chain, byte[] before, int size);
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_record_state_undo")]
+    internal static partial int RackDevChainInstrumentRecordStateUndo(IntPtr engine, int trackId, int deviceIndex, int chain, byte[] before, int size);
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_set_state_undoable")]
+    internal static partial int RackChainInstrumentSetStateUndoable(IntPtr engine, int trackId, int chain, byte[] data, int size);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_sampler_info")]
+    internal static partial int RackChainSamplerInfo(IntPtr engine, int trackId, int chain, out NotaSamplerInfo info);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_sampler_root")]
+    internal static partial int RackSetChainSamplerRoot(IntPtr engine, int trackId, int chain, int rootNote);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_sampler_play_position")]
+    internal static partial float RackChainSamplerPlayPosition(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_add_plugin_instrument_chain")]
+    internal static partial int RackAddPluginInstrumentChain(IntPtr engine, int trackId, int catalogIndex);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_add_plugin_chain_device")]
+    internal static partial int RackAddPluginChainDevice(IntPtr engine, int trackId, int chain, int catalogIndex);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_trigger_note")]
+    internal static partial int RackChainTriggerNote(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_trigger_note")]
+    internal static partial void RackSetChainTriggerNote(IntPtr engine, int trackId, int chain, int note);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_name")]
+    internal static partial IntPtr RackChainName(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_name", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial void RackSetChainName(IntPtr engine, int trackId, int chain, string name);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_count")]
+    internal static partial int RackChainCount(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_add_chain")]
+    internal static partial int RackAddChain(IntPtr engine, int trackId, int instKind);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_remove_chain")]
+    internal static partial int RackRemoveChain(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_instrument")]
+    internal static partial int RackSetChainInstrument(IntPtr engine, int trackId, int chain, int instKind);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_kind")]
+    internal static partial int RackChainInstrumentKind(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_name")]
+    internal static partial IntPtr RackChainInstrumentName(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_param_count")]
+    internal static partial int RackChainInstrumentParamCount(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_param_name")]
+    internal static partial IntPtr RackChainInstrumentParamName(IntPtr engine, int trackId, int chain, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_param_id")]
+    internal static partial IntPtr RackChainInstrumentParamId(IntPtr engine, int trackId, int chain, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_param_get")]
+    internal static partial float RackChainInstrumentParamGet(IntPtr engine, int trackId, int chain, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_instrument_param_set")]
+    internal static partial void RackChainInstrumentParamSet(IntPtr engine, int trackId, int chain, int param, float normalized);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_count")]
+    internal static partial int RackChainDeviceCount(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_add_chain_device")]
+    internal static partial int RackAddChainDevice(IntPtr engine, int trackId, int chain, int deviceKind);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_remove_chain_device")]
+    internal static partial int RackRemoveChainDevice(IntPtr engine, int trackId, int chain, int dev);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_move_chain_device")]
+    internal static partial int RackMoveChainDevice(IntPtr engine, int trackId, int chain, int fromIndex, int toIndex);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_name")]
+    internal static partial IntPtr RackChainDeviceName(IntPtr engine, int trackId, int chain, int dev);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_builtin_kind")]
+    internal static partial int RackChainDeviceBuiltinKind(IntPtr engine, int trackId, int chain, int dev);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_param_count")]
+    internal static partial int RackChainDeviceParamCount(IntPtr engine, int trackId, int chain, int dev);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_param_name")]
+    internal static partial IntPtr RackChainDeviceParamName(IntPtr engine, int trackId, int chain, int dev, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_param_min")]
+    internal static partial float RackChainDeviceParamMin(IntPtr engine, int trackId, int chain, int dev, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_param_max")]
+    internal static partial float RackChainDeviceParamMax(IntPtr engine, int trackId, int chain, int dev, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_param_get")]
+    internal static partial float RackChainDeviceParamGet(IntPtr engine, int trackId, int chain, int dev, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_param_set")]
+    internal static partial void RackChainDeviceParamSet(IntPtr engine, int trackId, int chain, int dev, int param, float value);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_device_bypassed")]
+    internal static partial void RackSetChainDeviceBypassed(IntPtr engine, int trackId, int chain, int dev, int bypassed);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_device_bypassed")]
+    internal static partial int RackChainDeviceBypassed(IntPtr engine, int trackId, int chain, int dev);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_gain")]
+    internal static partial void RackSetChainGain(IntPtr engine, int trackId, int chain, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_pan")]
+    internal static partial void RackSetChainPan(IntPtr engine, int trackId, int chain, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_mute")]
+    internal static partial void RackSetChainMute(IntPtr engine, int trackId, int chain, int b);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_solo")]
+    internal static partial void RackSetChainSolo(IntPtr engine, int trackId, int chain, int b);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_gain")]
+    internal static partial float RackChainGain(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_pan")]
+    internal static partial float RackChainPan(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_mute")]
+    internal static partial int RackChainMute(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_solo")]
+    internal static partial int RackChainSolo(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_macro_get")]
+    internal static partial float RackMacroGet(IntPtr engine, int trackId, int macro);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_macro_set")]
+    internal static partial void RackMacroSet(IntPtr engine, int trackId, int macro, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_add_macro_mapping")]
+    internal static partial int RackAddMacroMapping(IntPtr engine, int trackId, int macro, int chain,
+        int deviceIndex, int paramIndex, float rangeMin, float rangeMax);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_mapping_count")]
+    internal static partial int RackMappingCount(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_mapping_info")]
+    internal static partial int RackMappingInfo(IntPtr engine, int trackId, int index,
+        out int macro, out int chain, out int deviceIndex, out int paramIndex, out float rangeMin, out float rangeMax);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_remove_mapping")]
+    internal static partial int RackRemoveMapping(IntPtr engine, int trackId, int index);
+
+    // Instrument-Rack extras (mockup 2p).
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_zone")]
+    internal static partial void RackChainZone(IntPtr engine, int trackId, int chain, out int keyLo, out int keyHi, out int velLo, out int velHi);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_zone")]
+    internal static partial void RackSetChainZone(IntPtr engine, int trackId, int chain, int keyLo, int keyHi, int velLo, int velHi);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_meter")]
+    internal static partial float RackChainMeter(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_macro_name")]
+    internal static partial IntPtr RackMacroName(IntPtr engine, int trackId, int macro);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_macro_name", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial void RackSetMacroName(IntPtr engine, int trackId, int macro, string name);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_volume")]
+    internal static partial float RackVolume(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_volume")]
+    internal static partial void RackSetVolume(IntPtr engine, int trackId, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_glide")]
+    internal static partial float RackGlide(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_glide")]
+    internal static partial void RackSetGlide(IntPtr engine, int trackId, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_duplicate_chain")]
+    internal static partial int RackDuplicateChain(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_mono")]
+    internal static partial void RackSetMono(IntPtr engine, int trackId, int on);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_mono")]
+    internal static partial int RackMono(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_mapping_range")]
+    internal static partial int RackSetMappingRange(IntPtr engine, int trackId, int index, float rangeMin, float rangeMax);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_mapping_curve")]
+    internal static partial int RackMappingCurve(IntPtr engine, int trackId, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_mapping_curve")]
+    internal static partial int RackSetMappingCurve(IntPtr engine, int trackId, int index, int curve);
+
+    // ---- Drum Rack per-pad shaping + kit-level swing/humanize ----
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_choke")]
+    internal static partial void RackSetChainChoke(IntPtr engine, int trackId, int chain, int group);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_choke")]
+    internal static partial int RackChainChoke(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_tune")]
+    internal static partial void RackSetChainTune(IntPtr engine, int trackId, int chain, int semitones);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_tune")]
+    internal static partial int RackChainTune(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_chain_decay")]
+    internal static partial void RackSetChainDecay(IntPtr engine, int trackId, int chain, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_chain_decay")]
+    internal static partial float RackChainDecay(IntPtr engine, int trackId, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_swing")]
+    internal static partial void RackSetSwing(IntPtr engine, int trackId, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_swing")]
+    internal static partial float RackSwing(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_set_humanize")]
+    internal static partial void RackSetHumanize(IntPtr engine, int trackId, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rack_humanize")]
+    internal static partial float RackHumanize(IntPtr engine, int trackId);
+    // specs/041: the Drum Rack card's nota_rack_* surface for any rack address (a nested Drum Rack too).
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_add_sampler_chain", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int RackDevAddSamplerChain(IntPtr engine, int trackId, int deviceIndex, string path, int rootNote, int loop);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_set_chain_sampler_sample", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int RackDevSetChainSamplerSample(IntPtr engine, int trackId, int deviceIndex, int chain, string path, int rootNote);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_add_plugin_instrument_chain")]
+    internal static partial int RackDevAddPluginInstrumentChain(IntPtr engine, int trackId, int deviceIndex, int catalogIndex);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_name")]
+    internal static partial IntPtr RackDevChainName(IntPtr engine, int trackId, int deviceIndex, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_set_chain_name", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial void RackDevSetChainName(IntPtr engine, int trackId, int deviceIndex, int chain, string name);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_choke")]
+    internal static partial int RackDevChainChoke(IntPtr engine, int trackId, int deviceIndex, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_set_chain_choke")]
+    internal static partial void RackDevSetChainChoke(IntPtr engine, int trackId, int deviceIndex, int chain, int group);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_tune")]
+    internal static partial int RackDevChainTune(IntPtr engine, int trackId, int deviceIndex, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_set_chain_tune")]
+    internal static partial void RackDevSetChainTune(IntPtr engine, int trackId, int deviceIndex, int chain, int semitones);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_decay")]
+    internal static partial float RackDevChainDecay(IntPtr engine, int trackId, int deviceIndex, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_set_chain_decay")]
+    internal static partial void RackDevSetChainDecay(IntPtr engine, int trackId, int deviceIndex, int chain, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_swing")]
+    internal static partial float RackDevSwing(IntPtr engine, int trackId, int deviceIndex);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_set_swing")]
+    internal static partial void RackDevSetSwing(IntPtr engine, int trackId, int deviceIndex, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_humanize")]
+    internal static partial float RackDevHumanize(IntPtr engine, int trackId, int deviceIndex);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_set_humanize")]
+    internal static partial void RackDevSetHumanize(IntPtr engine, int trackId, int deviceIndex, float v);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_sampler_info")]
+    internal static partial int RackDevChainSamplerInfo(IntPtr engine, int trackId, int deviceIndex, int chain, out NotaSamplerInfo info);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_set_chain_sampler_root")]
+    internal static partial int RackDevSetChainSamplerRoot(IntPtr engine, int trackId, int deviceIndex, int chain, int rootNote);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_sampler_play_position")]
+    internal static partial float RackDevChainSamplerPlayPosition(IntPtr engine, int trackId, int deviceIndex, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_param_id")]
+    internal static partial IntPtr RackDevChainInstrumentParamId(IntPtr engine, int trackId, int deviceIndex, int chain, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_param_default")]
+    internal static partial float RackDevChainInstrumentParamDefault(IntPtr engine, int trackId, int deviceIndex, int chain, int param);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_scope")]
+    internal static partial int RackDevChainInstrumentScope(IntPtr engine, int trackId, int deviceIndex, int chain, [Out] float[] outv, int maxN);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_voice_count")]
+    internal static partial int RackDevChainInstrumentVoiceCount(IntPtr engine, int trackId, int deviceIndex, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_held_notes")]
+    internal static partial int RackDevChainInstrumentHeldNotes(IntPtr engine, int trackId, int deviceIndex, int chain, [Out] int[] outNotes, int maxN);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_action")]
+    internal static partial void RackDevChainInstrumentAction(IntPtr engine, int trackId, int deviceIndex, int chain, int id, int iarg, float farg);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_set_state_undoable")]
+    internal static partial int RackDevChainInstrumentSetStateUndoable(IntPtr engine, int trackId, int deviceIndex, int chain, byte[] data, int size);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_open_chain_instrument_editor")]
+    internal static partial void RackDevOpenChainInstrumentEditor(IntPtr engine, int trackId, int deviceIndex, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_plugin_id")]
+    internal static partial IntPtr RackDevChainInstrumentPluginId(IntPtr engine, int trackId, int deviceIndex, int chain);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_instrument_get_state")]
+    internal static partial int RackDevChainInstrumentGetState(IntPtr engine, int trackId, int deviceIndex, int chain, [Out] byte[]? outBuffer, int capacity);
+
+    // Nota Mosaic as a chain instrument (specs/041).
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_mosaic_set_program", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int RackDevChainMosaicSetProgram(IntPtr engine, int trackId, int deviceIndex, int chain, string text, int undoable);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_mosaic_program")]
+    internal static unsafe partial int RackDevChainMosaicProgram(IntPtr engine, int trackId, int deviceIndex, int chain, byte* output, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_mosaic_status")]
+    internal static partial int RackDevChainMosaicStatus(IntPtr engine, int trackId, int deviceIndex, int chain, out NotaMosaicStatus status);
+
+    [LibraryImport(Lib, EntryPoint = "nota_rackdev_chain_mosaic_zone_sample_id")]
+    internal static partial long RackDevChainMosaicZoneSampleId(IntPtr engine, int trackId, int deviceIndex, int chain, int zone);
+}

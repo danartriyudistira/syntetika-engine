@@ -1,0 +1,498 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices — built-in Nota Utility body (device kind 4), a build of the "Nota Utility"
+// mockup, laid out the #531 way (CardLayout; DESIGN.md § Devices › Card layout): a centre
+// panel with Field / Mono / Levels tabs — the stereo field by frequency (Width · Balance beside
+// it), the width over frequency with the mono region (Mono beside it), input and output over the
+// last 8 s against the target (Target beside it) — and a right panel with no tabs of its own
+// that follows them: Phase (Ø L, Ø R, Mute, the correlation box), Mono (on, slope), Match (level
+// match, gain match, the measurements box, the true-peak limiter) — over the Gain knob. S (260)
+// is the field over Gain, Width, Balance and Mono. Every picture comes from the engine (Utility.h scopeRead); every
+// control is a device param, so automation / MIDI learn / presets / A-B / persistence come for
+// free. Params are in real units (Gain dB, Width %, Mono Freq Hz …); the controls work on
+// 0..1 and map.
+// FullBleed — the shared shell draws the header (name · preset · badge · bypass).
+
+using System;
+using System.Collections.Generic;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application;
+using static Nota.App.DeviceCardKit;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+internal sealed class UtilityDeviceBody : IDeviceBody
+{
+    // ── Parameter indices (must match Utility.h) ─────────────────────────────
+    private const int Gain = 0, Balance = 1, Width_ = 2, ChannelMode = 3, MonoFreq = 4, MonoBelow = 5, Mute = 6, InvertL = 7, InvertR = 8,
+        WidthMode = 9, MonoSlope = 10, AutoMatch = 11, MatchTo = 12, Target = 13, Meter = 14, TpLimit = 15, TpCeiling = 16, kParams = 17;
+    // Scope layout (Utility::S_* / kTele / kHist / kBands / kResp).
+    private const int S_InPk = 0, S_OutPk = 1, S_Cpu = 2, S_SampleRate = 3, S_Corr = 4, S_InLufs = 5, S_OutLufs = 6,
+        S_TruePeak = 11, S_AutoDb = 14, S_LimDb = 15, S_InLevel = 16, S_OutLevel = 17, S_InMatch = 18,
+        S_EnergyBal = 20, S_WidthNow = 21, S_EffWidth = 22, S_MonoHz = 23, S_HistSec = 26, S_BandLo = 28, S_BandHi = 29,
+        S_RespLo = 31, S_RespHi = 32, S_Analysed = 33, S_InTruePeak = 34, S_OutPreMatch = 35;
+    private const int kTele = 48, kHist = 80, kBands = 32, kResp = 96;
+    private const int kHistAt = kTele, kBandAt = kHistAt + 6 * kHist, kRespAt = kBandAt + 5 * kBands, kScope = kRespAt + kResp;
+    private const int H_InLufs = 0, H_OutLufs = 1, H_InPeak = 2, H_OutPeak = 3, H_InRms = 4, H_OutRms = 5;
+    private const int B_Pan = 0, B_Width = 1, B_Corr = 2, B_Level = 3, B_Set = 4;
+
+    private static readonly string[] Modes = { "Stereo", "Left", "Right", "Swap" };
+    private static readonly string[] Meters = { "LUFS-S", "Peak", "RMS" };
+    private static readonly string[] Units = { "LUFS", "dB", "dB" };
+    private static readonly int[] Slopes = { 6, 12, 24 };
+
+    public double Width => 700;
+    public double WidthFor(IAudioEngine engine, int trackId, int deviceIndex) => CardLayout.WidthFor(engine, trackId, deviceIndex, Width);
+    public Control? HeaderAccessory(DeviceCardContext ctx, int deviceIndex) => CardLayout.SizeToggle(ctx, deviceIndex);
+    public bool FullBleed => true;
+    public string? Subtitle => "Utility";
+
+    public Control Build(DeviceCardContext ctx, int index)
+    {
+        var engine = ctx.Engine;
+        int track = ctx.TrackId, di = index;
+        var mn = new float[kParams];
+        var mx = new float[kParams];
+        for (int p = 0; p < kParams; p++) { mn[p] = engine.DeviceParamMin(track, di, p); mx[p] = engine.DeviceParamMax(track, di, p); if (mx[p] <= mn[p]) mx[p] = mn[p] + 1; }
+        float P(int p) => engine.DeviceGetParam(track, di, p);
+        void Begin(int p) => engine.BeginAutomationWrite(track, AutomationTarget.DeviceParam, di, p, "");
+        void End(int p) => engine.EndAutomationWrite(track, AutomationTarget.DeviceParam, di, p, "");
+        void Raw(int p, float v) => engine.DeviceSetParam(track, di, p, Math.Clamp(v, mn[p], mx[p]));
+        // A discrete edit (a click) is one automation gesture, so it records while the transport does.
+        void SetP(int p, float v) { Begin(p); Raw(p, v); End(p); }
+        void Reset(int p) { Begin(p); Raw(p, engine.DeviceParamDefault(track, di, p)); End(p); }
+        bool On(int p) => P(p) >= 0.5f;
+        int Idx(int p) => Math.Clamp((int)Math.Round(P(p)), (int)mn[p], (int)mx[p]);
+
+        // ---- 0..1 mappings per param (the width puts 100 % in the middle, the cutoff is log) ----
+        const double FLo = 20, FHi = 2000;
+        double ToN(int p, double v) => p switch
+        {
+            Width_ => v <= 100 ? v / 200 : 0.5 + (v - 100) / 600,
+            MonoFreq => Math.Log(Math.Clamp(v, FLo, FHi) / FLo) / Math.Log(FHi / FLo),
+            _ => (v - mn[p]) / (mx[p] - mn[p]),
+        };
+        double FromN(int p, double n)
+        {
+            n = Math.Clamp(n, 0, 1);
+            return p switch
+            {
+                Width_ => n <= 0.5 ? n * 200 : 100 + (n - 0.5) * 600,
+                MonoFreq => FLo * Math.Pow(FHi / FLo, n),
+                _ => mn[p] + n * (mx[p] - mn[p]),
+            };
+        }
+        double N(int p) => ToN(p, P(p));
+        void SetN(int p, double n) => Raw(p, (float)FromN(p, n));
+        double DefN(int p) => ToN(p, engine.DeviceParamDefault(track, di, p));
+
+        var readouts = new List<Action>();
+        void RefreshAll() { for (int i = 0; i < readouts.Count; i++) readouts[i](); }
+        var scope = new float[kScope];
+        int scN = 0;
+        double Sc(int i) => scN > i ? scope[i] : 0;
+        double ScDb(int i) => scN > i ? scope[i] : -120;
+
+        // ---- units ----------------------------------------------------------------
+        static string GainF(double v) => NotaNum.F($"{v:+0.0;−0.0;0.0} dB");
+        static string BalF(double v) => Math.Abs(v) < 0.005 ? "C" : NotaNum.F($"{(v < 0 ? "L" : "R")} {Math.Abs(v) * 100:0}");
+        static string WidthF(double v) => NotaNum.F($"{v:0} %");
+        static string HzF(double hz) => hz >= 1000 ? NotaNum.F($"{hz / 1000:0.0#} k") : NotaNum.F($"{hz:0} Hz");
+        static string CeilF(double v) => NotaNum.F($"{v:0.0} dBTP");
+        static string CorrF(double c) => NotaNum.F($"{c:+0.00;−0.00;0.00}");
+        static string LvlF(double db) => db <= -119 ? "−∞" : NotaNum.F($"{db:0.0}");
+        int MeterI() => Idx(Meter);
+        string Unit() => Units[MeterI()];
+        string MonoF(double v) => On(MonoBelow) ? HzF(v) : "off";
+        string PhaseText() => On(InvertL) && On(InvertR) ? Loc.T("device.utility.both_phases_inverted") : On(InvertL) ? "phase L inverted" : On(InvertR) ? "phase R inverted" : "phase normal";
+        string MonoText() => On(MonoBelow) ? NotaNum.F($"mono below {HzF(P(MonoFreq))}") : Loc.T("device.utility.bass_mono_off");
+        string BalanceText()
+        {
+            double b = Sc(S_EnergyBal);
+            return Math.Abs(b) < 0.25 ? "energy L=R" : NotaNum.F($"energy {(b > 0 ? "L" : "R")} +{Math.Abs(b):0.0} dB");
+        }
+        string CorrWords()
+        {
+            double c = Sc(S_Corr);
+            if (Sc(S_OutPk) < 1e-4) return Loc.T("common.no_signal");
+            if (c < 0) return Loc.T("device.utility.out_of_phase_mono_risk");
+            if (c < 0.3) return "wide — check in mono";
+            return P(Width_) > 100.5 ? "wider, still in phase" : "in phase";
+        }
+        double Delta() => ScDb(S_OutLevel) > -119 && ScDb(S_InLevel) > -119 ? Sc(S_OutLevel) - Sc(S_InLevel) : 0;
+        string DeltaText() => ScDb(S_OutLevel) > -119 && ScDb(S_InLevel) > -119 ? NotaNum.F($"Δ {Delta():+0.0;−0.0;0.0} dB") : "Δ —";
+
+        // ---- small builders ---------------------------------------------------------
+        static TextBlock Caps(string t, IBrush? c = null, double fs = NotaType.KnobLabel) => new()
+        { Text = NotaText.Label(t), FontSize = fs, FontWeight = FontWeight.Medium, Foreground = c ?? TextTertiary, VerticalAlignment = VerticalAlignment.Center };
+        static TextBlock Mono(string t, double fs, IBrush c)
+        { var tb = new TextBlock { Text = t, FontSize = fs, Foreground = c, VerticalAlignment = VerticalAlignment.Center }; tb.BindResource(TextBlock.FontFamilyProperty, "Font.Measure"); return tb; }
+        static T Col<T>(T c, int col) where T : Control { Grid.SetColumn(c, col); return c; }
+        void Learn(Control c, int p) => MidiLearn.Bind(c, MidiTarget.DeviceParam(track, di, p), engine.DeviceParamName(track, di, p));
+
+        // Gauge knob bound to a device param (automation gesture + MIDI learn + live follow).
+        Control K(int p, string name, Func<double, string> fmt, IBrush? arc = null, Func<bool>? dim = null, double cellW = 44, double size = 34, bool bipolar = false)
+        {
+            var val = Mono(fmt(P(p)), 7, TextPrimary);
+            var knob = new Knob(N(p), 1.0) { Accent = true, ArcColor = arc, Bipolar = bipolar, Default = DefN(p), Width = size, Height = size };
+            knob.Format = v => fmt(FromN(p, v));   // read-out at any value: typing searches it
+            knob.ValueChanged += v => { SetN(p, v); val.Text = fmt(P(p)); };
+            knob.GestureBegin += () => Begin(p);
+            knob.GestureEnd += () => End(p);
+            Learn(knob, p);
+            readouts.Add(() =>
+            {
+                if (dim is not null) knob.IsDim = dim();
+                if (knob.Dragging) return;
+                double c = N(p); if (Math.Abs(c - knob.Value) > 1e-4) knob.Value = c;
+                val.Text = fmt(P(p));
+            });
+            return KnobCell(name, knob, val, cellW);
+        }
+
+        // On/off switch bound to a param (> 0.5 = on).
+        Control Toggle(int p, string label, Func<string>? live = null)
+        {
+            var wrap = Switch(label, () => On(p), () => { SetP(p, On(p) ? 0f : 1f); RefreshAll(); }, out var sync, null, live);
+            readouts.Add(sync);
+            Learn(wrap, p);
+            return wrap;
+        }
+
+        // Segmented pill over an index param (0 … n−1 in raw units).
+        Control Seg(int p, string[] names, string tip)
+        {
+            var seg = Segments(names, () => Idx(p), iv => { SetP(p, iv); RefreshAll(); }, out var sync, padX: 6);
+            readouts.Add(sync);
+            ToolTip.SetTip(seg, tip);
+            Learn(seg, p);
+            return seg;
+        }
+
+        // Outlined chips: the chosen one = accent edge + wash.
+        Control Chips(string[] names, Func<int, bool> lit, Action<int> pick, int learnParam, string tip, double h = 16, double padX = 7)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
+            var cells = new Border[names.Length];
+            var texts = new TextBlock[names.Length];
+            for (int i = 0; i < names.Length; i++)
+            {
+                int iv = i;
+                var tb = new TextBlock { Text = names[i], FontSize = 8, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+                var b = new Border { Height = h, Padding = new Thickness(padX, 0), CornerRadius = NotaRadius.Cell, BorderThickness = new Thickness(1), Cursor = new Cursor(StandardCursorType.Hand), Child = tb };
+                b.PointerPressed += (_, e) => { if (!e.GetCurrentPoint(b).Properties.IsLeftButtonPressed) return; pick(iv); RefreshAll(); e.Handled = true; };
+                cells[i] = b; texts[i] = tb; row.Children.Add(b);
+            }
+            readouts.Add(() =>
+            {
+                for (int i = 0; i < names.Length; i++)
+                {
+                    bool on = lit(i);
+                    cells[i].BorderBrush = on ? Brass : NotaPalette.BorderStrong;
+                    cells[i].Background = on ? NotaPalette.AccentSubtle : Brushes.Transparent;
+                    texts[i].Foreground = on ? AccentBright : TextSecondary;
+                    texts[i].FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal;
+                }
+            });
+            ToolTip.SetTip(row, tip);
+            if (learnParam >= 0) Learn(row, learnParam);
+            return row;
+        }
+        Control IndexChips(int p, string[] names, string tip, double h = 16, double padX = 7)
+            => Chips(names, i => Idx(p) == i, i => SetP(p, i), p, tip, h, padX);
+
+        // A latching chip: lit when `lit()`, a click runs `click`; its text can follow the value.
+        Border Latch(int p, Func<bool> lit, Action click, Func<string> text, string tip, bool fill = false, double h = 16, double padX = 7)
+        {
+            var tb = new TextBlock { FontSize = 8, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+            var b = new Border { Height = h, Padding = new Thickness(padX, 0), CornerRadius = NotaRadius.Cell, BorderThickness = new Thickness(1), Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center, Child = tb };
+            if (fill) b.HorizontalAlignment = HorizontalAlignment.Stretch;
+            void Hi()
+            {
+                bool on = lit();
+                b.Background = on ? NotaPalette.AccentSubtle : fill ? Raised : Brushes.Transparent;
+                b.BorderBrush = on ? Brass : fill ? Brushes.Transparent : NotaPalette.BorderStrong;
+                tb.Foreground = on ? AccentBright : fill ? TextPrimary : TextSecondary;
+                tb.FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal;
+                tb.Text = text();
+            }
+            b.PointerPressed += (_, e) => { if (!e.GetCurrentPoint(b).Properties.IsLeftButtonPressed) return; click(); RefreshAll(); e.Handled = true; };
+            ToolTip.SetTip(b, tip);
+            if (p >= 0) Learn(b, p);
+            readouts.Add(Hi); Hi();
+            return b;
+        }
+        Border ToggleLatch(int p, Func<string> text, string tip, bool fill = false, double h = 16, double padX = 7)
+            => Latch(p, () => On(p), () => SetP(p, On(p) ? 0f : 1f), text, tip, fill, h, padX);
+
+        // A push button (an action, not a param).
+        Border Button(string text, Action click, string tip, bool primary)
+        {
+            var tb = new TextBlock { Text = text, FontSize = 8, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center,
+                FontWeight = primary ? FontWeight.SemiBold : FontWeight.Normal, Foreground = TextPrimary };
+            // A push button rests raised; `primary` only sets its text heavier (accent is for state, not actions).
+            var b = new Border { Height = 16, Padding = new Thickness(7, 0), CornerRadius = NotaRadius.Cell, Background = Raised,
+                BorderBrush = NotaPalette.BorderStrong, BorderThickness = new Thickness(1),
+                Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center, Child = tb };
+            b.PointerPressed += (_, e) => { if (!e.GetCurrentPoint(b).Properties.IsLeftButtonPressed) return; click(); RefreshAll(); e.Handled = true; };
+            ToolTip.SetTip(b, tip);
+            return b;
+        }
+
+        // Slider row: caps label · track · mono value (the track works on 0..1).
+        Control SliderRow(string label, int p, Func<double, string> fmt, bool bipolar = false, bool modulation = false, Func<bool>? dim = null, double labW = 40)
+        {
+            var bar = DeviceCardKit.SliderRow("", () => N(p), v => SetN(p, v), () => fmt(P(p)), out var sync,
+                begin: () => Begin(p), end: () => End(p), reset: () => Reset(p), bipolar: bipolar, dim: dim, valueWidth: 40, modulation: modulation);
+            readouts.Add(sync);
+            Learn(bar, p);
+            var lb = Caps(label);
+            var g = new Grid { ColumnDefinitions = new ColumnDefinitions(NotaNum.F($"{labW},*")), VerticalAlignment = VerticalAlignment.Center };
+            g.Children.Add(lb);
+            g.Children.Add(Col(bar, 1));
+            if (dim is not null) readouts.Add(() => lb.Foreground = dim() ? TextDisabled : TextTertiary);
+            return g;
+        }
+
+        // ---- actions -----------------------------------------------------------------
+        // Gain match: Gain is set so the output — metered before Gain and the auto-match ride —
+        // meets the reference (the input's level or Target) over the last 3 s, in the meter's unit.
+        void GainMatch()
+        {
+            scN = engine.DeviceScope(track, di, scope, kBandAt);
+            double pre = ScDb(S_OutPreMatch), refL = On(MatchTo) ? P(Target) : ScDb(S_InMatch);
+            if (pre <= -70 || refL <= -70) return;
+            SetP(Gain, (float)Math.Clamp(refL - pre, -24, 24));
+        }
+        void ResetLevels()
+        {
+            SetP(Gain, 0f);
+            engine.DeviceAction(track, di, 1, 0, 0);
+        }
+        string GainMatchTip = Loc.T("device.utility.gain_match_moves_gain_once");
+        string ResetTip = Loc.T("device.utility.reset_gain_back_to_0");
+
+        Control WidthModeSeg() => Seg(WidthMode, new[] { "L/R", "M/S" },
+            Loc.T("device.utility.width_law_l_r_the"));
+        Control Info(Func<string> text, Func<IBrush>? ink = null)
+        {
+            var t = Mono("", 8, TextSecondary);
+            t.TextTrimming = TextTrimming.CharacterEllipsis;
+            readouts.Add(() => { t.Text = text(); t.Foreground = ink?.Invoke() ?? TextSecondary; });
+            return t;
+        }
+
+        // ======================================================================
+        // CENTRE — Field: the stereo field by frequency (drag sideways for the balance, up and
+        // down for the width); Width · Balance beside it, the channel and the width law under it.
+        // ======================================================================
+        int centreTab = 0;
+        UtFieldView? field = null;
+        UtFieldView NewField()
+        {
+            field = new UtFieldView();
+            field.StartH = () => N(Balance);
+            field.StartV = () => N(Width_);
+            field.DragH += v => SetN(Balance, v);
+            field.DragV += v => SetN(Width_, v);
+            field.GestureBegin += () => { Begin(Balance); Begin(Width_); };
+            field.GestureEnd += () => { End(Balance); End(Width_); };
+            ToolTip.SetTip(field, Loc.T("device.utility.the_outputs_stereo_field_by"));
+            Learn(field, Width_);
+            return field;
+        }
+        Control FieldTab() => CardLayout.View(NewField(),
+            CardLayout.KnobColumn(K(Width_, "WIDTH", WidthF, cellW: 50), K(Balance, "BALANCE", BalF, cellW: 50)),
+            CardLayout.Line(6, IndexChips(ChannelMode, Modes, Loc.T("device.utility.channel_stereo_left_or_right")), WidthModeSeg()));
+
+        // ======================================================================
+        // CENTRE — Mono: the width over frequency with the mono region (drag the cutoff
+        // sideways); Mono beside it, the usual cutoffs under it.
+        // ======================================================================
+        UtWidthView? widthView = null;
+        Control MonoTab()
+        {
+            widthView = new UtWidthView();
+            widthView.StartH = () => N(MonoFreq);
+            widthView.StartV = () => N(Width_);
+            widthView.DragH += v => SetN(MonoFreq, v);
+            widthView.DragV += v => SetN(Width_, v);
+            widthView.GestureBegin += () => { Begin(MonoFreq); Begin(Width_); };
+            widthView.GestureEnd += () => { End(MonoFreq); End(Width_); };
+            ToolTip.SetTip(widthView, Loc.T("device.utility.the_width_over_frequency_solid"));
+            Learn(widthView, MonoFreq);
+            float[] quick = { 60, 120, 240 };
+            var quickSeg = Segments(new[] { "60", "120", "240" }, () => NearestHz(P(MonoFreq), quick), iv => { SetP(MonoFreq, quick[iv]); if (!On(MonoBelow)) SetP(MonoBelow, 1f); RefreshAll(); }, out var qSync, padX: 6);
+            readouts.Add(qSync);
+            ToolTip.SetTip(quickSeg, Loc.T("device.utility.the_usual_cutoffs_60_120"));
+            Learn(quickSeg, MonoFreq);
+            return CardLayout.View(widthView, CardLayout.KnobColumn(K(MonoFreq, "MONO", MonoF, dim: () => !On(MonoBelow), cellW: 50)), quickSeg);
+        }
+
+        // ======================================================================
+        // CENTRE — Levels: input and output over the last seconds against the target (drag
+        // it); Target beside it, the meter under it.
+        // ======================================================================
+        UtLevelView? levelView = null;
+        Control LevelsTab()
+        {
+            levelView = new UtLevelView();
+            levelView.StartV = () => N(Target);
+            levelView.DragV += v => SetN(Target, v);
+            levelView.GestureBegin += () => Begin(Target);
+            levelView.GestureEnd += () => End(Target);
+            ToolTip.SetTip(levelView, Loc.T("device.utility.input_teal_and_output_neutral"));
+            Learn(levelView, Target);
+            return CardLayout.View(levelView,
+                CardLayout.KnobColumn(K(Target, "TARGET", v => NotaNum.F($"{v:0.0}"), Teal, cellW: 50)),
+                IndexChips(Meter, Meters, Loc.T("device.utility.meter_lufs_s_short_term")));
+        }
+
+        // ======================================================================
+        // RIGHT — follows the centre tab: Routing (Field) · Mono (Mono) · Match (Levels)
+        // ======================================================================
+        (Control, Control) RoutingPanel()
+        {
+            var phase = CardLayout.Line(3,
+                ToggleLatch(InvertL, () => "Ø L", Loc.T("device.utility.invert_the_left_channels_phase"), h: 15, padX: 6),
+                ToggleLatch(InvertR, () => "Ø R", Loc.T("device.utility.invert_the_right_channels_phase"), h: 15, padX: 6),
+                ToggleLatch(Mute, () => "Mute", Loc.T("device.utility.mute_the_output"), h: 15, padX: 6));
+            var corrBar = new UtCorrBar();
+            var corrTitle = Caps("CORRELATION");
+            var corrText = Mono("", 9, TextPrimary);
+            corrText.TextTrimming = TextTrimming.CharacterEllipsis;
+            var corrBox = CardLayout.ReadoutBox(new StackPanel { Spacing = 3, Children = { corrTitle, corrBar, corrText } });
+            ToolTip.SetTip(corrBox, Loc.T("device.utility.output_correlation_1_mono_0"));
+            readouts.Add(() =>
+            {
+                double c = Sc(S_Corr);
+                corrBar.Set(c);
+                corrText.Text = NotaNum.F($"{CorrF(c)} · {CorrWords()}");
+                bool lit = Math.Abs(P(Width_) - 100) > 0.5 || On(MonoBelow);
+                corrBox.BorderBrush = lit ? NotaPalette.BorderStrong : NotaPalette.GraphBorder;   // the width is in play: a stronger frame
+                corrTitle.Foreground = lit ? TextSecondary : TextTertiary;
+                corrText.Foreground = c < 0 && Sc(S_OutPk) > 1e-4 ? Danger : TextPrimary;
+            });
+            return (CardLayout.Head(CardLayout.Title(Loc.T("device.utility.phase")), phase), CardLayout.Rows(
+                corrBox,
+                Info(BalanceText),
+                CardLayout.Rule(),
+                Info(PhaseText)));
+        }
+
+        (Control, Control) MonoPanel()
+        {
+            var slope = Seg(MonoSlope, new[] { "6", "12", "24" }, Loc.T("device.utility.slope_of_the_mono_cutoff"));
+            var monoOn = Toggle(MonoBelow, Loc.T("device.utility.mono_below_freq"),
+                () => On(MonoBelow) ? NotaNum.F($"Mono below {HzF(P(MonoFreq))}") : Loc.T("device.utility.mono_below_freq"));
+            ToolTip.SetTip(monoOn, Loc.T("device.utility.mono_below_removes_the_side"));
+            return (CardLayout.Head(monoOn, slope),
+                CardLayout.Rows(
+                    Info(() => On(MonoBelow) ? NotaNum.F($"below {HzF(P(MonoFreq))} width 0 · slope {Slopes[Idx(MonoSlope)]} dB/oct") : NotaNum.F($"full range · width {Sc(S_EffWidth):0} %")),
+                    Info(() => NotaNum.F($"correlation {CorrF(Sc(S_Corr))} · {(Sc(S_Corr) >= 0.3 || Sc(S_OutPk) < 1e-4 ? "mono-safe" : Sc(S_Corr) >= 0 ? "check in mono" : "mono risk")}")),
+                    CardLayout.Rule(),
+                    Info(() => NotaNum.F($"width now {Sc(S_EffWidth):0} % · {(On(WidthMode) ? "M/S" : "L/R")}"))));
+        }
+
+        (Control, Control) MatchPanel()
+        {
+            Control Line(string k, Func<string> v)
+            {
+                var val = Mono("", 8, TextPrimary); val.HorizontalAlignment = HorizontalAlignment.Right;
+                readouts.Add(() => val.Text = v());
+                var g = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+                g.Children.Add(new TextBlock { Text = k, FontSize = 8, Foreground = TextSecondary, VerticalAlignment = VerticalAlignment.Center });
+                g.Children.Add(Col(val, 1));
+                return g;
+            }
+            var box = CardLayout.ReadoutBox(new StackPanel { Spacing = 1, Children = {
+                Caps("MEASUREMENTS"),
+                Line("in", () => NotaNum.F($"{LvlF(ScDb(S_InLevel))} {Unit()}")),
+                Line("out", () => NotaNum.F($"{LvlF(ScDb(S_OutLevel))} {Unit()}")),
+                Line("true peak", () => NotaNum.F($"{LvlF(ScDb(S_TruePeak))} dBTP")) } });
+            var btns = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 6 };
+            var gm = Button("Gain match", GainMatch, GainMatchTip, true);
+            gm.HorizontalAlignment = HorizontalAlignment.Stretch;
+            var rs = Button("Reset", ResetLevels, ResetTip, false);
+            rs.HorizontalAlignment = HorizontalAlignment.Stretch;
+            btns.Children.Add(gm);
+            btns.Children.Add(Col(rs, 1));
+            return (CardLayout.Head(Toggle(AutoMatch, "Level match", () => On(AutoMatch) ? NotaNum.F($"Level match {Sc(S_AutoDb):+0.0;−0.0;0.0} dB") : "Level match"),
+                    Seg(MatchTo, new[] { "Input", "Target" }, Loc.T("device.utility.what_gain_match_and_level"))),
+                CardLayout.Rows(
+                    box,
+                    btns,
+                    CardLayout.Rule(),
+                    Toggle(TpLimit, "True-peak limiter", () => On(TpLimit) ? NotaNum.F($"TP limit {CeilF(P(TpCeiling))}{(Sc(S_LimDb) > 0.05 ? NotaNum.F($" · −{Sc(S_LimDb):0.0}") : "")}") : "True-peak limiter"),
+                    SliderRow("CEILING", TpCeiling, v => NotaNum.F($"{v:0.0}"), dim: () => !On(TpLimit))));
+        }
+
+        // ======================================================================
+        // Frames: L (tabs + the panel that follows them, Gain under it) · S (the field over
+        // Gain · Width · Balance · Mono)
+        // ======================================================================
+        var extras = Mono("", 7, TextTertiary);
+        readouts.Add(() =>
+        {
+            extras.Text = centreTab switch
+            {
+                1 => NotaNum.F($"width by frequency · {(On(WidthMode) ? "M/S" : "L/R")}"),
+                2 => NotaNum.F($"in {LvlF(ScDb(S_InLevel))} → out {LvlF(ScDb(S_OutLevel))} {Meters[MeterI()]} · {DeltaText()} · {Sc(S_HistSec):0} s"),
+                _ => NotaNum.F($"correlation {CorrF(Sc(S_Corr))} · {MonoText()}"),
+            };
+        });
+        Control root = CardLayout.IsMini(ctx, di)
+            ? CardLayout.Mini(NewField(), null,
+                K(Gain, "GAIN", GainF, cellW: 56), K(Width_, "WIDTH", WidthF, cellW: 56),
+                K(Balance, "BALANCE", BalF, cellW: 56), K(MonoFreq, "MONO", MonoF, dim: () => !On(MonoBelow), cellW: 56))
+            : CardLayout.Large(new[] { "Field", "Mono", "Levels" }, 0,
+                t => t switch { 1 => MonoTab(), 2 => LevelsTab(), _ => FieldTab() },
+                t => t switch { 1 => MonoPanel(), 2 => MatchPanel(), _ => RoutingPanel() },
+                extras,
+                CardLayout.Output(null, K(Gain, "GAIN", GainF, cellW: 58, size: 44, bipolar: true), null),
+                t => { centreTab = t; Refresh(); });
+
+        void Refresh()
+        {
+            // The band analysis (an FFT) runs only while a tab that draws it is showing.
+            bool bands = centreTab != 2;
+            scN = engine.DeviceScope(track, di, scope, bands ? kScope : kBandAt);
+            bool haveBands = bands && scN >= kScope && Sc(S_Analysed) > 0.5;
+            bool loud = false;
+            if (haveBands) for (int b = 0; b < kBands; b++) if (scope[kBandAt + B_Level * kBands + b] > -100) { loud = true; break; }
+            if (centreTab == 0 && field is not null && !field.Dragging)
+                field.Set(scope, kBandAt + B_Pan * kBands, kBandAt + B_Width * kBands, kBandAt + B_Level * kBands, kBandAt + B_Set * kBands, haveBands ? kBands : 0,
+                    haveBands && loud, Sc(S_BandLo), Sc(S_BandHi), NotaNum.F($"width {P(Width_):0} %"));
+            if (centreTab == 1 && widthView is not null && !widthView.Dragging)
+                widthView.Set(scope, kRespAt, haveBands ? kResp : 0, Sc(S_RespLo), Sc(S_RespHi), kBandAt + B_Width * kBands, kBandAt + B_Level * kBands, haveBands ? kBands : 0,
+                    Sc(S_BandLo), Sc(S_BandHi), haveBands && loud, On(MonoBelow) ? P(MonoFreq) : double.NaN, NotaNum.F($"{Sc(S_EffWidth):0} %"));
+            if (centreTab == 2 && levelView is not null && !levelView.Dragging)
+            {
+                int m = MeterI();
+                int hin = m == 0 ? H_InLufs : m == 1 ? H_InPeak : H_InRms, hout = m == 0 ? H_OutLufs : m == 1 ? H_OutPeak : H_OutRms;
+                levelView.Set(scope, kHistAt + hin * kHist, kHistAt + hout * kHist, scN >= kBandAt ? kHist : 0,
+                    On(MatchTo) ? P(Target) : double.NaN, Sc(S_HistSec) > 0 ? Sc(S_HistSec) : 8,
+                    NotaNum.F($"{LvlF(ScDb(S_OutLevel))} {Unit()}"),
+                    On(MatchTo) ? NotaNum.F($"target {P(Target):0.0}") : "target = input");
+            }
+            RefreshAll();
+        }
+        ctx.AddDeviceRefresher(Refresh);
+        Refresh();
+        return root;
+
+        static int NearestHz(float v, float[] hz)
+        {
+            for (int i = 0; i < hz.Length; i++) if (Math.Abs(v - hz[i]) < 0.5f) return i;
+            return -1;
+        }
+
+    }
+}

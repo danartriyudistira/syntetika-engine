@@ -1,0 +1,330 @@
+diff --git a/scripts/bundle-mac.sh b/scripts/bundle-mac.sh
+index 791596a..55f8137 100755
+--- a/scripts/bundle-mac.sh
++++ b/scripts/bundle-mac.sh
+@@ -12,35 +12,43 @@ set -euo pipefail
+ cd "$(dirname "$0")/.."
+ 
+ RID="osx-arm64"
+-APP_NAME="Nota"
+-BUNDLE_ID="com.nota.daw"
++APP_NAME="NotAopenVJ"
++# The assembly (and therefore the Mach-O executable inside the bundle) keeps its
++# Nota.App name; only the product/bundle identity is rebranded.
++APP_EXE="Nota.App"
++BUNDLE_ID="studio.syntetika.notaopenvj"
+ # App version: single source of truth is the repo-root VERSION file.
+ # CFBundleVersion must monotonically increase per build;
+ # derive it from the semver so QA can tell builds apart.
+ VERSION="$(tr -d '[:space:]' < VERSION)"
+ BUILD_NUMBER="$(echo "${VERSION}" | awk -F. '{ printf "%d%03d%03d", $1, $2, $3 }')"
+ NATIVE_BUILD="src/native/nota.engine/build"
+-APP_DIR="${NOTA_APP_DIR:-/Applications}"
++APP_DIR="${NOTA_APP_DIR:-$PWD/dist}"
+ APP="${APP_DIR}/${APP_NAME}.app"
+ CONTENTS="${APP}/Contents"
+ 
+-echo "==> Building native engine (universal)…"
+-cmake -G Ninja -S src/native/nota.engine -B "${NATIVE_BUILD}" \
+-  -DCMAKE_BUILD_TYPE=Release >/dev/null
+-cmake --build "${NATIVE_BUILD}" >/dev/null
++PUBDIR="${NOTA_PUBLISH_DIR:-$(pwd)/dist/publish}"
++if [ "${NOTA_SKIP_BUILD:-0}" != "1" ]; then
++  echo "==> Building native engine (universal)…"
++  cmake -G Ninja -S src/native/nota.engine -B "${NATIVE_BUILD}" \
++    -DCMAKE_BUILD_TYPE=Release >/dev/null
++  cmake --build "${NATIVE_BUILD}" >/dev/null
+ 
+-echo "==> Publishing managed app (${RID}, self-contained)…"
+-PUBDIR="$(pwd)/dist/publish"
+-rm -rf "${PUBDIR}"
+-dotnet publish src/managed/Nota.App -c Release -r "${RID}" --self-contained true \
+-  -p:DebugType=none -p:DebugSymbols=false -o "${PUBDIR}" >/dev/null
++  echo "==> Publishing managed app (${RID}, self-contained)…"
++  rm -rf "${PUBDIR}"
++  dotnet publish src/managed/Nota.App -c Release -r "${RID}" --self-contained true \
++    -p:DebugType=none -p:DebugSymbols=false -p:NotaSkipWebBuild=true \
++    -p:NotaNativeDir="${NATIVE_BUILD}" -o "${PUBDIR}" >/dev/null
++else
++  echo "==> Reusing published app in ${PUBDIR}"
++fi
+ 
+ echo "==> Assembling ${APP}…"
+ mkdir -p "${APP_DIR}"
+ rm -rf "${APP}"
+ mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
+ cp -R "${PUBDIR}/." "${CONTENTS}/MacOS/"
+-chmod +x "${CONTENTS}/MacOS/${APP_NAME}.App" "${CONTENTS}/MacOS/nota-scanworker" 2>/dev/null || true
++chmod +x "${CONTENTS}/MacOS/${APP_EXE}" "${CONTENTS}/MacOS/nota-scanworker" 2>/dev/null || true
+ 
+ echo "==> Generating app icon (${APP_NAME}.icns)…"
+ ICON_SRC="assets/icons/logo.png"
+@@ -64,7 +72,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
+   <key>CFBundleName</key>            <string>${APP_NAME}</string>
+   <key>CFBundleDisplayName</key>     <string>${APP_NAME}</string>
+   <key>CFBundleIdentifier</key>      <string>${BUNDLE_ID}</string>
+-  <key>CFBundleExecutable</key>      <string>${APP_NAME}.App</string>
++  <key>CFBundleExecutable</key>      <string>${APP_EXE}</string>
+   <key>CFBundleIconFile</key>        <string>${APP_NAME}</string>
+   <key>CFBundlePackageType</key>     <string>APPL</string>
+   <key>CFBundleShortVersionString</key> <string>${VERSION}</string>
+@@ -76,7 +84,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
+   <key>LSMinimumSystemVersion</key>  <string>12.0</string>
+   <key>NSHighResolutionCapable</key> <true/>
+   <key>NSMicrophoneUsageDescription</key>
+-  <string>Nota records audio from your selected input device.</string>
++  <string>NotAopenVJ records audio from your selected input device.</string>
+ </dict>
+ </plist>
+ PLIST
+diff --git a/src/managed/Nota.App/App.axaml b/src/managed/Nota.App/App.axaml
+index 1d0e46b..7e9aebd 100644
+--- a/src/managed/Nota.App/App.axaml
++++ b/src/managed/Nota.App/App.axaml
+@@ -1,7 +1,7 @@
+ <Application xmlns="https://github.com/avaloniaui"
+              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+              x:Class="Nota.App.App"
+-             Name="Nota"
++             Name="NotAopenVJ"
+              RequestedThemeVariant="Dark">
+              <!-- Dark is the default; App.OnFrameworkInitializationCompleted hands the
+                   real choice (Preferences → Appearance) to NotaThemeService before the
+diff --git a/src/managed/Nota.App/MacAppMenu.cs b/src/managed/Nota.App/MacAppMenu.cs
+index ad88a0d..e05ffcd 100644
+--- a/src/managed/Nota.App/MacAppMenu.cs
++++ b/src/managed/Nota.App/MacAppMenu.cs
+@@ -13,13 +13,14 @@
+ using System;
+ using System.Collections.Generic;
+ using System.Runtime.InteropServices;
++using Nota.Application;
+ using Nota.Application.Localization;
+ 
+ namespace Nota.App;
+ 
+ internal static class MacAppMenu
+ {
+-    private const string AppName = "Nota";
++    private const string AppName = Branding.ProductName;
+     private const string ObjC = "/usr/lib/libobjc.dylib";
+ 
+     [DllImport(ObjC)] private static extern IntPtr objc_getClass(string name);
+diff --git a/src/managed/Nota.App/MainWindow.axaml b/src/managed/Nota.App/MainWindow.axaml
+index ac76127..a45ce72 100644
+--- a/src/managed/Nota.App/MainWindow.axaml
++++ b/src/managed/Nota.App/MainWindow.axaml
+@@ -12,7 +12,7 @@
+         Background="{DynamicResource Brush.BgApp}"
+         Icon="/Assets/logo.png"
+         WindowState="Maximized"
+-        Title="Nota">
++        Title="NotAopenVJ">
+   <Window.Resources>
+     <app:ToolbarSideToAlignmentConverter x:Key="ToolbarSideToAlignment"/>
+   </Window.Resources>
+diff --git a/src/managed/Nota.App/PreferencesWindow.Mcp.cs b/src/managed/Nota.App/PreferencesWindow.Mcp.cs
+index 689d572..0b9b5cb 100644
+--- a/src/managed/Nota.App/PreferencesWindow.Mcp.cs
++++ b/src/managed/Nota.App/PreferencesWindow.Mcp.cs
+@@ -83,7 +83,7 @@ public sealed partial class PreferencesWindow
+         string McpConfigJson()
+         {
+             int port = settings?.Current.McpPort ?? 3900;
+-            return "{\n  \"mcpServers\": {\n    \"nota\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:" + port + "/\"\n    }\n  }\n}";
++            return "{\n  \"mcpServers\": {\n    \"notaopenvj\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:" + port + "/\"\n    }\n  }\n}";
+         }
+         DispatcherTimer? copied = null;
+         copyBtn.Click += async (_, _) =>
+diff --git a/src/managed/Nota.Application/Branding.cs b/src/managed/Nota.Application/Branding.cs
+new file mode 100644
+index 0000000..d12b638
+--- /dev/null
++++ b/src/managed/Nota.Application/Branding.cs
+@@ -0,0 +1,34 @@
++// SPDX-License-Identifier: AGPL-3.0-only
++// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
++//
++// Syntetika Engine fork branding. One place for the product identity so the fork can
++// live beside a stock Nota install: its own data folder (projects, settings, plugin
++// scans), its own MCP port, and no upstream self-update (which would replace the fork
++// with a stock build).
++//
++// The upstream project stays credited: this file changes the *product* identity only.
++// Every source file keeps its AGPL header and the About window keeps the licence text.
++
++namespace Nota.Application;
++
++public static class Branding
++{
++    /// <summary>Shown in the window title, welcome screen, splash, About and menus.</summary>
++    public const string ProductName = "NotAopenVJ";
++
++    /// <summary>Per-user data folder. Must differ from "Nota" so both apps can run at once.</summary>
++    public const string DataFolder = "NotAopenVJ";
++
++    /// <summary>Bundle identifier for the macOS app (and future Windows/Linux packaging).</summary>
++    public const string BundleId = "studio.syntetika.notaopenvj";
++
++    /// <summary>
++    /// The fork ships from its own repository, not nota-daw/nota. Until that release feed
++    /// exists, the in-app updater must stay inert: a stock Nota release would overwrite the
++    /// fork's binary and remove the visual engine.
++    /// </summary>
++    public const bool UpdatesEnabled = false;
++
++    /// <summary>Loopback port for the MCP server; 3900 is taken by a stock Nota install.</summary>
++    public const int DefaultMcpPort = 3910;
++}
+diff --git a/src/managed/Nota.Application/Localization/en.json b/src/managed/Nota.Application/Localization/en.json
+index 5468ca4..72ae7ef 100644
+--- a/src/managed/Nota.Application/Localization/en.json
++++ b/src/managed/Nota.Application/Localization/en.json
+@@ -669,7 +669,7 @@
+     "commands.view": "View",
+     "commands.widen_grid": "Widen grid",
+     "common.1_bar": "1 bar",
+-    "common.about_nota": "About Nota",
++    "common.about_nota": "About NotAopenVJ",
+     "common.attack": "Attack",
+     "common.audio": "Audio",
+     "common.audio_n": "Audio {0}",
+@@ -715,7 +715,7 @@
+     "common.new_project": "New project",
+     "common.no_signal": "no signal",
+     "common.none": "None",
+-    "common.nota": "Nota",
++    "common.nota": "NotAopenVJ",
+     "common.off": "Off",
+     "common.open": "Open",
+     "common.other": "Other",
+@@ -2292,7 +2292,7 @@
+     "history.name": "Name…",
+     "history.name_version": "Name version",
+     "history.no_starred_versions_yet_right": "No starred versions yet. Right-click a version and choose Star.",
+-    "history.nota": "Nota {0}",
++    "history.nota": "NotAopenVJ {0}",
+     "history.older_versions_take_on_disk": "{0} · older versions take {1} on disk",
+     "history.open_as_copy": "Open as copy…",
+     "history.open_copy": "Open copy",
+@@ -2597,8 +2597,8 @@
+     "main.files.exporting_stems": "Exporting stems…",
+     "main.files.import_audio": "Import audio",
+     "main.files.new_project": "New project.",
+-    "main.files.nota": "Nota — {0}",
+-    "main.files.nota_project": "Nota project",
++    "main.files.nota": "NotAopenVJ — {0}",
++    "main.files.nota_project": "NotAopenVJ project",
+     "main.files.nothing_to_export_the_arrangement": "Nothing to export — the arrangement is empty.",
+     "main.files.open_failed": "Open failed: {0}",
+     "main.files.open_nota_project_nota_folder": "Open Nota project (.nota folder)",
+diff --git a/src/managed/Nota.Application/Settings.cs b/src/managed/Nota.Application/Settings.cs
+index 0648d0d..3af79ef 100644
+--- a/src/managed/Nota.Application/Settings.cs
++++ b/src/managed/Nota.Application/Settings.cs
+@@ -125,7 +125,7 @@ public sealed class Settings
+     /// live app. Off by default; loopback-only. Toggled in Preferences.</summary>
+     public bool McpEnabled { get; set; }
+     /// <summary>Loopback TCP port for the MCP HTTP server.</summary>
+-    public int McpPort { get; set; } = 3900;
++    public int McpPort { get; set; } = Branding.DefaultMcpPort;
+     /// <summary>Nota Remote: serve the phone controller on the local network. Off by default;
+     /// phones pair with a code from the QR. See Settings → Remote.</summary>
+     public bool RemoteEnabled { get; set; }
+diff --git a/src/managed/Nota.Infrastructure/NotaPaths.cs b/src/managed/Nota.Infrastructure/NotaPaths.cs
+index 3c7d312..a12a76f 100644
+--- a/src/managed/Nota.Infrastructure/NotaPaths.cs
++++ b/src/managed/Nota.Infrastructure/NotaPaths.cs
+@@ -6,9 +6,11 @@
+ // NotaEngine.SetDataDir (nota_set_data_dir); the engine itself never infers
+ // platform paths — besides this value only NOTA_DATA_DIR (tests) is honoured.
+ // Platform conventions:
+-//   macOS   -> ~/Library/Application Support/Nota   (unchanged from the mac-only era)
+-//   Windows -> %APPDATA%\Nota                       (Roaming AppData)
+-//   Linux   -> $XDG_CONFIG_HOME/nota or ~/.config/nota (lowercase, XDG style)
++//   macOS   -> ~/Library/Application Support/NotAopenVJ
++//   Windows -> %APPDATA%\NotAopenVJ                  (Roaming AppData)
++//   Linux   -> $XDG_CONFIG_HOME/notaopenvj or ~/.config/notaopenvj
++
++using Nota.Application;
+ 
+ namespace Nota.Infrastructure;
+ 
+@@ -38,18 +40,18 @@ public static class NotaPaths
+         {
+             // %APPDATA% == Roaming AppData; on Windows SpecialFolder.ApplicationData maps here.
+             root = Path.Combine(
+-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Nota");
++                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), Branding.DataFolder);
+         }
+         else if (OperatingSystem.IsMacOS())
+         {
+-            // Preserve the exact mac-only path so existing installs keep their data.
+-            root = Path.Combine(Home, "Library", "Application Support", "Nota");
++            // The fork keeps its own data root so a stock Nota install is untouched.
++            root = Path.Combine(Home, "Library", "Application Support", Branding.DataFolder);
+         }
+         else
+         {
+             var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+             var baseDir = string.IsNullOrEmpty(xdg) ? Path.Combine(Home, ".config") : xdg;
+-            root = Path.Combine(baseDir, "nota");
++            root = Path.Combine(baseDir, Branding.DataFolder.ToLowerInvariant());
+         }
+ 
+         try { Directory.CreateDirectory(root); } catch { /* best-effort */ }
+diff --git a/src/managed/Nota.Infrastructure/Update/AppUpdater.cs b/src/managed/Nota.Infrastructure/Update/AppUpdater.cs
+index 3a3f841..d9e83bc 100644
+--- a/src/managed/Nota.Infrastructure/Update/AppUpdater.cs
++++ b/src/managed/Nota.Infrastructure/Update/AppUpdater.cs
+@@ -81,6 +81,8 @@ public sealed partial class AppUpdater : IAppUpdater
+ 
+     public async Task<AppRelease?> CheckAsync(CancellationToken ct = default)
+     {
++        // The fork ships from its own feed; a stock Nota release would replace this build.
++        if (!Branding.UpdatesEnabled) return null;
+         if (_pending is null) CleanUpdatesDir();
+         LastCheckFailed = true;
+         try
+@@ -318,6 +320,7 @@ public sealed partial class AppUpdater : IAppUpdater
+ 
+     public void RunPendingInstall()
+     {
++        if (!Branding.UpdatesEnabled) return;
+         if (_pending is not { } p) return;
+         _pending = null;
+         try
+diff --git a/src/managed/Nota.Mcp/NotaMcpServer.cs b/src/managed/Nota.Mcp/NotaMcpServer.cs
+index 60b0228..32bb0f4 100644
+--- a/src/managed/Nota.Mcp/NotaMcpServer.cs
++++ b/src/managed/Nota.Mcp/NotaMcpServer.cs
+@@ -41,7 +41,7 @@ public sealed class NotaMcpServer : IAsyncDisposable
+         configureServices?.Invoke(builder.Services);
+ 
+         builder.Services
+-            .AddMcpServer(o => { o.ServerInfo = new() { Name = "Nota", Version = "1" }; })
++            .AddMcpServer(o => { o.ServerInfo = new() { Name = Branding.ProductName, Version = "1" }; })
+             .WithHttpTransport()
+             .WithToolsFromAssembly();                        // discovers [McpServerToolType] in this assembly
+ 
+diff --git a/src/native/nota.engine/src/engine/Engine_Tracks.cpp b/src/native/nota.engine/src/engine/Engine_Tracks.cpp
+index 4faf33f..37f8bdb 100644
+--- a/src/native/nota.engine/src/engine/Engine_Tracks.cpp
++++ b/src/native/nota.engine/src/engine/Engine_Tracks.cpp
+@@ -1923,12 +1923,15 @@ bool Engine::moveClipBlock(const std::vector<ClipMoveReq>& moves) {
+     std::vector<int32_t> newIndex(items.size(), -1);
+ 
+     for (auto& [tid, nt] : clones) {
++        // Portability: clang < 16 has no P1091 (structured bindings in lambdas), so the
++        // lambda below takes a plain copy of the track id instead of the binding.
++        const int32_t rowTrack = tid;
+         const auto& ranges = incoming[tid];
+         auto rebuild = [&](auto& clips, auto carve) {
+             std::remove_reference_t<decltype(clips)> out;
+             out.reserve(clips.size() + 2 * ranges.size());
+             for (int32_t ci = 0; ci < static_cast<int32_t>(clips.size()); ++ci) {
+-                auto f = itemOf.find({tid, ci});
++                auto f = itemOf.find({rowTrack, ci});
+                 if (f != itemOf.end()) {
+                     auto& it = items[f->second];
+                     if (!it.sameTrack) continue; // leaves this track

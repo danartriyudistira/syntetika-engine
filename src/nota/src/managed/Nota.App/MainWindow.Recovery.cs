@@ -1,0 +1,176 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Controls.Shapes;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Platform.Storage;
+using Microsoft.Extensions.DependencyInjection;
+using Nota.Application;
+using Nota.Presentation;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public partial class MainWindow
+{
+    // --- crash recovery (M7-7) ---------------------------------------------
+
+    /// <summary>Current transport values as a persistence snapshot.</summary>
+    private TransportState TransportSnapshot()
+        => new((double)_vm!.Transport.Bpm, _vm.Transport.MasterVolume,
+               _vm.Transport.MetronomeOn, _vm.Transport.LoopOn,
+               _vm.Transport.TimeSigNumerator, _vm.Transport.TimeSigDenominator, _vm.Transport.KeyCode,
+               _panLawLegacy);
+
+    private void OnAutosaveTick()
+    {
+        if (_vm is null) return;
+        NoteDirtySince();
+        try { _recovery.Autosave(Engine, TransportSnapshot(), _projectPath); }
+        catch { /* autosave is best-effort — never disrupt the session */ }
+    }
+
+    // Set once the user has answered the unsaved-changes prompt, so the re-issued Close()
+    // goes straight through; _closePromptOpen guards against a second prompt meanwhile.
+    private bool _closeConfirmed;
+    private bool _closePromptOpen;
+
+    private void OnMainWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (!_closeConfirmed && HasUnsavedChanges())
+        {
+            e.Cancel = true;
+            if (!_closePromptOpen)
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => _ = ConfirmCloseAsync());
+            return;
+        }
+
+        CloseFloatingDetail();   // tear down the popped-out Devices/Clip window, if any
+        ShutdownGamepad();       // stop the IOKit pad thread before the engine dies
+        ShutdownRemote();        // phones leave (their held notes released) before the engine dies
+        _controllers?.ReleaseAll();   // controllers get their release messages (DAW mode off) (specs/051)
+        _recovery.EndSessionClean();
+    }
+
+    // Save / Don't Save / Cancel before quitting with unsaved edits. Save that is cancelled
+    // (file panel dismissed) or fails keeps the app open.
+    private async Task ConfirmCloseAsync()
+    {
+        _closePromptOpen = true;
+        try
+        {
+            if (!await ConfirmLeaveChangesAsync(Loc.T("main.recovery.unsaved_changes"),
+                    Loc.T("main.recovery.do_you_really_want_to")))
+            {
+                AppRestart.Cancel();   // a language restart waits on this prompt (spec 068)
+                return;
+            }
+            _closeConfirmed = true;
+        }
+        finally { _closePromptOpen = false; }
+        Close();
+    }
+
+    // "unsaved changes · 14 min" — how long the oldest unsaved edit has waited.
+    private string UnsavedAgeText()
+    {
+        var age = _dirtySince is { } since ? DateTime.Now - since : TimeSpan.Zero;
+        string when = age.TotalMinutes < 1 ? Loc.T("main.recovery.just_now")
+            : age.TotalHours < 1 ? NotaNum.F($"{(int)age.TotalMinutes}{NotaNum.Thin}min")
+            : NotaNum.F($"{(int)age.TotalHours}{NotaNum.Thin}h {age.Minutes}{NotaNum.Thin}min");
+        return Loc.F("main.recovery.unsaved_changes_n", when);
+    }
+
+    private async void OnOpenedRecoveryCheck(object? sender, EventArgs e)
+    {
+        if (_vm is null) return;
+        // The launch workspace starts from the same template as File → New.
+        Nota.Infrastructure.ProjectTemplate.ApplyDefault(Engine);
+        _panLawLegacy = false;
+        RefreshAfterLoad();
+        MarkProjectClean();   // the fresh startup project counts as unmodified
+
+        // Look for a newer release now and once a day (unless Settings → Updates says not to);
+        // the start screen and the status bar show what it finds.
+        AppUpdates.Shared.Start();
+        // The stored interface language is not installed (Nota used to ship French): fetch it in
+        // the background, under the same rule, and offer the restart when it is in (spec 077).
+        LanguageDownloads.Shared.StartupCheck(App.Services.GetRequiredService<ILogSink>());
+
+        // What's New shows once per new app version, ahead of the launcher.
+        await ShowWhatsNewIfNeeded();
+
+        // The welcome launcher carries the crash-recovery prompt inline (a banner), so it's
+        // the single entry point on startup. When the launcher is switched off, fall back to
+        // the standalone recovery dialog so a crashed session is still offered.
+        var settings = App.Services.GetRequiredService<ISettingsService>();
+        if (settings.Current.ShowWelcomeOnStartup)
+            await ShowWelcomeAsync();
+        else if (PendingRecovery is { } info)
+            await OfferRecoveryDialogAsync(info);
+    }
+
+    /// <summary>Prompt text shared by the welcome banner and the standalone recovery dialog.</summary>
+    private static string RecoveryPromptText(RecoveryInfo info)
+    {
+        string when = info.SavedAt;
+        if (DateTime.TryParse(info.SavedAt, out var dt)) when = dt.ToString("g");
+        return Loc.F("main.recovery.nota_didnt_shut_down_cleanly", when);
+    }
+
+    /// <summary>Load the crash snapshot into the engine and point the next Save at the real
+    /// bundle. Clears the snapshot so it isn't offered again.</summary>
+    private void ApplyPendingRecovery(RecoveryInfo info)
+    {
+        OpenProject(info.BundlePath);
+        _projectPath = info.OriginalPath;   // next Save targets the real bundle (null → prompt)
+        UpdateWindowTitle();
+        _cleanFingerprint = null;           // recovered work is unsaved until the user saves it
+        if (_vm is not null) _vm.StatusText = Loc.T("main.recovery.recovered_unsaved_work");
+        try { _recovery.ClearRecovery(); } catch { }
+    }
+
+    // Fallback path when the welcome launcher is disabled: a modal Recover / Discard dialog.
+    private async Task OfferRecoveryDialogAsync(RecoveryInfo info)
+    {
+        bool restore = await new ConfirmWindow(Loc.T("main.recovery.recover_project"),
+            RecoveryPromptText(info), Loc.T("main.recovery.recover"), Loc.T("main.recovery.discard")).ShowDialog<bool>(this);
+        if (restore) ApplyPendingRecovery(info);
+        else try { _recovery.ClearRecovery(); } catch { }
+    }
+
+    // Show the changelog once per new app version: compare the running version to
+    // the last one the user acknowledged (persisted in settings). Reachable any time
+    // from the Help menu via ShowWhatsNew().
+    private async Task ShowWhatsNewIfNeeded()
+    {
+        var settings = App.Services.GetRequiredService<ISettingsService>();
+        var seen = settings.Current.LastSeenVersion;
+        if (seen == AppInfo.Version) return; // already acknowledged this build
+
+        var unseen = AppInfo.UnseenSince(seen);
+        if (unseen.Count > 0)
+            await new WhatsNewWindow(unseen).ShowDialog(this);
+
+        // Mark this version acknowledged even when there were no notes, so a fresh
+        // install with an empty changelog doesn't re-check on every launch.
+        settings.Current.LastSeenVersion = AppInfo.Version;
+        settings.Save();
+    }
+
+    /// <summary>Open the changelog on demand (Help ▸ What's New) — always shows the
+    /// entry for the current version, regardless of what's already been seen.</summary>
+    public void ShowWhatsNew()
+    {
+        var entries = AppInfo.UnseenSince(""); // "" → current version's entry
+        new WhatsNewWindow(entries).Show(this);
+    }
+}

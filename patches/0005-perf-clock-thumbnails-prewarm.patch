@@ -1,0 +1,567 @@
+diff --git a/crates/openvj-app/src/app.rs b/crates/openvj-app/src/app.rs
+index bf627ad..a48d000 100644
+--- a/crates/openvj-app/src/app.rs
++++ b/crates/openvj-app/src/app.rs
+@@ -29,6 +29,7 @@ use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffe
+ use crate::browser::{self, Entry};
+ use crate::link::Link;
+ use crate::midi::{self, MidiPorts};
++use crate::nota_bridge::{Command as NotaCommand, NotaBridge};
+ use crate::player::PlayerState;
+ use crate::syphon_out::{self, SyphonOutput};
+ use crate::{
+@@ -353,11 +354,25 @@ pub struct App {
+ 
+     frames: u32,
+     fps_since: Instant,
++    /// Diagnostics: worst frame delta and worst render call in the current second.
++    dbg_max_dt: f64,
++    dbg_max_render_ms: f64,
+ 
+     /// The Player layout's playlist and Automix (see player.rs).
+     player: PlayerState,
+     /// Thumbnail ids of the playlist's presets, in row order.
+     player_thumbs: Vec<String>,
++
++    /// Syntetika Engine: Nota's transport + launches (None when running standalone).
++    nota: Option<NotaBridge>,
++    /// Launches waiting for their beat, from the Nota bridge.
++    nota_queue: Vec<(f64, NotaCommand)>,
++    /// Smoothed local beat while following Nota (a PLL, not a hard sync each frame).
++    nota_beat: Option<f64>,
++    /// Largest PLL correction applied this second (diagnostics).
++    nota_slew_max: f64,
++    /// Effects whose pipelines are compiled ahead of their first visible frame, one per frame.
++    prewarm: Vec<openvj_core::Effect>,
+ }
+ 
+ impl App {
+@@ -474,10 +489,17 @@ impl App {
+             images_dirty: true,
+             frames: 0,
+             fps_since: Instant::now(),
++            dbg_max_dt: 0.0,
++            dbg_max_render_ms: 0.0,
+             player: PlayerState::default(),
+             player_thumbs: Vec::new(),
+             library: crate::library::AppLibrary::load(),
+             frame_time: 0.0,
++            nota: None,
++            nota_queue: Vec::new(),
++            nota_beat: None,
++            nota_slew_max: 0.0,
++            prewarm: Vec::new(),
+         };
+         app.set_composition(comp, None);
+         app.open_midi();
+@@ -563,6 +585,7 @@ impl App {
+         self.media.clear();
+         self.comp = comp;
+         self.file = file;
++        self.prewarm = Self::effect_queue(&self.comp);
+         self.resolume_refs = None;
+         self.midi_dirty = true;
+         self.selected = None;
+@@ -587,6 +610,109 @@ impl App {
+ 
+     /// Starts an empty composition. MIDI mappings carry over, since they belong to the
+     /// controller more than to the set.
++    /// Follow Nota's transport and clip launches (Syntetika Engine).
++    pub fn set_nota_bridge(&mut self, bridge: NotaBridge) {
++        self.nota = Some(bridge);
++        // Performance mode: the DAW is the UI; openVJ's grid thumbnails only cost GPU time
++        // (each refresh reads back from the GPU and stalls the frame).
++        self.engine.set_live_thumbnails(false);
++        self.selected = None;
++        eprintln!("openVJ: following Nota's clock");
++    }
++
++    /// Drain bridge commands, then apply the ones whose beat has arrived. Launches are
++    /// scheduled by absolute beat, so packet jitter never moves the cut.
++    fn nota_tick(&mut self, now: f64, beat: f64) {
++        if let Some(bridge) = &self.nota {
++            for cmd in bridge.poll() {
++                let at = match cmd {
++                    NotaCommand::Scene { at_beat, .. }
++                    | NotaCommand::Slot { at_beat, .. } => at_beat,
++                    NotaCommand::StopLayer { .. } | NotaCommand::StopAll => beat,
++                };
++                self.nota_queue.push((at, cmd));
++            }
++        }
++        if self.nota_queue.is_empty() {
++            return;
++        }
++        let mut i = 0;
++        while i < self.nota_queue.len() {
++            if self.nota_queue[i].0 <= beat + 1e-9 {
++                let (at_beat, cmd) = self.nota_queue.remove(i);
++                let drift_ms = (beat - at_beat) * 60_000.0 / f64::from(self.comp.bpm.max(1.0));
++                match cmd {
++                    NotaCommand::Scene { col, .. } => {
++                        self.comp.trigger_column(col, now);
++                        eprintln!("openVJ: NOTA scene col={col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
++                    }
++                    NotaCommand::Slot { layer, col, .. } => {
++                        self.comp.trigger(layer, col, now);
++                        eprintln!("openVJ: NOTA clip {layer}:{col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
++                    }
++                    NotaCommand::StopLayer { layer } => {
++                        self.comp.clear_layer(layer, now);
++                        eprintln!("openVJ: NOTA stop layer {layer}");
++                    }
++                    NotaCommand::StopAll => {
++                        self.comp.clear_all(now);
++                        eprintln!("openVJ: NOTA stop all");
++                    }
++                }
++                self.grid_dirty = true;
++            } else {
++                i += 1;
++            }
++        }
++    }
++
++    /// Every distinct effect pipeline this composition can show, deduped by id+version.
++    fn effect_queue(comp: &Composition) -> Vec<openvj_core::Effect> {
++        use openvj_core::{ClipSource, Effect};
++        let mut queue = Vec::new();
++        let mut seen = std::collections::HashSet::new();
++        let mut add = |fx: &Effect, queue: &mut Vec<Effect>| {
++            if let Some(ty) = fx.ty() {
++                if seen.insert((ty.id().to_owned(), ty.version)) {
++                    queue.push(fx.clone());
++                }
++            }
++        };
++        for fx in &comp.effects {
++            add(fx, &mut queue);
++        }
++        for layer in &comp.layers {
++            add(&layer.transform, &mut queue);
++            add(&layer.look, &mut queue);
++            for fx in &layer.effects {
++                add(fx, &mut queue);
++            }
++            for clip in layer.clips.iter().flatten().chain(layer.held.iter()) {
++                if let ClipSource::Isf { generator } = &clip.source {
++                    add(generator, &mut queue);
++                }
++                add(&clip.transform, &mut queue);
++                for fx in &clip.effects {
++                    add(fx, &mut queue);
++                }
++            }
++        }
++        queue
++    }
++
++    /// Compile one queued pipeline per frame, after the frame is presented, so a loaded
++    /// composition has no first-launch hitch.
++    fn prewarm_tick(&mut self) {
++        let Some(fx) = self.prewarm.pop() else { return };
++        let started = Instant::now();
++        let name = fx.ty().map(|t| t.id().to_owned()).unwrap_or_default();
++        self.engine.prewarm_effect(&fx);
++        let ms = started.elapsed().as_secs_f64() * 1000.0;
++        if ms > 20.0 {
++            eprintln!("openVJ: prewarm {name} took {ms:.0}ms");
++        }
++    }
++
+     pub fn new_composition(&mut self) {
+         let midi = std::mem::take(&mut self.comp.midi);
+         let mut comp = Composition::default();
+@@ -968,7 +1094,8 @@ impl App {
+         let now = self.now();
+         let dt = (now - self.last_frame).clamp(0.0, 0.25) as f32;
+         self.last_frame = now;
+-        let beat = self.update_tempo(now);
++        let beat = self.update_tempo(now, dt as f64);
++        self.nota_tick(now, beat);
+         let live = self.comp.live_clip_ids();
+         self.comp.tick(now, beat);
+         if self.comp.live_clip_ids() != live {
+@@ -989,13 +1116,40 @@ impl App {
+         for clip in self.comp.layers.iter_mut().flat_map(|l| l.clips.iter_mut().flatten().chain(l.held.iter_mut())) {
+             clip.apply_macros(&inputs);
+         }
+-        let preview = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id);
++        let preview = if self.nota.is_some() {
++            None
++        } else {
++            self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id)
++        };
+         self.syphon_out.before_render(&mut self.engine);
+         // While Automix plays, the Player's own composition goes to the output instead.
++        let render_started = Instant::now();
+         match self.player.frame(&self.comp, now, beat, self.comp.bpm, &self.inputs) {
+             Some(shown) => self.engine.render(shown, now, &self.inputs, None),
+             None => self.engine.render(&self.comp, now, &self.inputs, preview),
+         }
++        let render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
++        self.dbg_max_render_ms = self.dbg_max_render_ms.max(render_ms);
++        if render_ms > 50.0 {
++            let active: Vec<String> = self
++                .comp
++                .layers
++                .iter()
++                .enumerate()
++                .filter_map(|(i, l)| l.active.map(|p| (i, p.clip_id)))
++                .filter_map(|(i, id)| {
++                    self.comp
++                        .layers
++                        .get(i)?
++                        .clip_by_id(id)
++                        .map(|c| format!("{i}:{}", c.source.kind_label()))
++                })
++                .collect();
++            eprintln!(
++                "openVJ: slow render {render_ms:.0}ms passes={} active={active:?}",
++                self.engine.last_pass_count()
++            );
++        }
+         if (self.output_open || self.mapping_window_open)
+             && let Some(setup) = &self.mapping.setup
+         {
+@@ -1041,17 +1195,27 @@ impl App {
+             ui.set_clock_port(self.clock_port.clone().unwrap_or_default().into());
+         }
+         self.frames += 1;
++        self.dbg_max_dt = self.dbg_max_dt.max(dt as f64 * 1000.0);
+         let elapsed = self.fps_since.elapsed().as_secs_f64();
+         if elapsed >= 1.0 {
+-            ui.set_fps(format!("{:.0} fps", self.frames as f64 / elapsed).into());
++            let fps = self.frames as f64 / elapsed;
++            eprintln!(
++                "openVJ: fps={fps:.1} max_dt={:.1}ms max_render={:.1}ms bridge={} slew={:.4} beat",
++                self.dbg_max_dt, self.dbg_max_render_ms, self.nota.is_some(), self.nota_slew_max
++            );
++            ui.set_fps(format!("{fps:.0} fps").into());
+             self.frames = 0;
+             self.fps_since = Instant::now();
++            self.dbg_max_dt = 0.0;
++            self.dbg_max_render_ms = 0.0;
++            self.nota_slew_max = 0.0;
+         }
+         self.sync(ui, out);
+         ui.window().request_redraw();
+         if self.output_open {
+             out.window().request_redraw();
+         }
++        self.prewarm_tick();
+     }
+ 
+     /// Pushes whatever changed since the last call to the UI.
+@@ -1140,7 +1304,33 @@ impl App {
+     }
+ 
+     /// Beat position for this frame, from Ableton Link when it's on.
+-    fn update_tempo(&mut self, now: f64) -> f64 {
++    fn update_tempo(&mut self, now: f64, dt: f64) -> f64 {
++        // Syntetika Engine: Nota is the master clock while its bridge is streaming.
++        //
++        // Nota's position reads in steps (its implied BPM between packets varies wildly), so a
++        // hard sync each frame would make every beat-synced visual jitter. Instead this is a
++        // small PLL: advance a local beat at Nota's tempo and pull it toward the measured beat
++        // by a few percent per frame; only a jump bigger than a sixteenth snaps (seek/loop).
++        if let Some(sample) = self.nota.as_ref().and_then(|b| b.clock()) {
++            let age = sample.at.elapsed().as_secs_f64();
++            if age < 0.5 {
++                let target = sample.beat + openvj_core::beats(age, sample.bpm);
++                let predicted = self.nota_beat.unwrap_or(target) + openvj_core::beats(dt, sample.bpm);
++                let error = target - predicted;
++                let beat = if error.abs() > 0.25 { target } else { predicted + error * 0.08 };
++                self.nota_slew_max = self.nota_slew_max.max((beat - predicted).abs());
++                self.nota_beat = Some(beat);
++                let shown = (sample.bpm * 10.0).round() / 10.0;
++                if shown != self.comp.bpm {
++                    self.comp.bpm = shown;
++                    self.grid_dirty = true;
++                }
++                self.beat_clock.sync(now, beat, sample.bpm);
++                return beat;
++            }
++            // No packets for half a second: free-run at the last tempo.
++            self.nota_beat = None;
++        }
+         let clock = if self.clock_on { self.midi_clock.bpm().zip(self.midi_clock.beat_at(now)) } else { None };
+         if let Some((bpm, beat)) = clock {
+             let shown = (bpm * 10.0).round() / 10.0;
+diff --git a/crates/openvj-app/src/main.rs b/crates/openvj-app/src/main.rs
+index a145200..ba863b7 100644
+--- a/crates/openvj-app/src/main.rs
++++ b/crates/openvj-app/src/main.rs
+@@ -10,6 +10,7 @@ mod mapping;
+ mod media_browser;
+ mod midi;
+ mod milk_pack;
++mod nota_bridge;
+ mod player;
+ mod prefs;
+ mod shadertoy_import;
+@@ -139,6 +140,10 @@ fn main() -> Result<()> {
+     let comp = Composition::demo();
+     let engine = Engine::new(device, queue, comp.width, comp.height);
+     let app = Rc::new(RefCell::new(App::new(engine, comp)));
++    // Syntetika Engine: follow Nota's transport when OPENVJ_NOTA points at its bridge.
++    if let Ok(addr) = std::env::var("OPENVJ_NOTA") {
++        app.borrow_mut().set_nota_bridge(nota_bridge::NotaBridge::connect(&addr));
++    }
+ 
+     #[cfg(target_os = "macos")]
+     let ui = titlebar::hidden(MainWindow::new)?;
+diff --git a/crates/openvj-app/src/nota_bridge.rs b/crates/openvj-app/src/nota_bridge.rs
+new file mode 100644
+index 0000000..f4b3eed
+--- /dev/null
++++ b/crates/openvj-app/src/nota_bridge.rs
+@@ -0,0 +1,174 @@
++//! Bridge to Nota (Syntetika Engine).
++//!
++//! Nota runs the audio engine and owns musical time; this process renders the visuals.
++//! A loopback TCP socket carries Nota's transport (~125 Hz) and clip-launch commands.
++//! Launch commands name the **beat** they must happen on, so the visual engine schedules
++//! them on the same musical grid instead of reacting to packet arrival.
++//!
++//! Protocol v1, one JSON object per line:
++//!   {"t":"hello","v":1}
++//!   {"t":"clock","beat":12.5,"bpm":120,"playing":true}
++//!   {"t":"scene","col":3,"atBeat":16}
++//!   {"t":"slot","layer":0,"col":3,"atBeat":16}
++//!   {"t":"stopLayer","layer":0}
++//!   {"t":"stopAll"}
++
++use std::io::{BufRead, BufReader};
++use std::net::TcpStream;
++use std::sync::mpsc::{Receiver, Sender};
++use std::sync::{Arc, Mutex};
++use std::time::{Duration, Instant};
++
++/// The newest transport sample from Nota, stamped with the local arrival time so the
++/// render loop can extrapolate the beat between packets.
++#[derive(Clone, Copy, Debug)]
++pub struct ClockSample {
++    pub beat: f64,
++    pub bpm: f32,
++    /// Nota's transport state. Kept for the freeze/clear choice when the transport stops.
++    #[allow(dead_code)]
++    pub playing: bool,
++    pub at: Instant,
++}
++
++#[derive(Clone, Copy, Debug)]
++pub enum Command {
++    Scene { col: usize, at_beat: f64 },
++    Slot { layer: usize, col: usize, at_beat: f64 },
++    StopLayer { layer: usize },
++    StopAll,
++}
++
++pub struct NotaBridge {
++    clock: Arc<Mutex<Option<ClockSample>>>,
++    rx: Receiver<Command>,
++}
++
++impl NotaBridge {
++    /// Connects in the background and reconnects whenever Nota restarts. Rendering is
++    /// never blocked by the bridge.
++    pub fn connect(addr: &str) -> Self {
++        let clock = Arc::new(Mutex::new(None));
++        let (tx, rx) = std::sync::mpsc::channel();
++        let addr = addr.to_string();
++        let thread_clock = Arc::clone(&clock);
++        std::thread::Builder::new()
++            .name("nota-bridge".into())
++            .spawn(move || run(&addr, tx, thread_clock))
++            .ok();
++        Self { clock, rx }
++    }
++
++    pub fn clock(&self) -> Option<ClockSample> {
++        *self.clock.lock().ok()?
++    }
++
++    /// Commands received since the last frame.
++    pub fn poll(&self) -> Vec<Command> {
++        let mut out = Vec::new();
++        while let Ok(cmd) = self.rx.try_recv() {
++            out.push(cmd);
++        }
++        out
++    }
++}
++
++fn run(addr: &str, tx: Sender<Command>, clock: Arc<Mutex<Option<ClockSample>>>) {
++    // Clock-quality stats: packet rate, implied BPM spread and largest beat jump. A steppy
++    // source shows up here before anyone sees a stutter on screen.
++    let mut stat_packets = 0u32;
++    let mut stat_min_bpm = f64::MAX;
++    let mut stat_max_bpm = 0.0f64;
++    let mut stat_max_jump = 0.0f64;
++    let mut stat_last: Option<(f64, Instant)> = None;
++    let mut stat_since = Instant::now();
++    loop {
++        match TcpStream::connect(addr) {
++            Ok(stream) => {
++                stream.set_nodelay(true).ok();
++                eprintln!("openVJ: Nota bridge connected ({addr})");
++                let reader = BufReader::new(stream);
++                for line in reader.lines() {
++                    let Ok(line) = line else { break };
++                    if line.trim().is_empty() {
++                        continue;
++                    }
++                    if let Some((beat, _)) = parse_clock(&line) {
++                        stat_packets += 1;
++                        if let Some((prev, at)) = stat_last {
++                            let dt = at.elapsed().as_secs_f64();
++                            if dt > 1e-6 {
++                                let bpm = (beat - prev) / dt * 60.0;
++                                if bpm.is_finite() && bpm > 0.0 {
++                                    stat_min_bpm = stat_min_bpm.min(bpm);
++                                    stat_max_bpm = stat_max_bpm.max(bpm);
++                                }
++                                stat_max_jump = stat_max_jump.max((beat - prev).abs());
++                            }
++                        }
++                        stat_last = Some((beat, Instant::now()));
++                    }
++                    handle(&line, &tx, &clock);
++                    if stat_since.elapsed().as_secs_f64() >= 1.0 {
++                        eprintln!(
++                            "openVJ: clock {stat_packets} pkt/s, implied bpm {:.1}..{:.1}, max jump {:.3} beat",
++                            if stat_min_bpm == f64::MAX { 0.0 } else { stat_min_bpm },
++                            stat_max_bpm, stat_max_jump
++                        );
++                        stat_packets = 0;
++                        stat_min_bpm = f64::MAX;
++                        stat_max_bpm = 0.0;
++                        stat_max_jump = 0.0;
++                        stat_since = Instant::now();
++                    }
++                }
++                eprintln!("openVJ: Nota bridge disconnected; waiting for Nota");
++            }
++            Err(_) => { /* Nota isn't up yet; retry quietly. */ }
++        }
++        std::thread::sleep(Duration::from_millis(1000));
++    }
++}
++
++fn parse_clock(line: &str) -> Option<(f64, f32)> {
++    let v: serde_json::Value = serde_json::from_str(line).ok()?;
++    if v.get("t").and_then(|t| t.as_str()) != Some("clock") {
++        return None;
++    }
++    let beat = v.get("beat").and_then(|x| x.as_f64())?;
++    let bpm = v.get("bpm").and_then(|x| x.as_f64()).unwrap_or(120.0) as f32;
++    Some((beat, bpm))
++}
++
++fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample>>>) {
++    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return };
++    match v.get("t").and_then(|t| t.as_str()) {
++        Some("clock") => {
++            let Some(beat) = v.get("beat").and_then(|x| x.as_f64()) else { return };
++            let bpm = v.get("bpm").and_then(|x| x.as_f64()).unwrap_or(120.0) as f32;
++            let playing = v.get("playing").and_then(|x| x.as_bool()).unwrap_or(true);
++            if let Ok(mut slot) = clock.lock() {
++                *slot = Some(ClockSample { beat, bpm, playing, at: Instant::now() });
++            }
++        }
++        Some("scene") => {
++            let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
++            let at_beat = v.get("atBeat").and_then(|x| x.as_f64()).unwrap_or(0.0);
++            let _ = tx.send(Command::Scene { col, at_beat });
++        }
++        Some("slot") => {
++            let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
++            let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
++            let at_beat = v.get("atBeat").and_then(|x| x.as_f64()).unwrap_or(0.0);
++            let _ = tx.send(Command::Slot { layer, col, at_beat });
++        }
++        Some("stopLayer") => {
++            let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
++            let _ = tx.send(Command::StopLayer { layer });
++        }
++        Some("stopAll") => {
++            let _ = tx.send(Command::StopAll);
++        }
++        _ => {}
++    }
++}
+diff --git a/crates/openvj-render/src/lib.rs b/crates/openvj-render/src/lib.rs
+index 5ece0ad..91c7f5d 100644
+--- a/crates/openvj-render/src/lib.rs
++++ b/crates/openvj-render/src/lib.rs
+@@ -327,6 +327,8 @@ pub struct Engine {
+     media: HashMap<ClipId, MediaTexture>,
+     /// By effect id: the [`EffectType::version`] compiled and the result.
+     compiled: HashMap<String, (u64, Result<Rc<CompiledEffect>, String>)>,
++    /// Whether the grid's live clip thumbnails render and read back each 1/15 s.
++    live_thumbs: bool,
+     fx_state: HashMap<u64, FxState>,
+     /// Effect instances that ran this frame.
+     fx_seen: HashSet<u64>,
+@@ -550,6 +552,7 @@ impl Engine {
+             media: HashMap::new(),
+             overlay_targets: None,
+             compiled: HashMap::new(),
++            live_thumbs: true,
+             fx_state: HashMap::new(),
+             fx_seen: HashSet::new(),
+             blank,
+@@ -850,6 +853,17 @@ impl Engine {
+     }
+ 
+     /// Why an effect type can't run (its GLSL didn't compile), once it has been tried.
++    /// Compiles an effect's pipeline now instead of on its first visible frame.
++    ///
++    /// ISF compilation (naga parse + Metal pipeline) happens inside `render()` on first use,
++    /// which costs 100-300 ms and shows as a hitch exactly when a clip is launched. Warming
++    /// the composition's clips ahead of time moves that cost away from the launch beat.
++    pub fn prewarm_effect(&mut self, fx: &Effect) {
++        if let Some(ty) = fx.ty() {
++            let _ = self.compiled(&ty);
++        }
++    }
++
+     pub fn effect_error(&self, kind: &str) -> Option<&str> {
+         self.compiled.get(kind)?.1.as_ref().err().map(String::as_str)
+     }
+@@ -1338,8 +1352,9 @@ impl Engine {
+                 self.thumb(clip.id);
+             }
+         }
+-        let refresh_thumbs =
+-            self.thumbs.len() != thumbs_before || self.thumbs_at.is_none_or(|t| now < t || now - t >= THUMB_INTERVAL);
++        let refresh_thumbs = self.live_thumbs
++            && (self.thumbs.len() != thumbs_before
++                || self.thumbs_at.is_none_or(|t| now < t || now - t >= THUMB_INTERVAL));
+         if refresh_thumbs {
+             self.thumbs_at = Some(now);
+         }
+@@ -1454,7 +1469,7 @@ impl Engine {
+                 None => passes.push(Pass::clear(&t.preview, wgpu::Color::BLACK)),
+             }
+         }
+-        let thumbnail_done = self.thumbnail_step(&mut passes, &t);
++        let thumbnail_done = if self.live_thumbs { self.thumbnail_step(&mut passes, &t) } else { None };
+         for clip in comp.all_clips().filter(|_| refresh_thumbs) {
+             if let Some(thumb) = self.thumbs.get(&clip.id).cloned() {
+                 let time = clip_time(comp, clip, now, inputs.beat);
+@@ -1483,6 +1498,13 @@ impl Engine {
+         }
+     }
+ 
++    /// Live clip thumbnails (the grid's little previews). Each refresh renders every clip into
++    /// a small target and reads it back, which stalls the GPU pipeline; a performance session
++    /// driven by a DAW doesn't show that grid, so it turns them off.
++    pub fn set_live_thumbnails(&mut self, on: bool) {
++        self.live_thumbs = on;
++    }
++
+     /// Render passes the last [`Engine::render`] encoded.
+     pub fn last_pass_count(&self) -> usize {
+         self.last_passes

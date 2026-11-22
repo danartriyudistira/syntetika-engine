@@ -1,0 +1,709 @@
+//! Compiles ISF effects (see `openvj_core::isf`) into wgpu pipelines.
+//!
+//! Standard ISF GLSL gets a generated preamble: the ISF uniforms, `inputImage`, one texture
+//! per pass target, the inputs as a uniform block and the `IMG_*` macros. A file that brings
+//! its own `#version` line (Varda-style, with explicit `layout(set = 0, binding = n)`) is
+//! used as written. Either way the GLSL goes through naga's GLSL front end, and bindings are
+//! matched by *name* from the compiled module, so both styles fill the same way.
+
+use std::borrow::Cow;
+use std::collections::HashMap;
+
+use openvj_core::isf::{EffectDef, InputType};
+
+/// What a uniform block member is, for packing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Scalar {
+    F32,
+    I32,
+    U32,
+}
+
+#[derive(Debug, Clone)]
+struct Member {
+    name: String,
+    offset: u32,
+    scalar: Scalar,
+    /// 1 to 4 components.
+    width: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UniformBlock {
+    pub binding: u32,
+    pub size: u32,
+    members: Vec<Member>,
+}
+
+/// A compiled effect: one pipeline shared by every pass (passes differ by `PASSINDEX`).
+pub(crate) struct CompiledEffect {
+    pub pipeline: wgpu::RenderPipeline,
+    pub layout: wgpu::BindGroupLayout,
+    pub blocks: Vec<UniformBlock>,
+    /// (binding, texture name).
+    pub textures: Vec<(u32, String)>,
+    /// (binding, sampler name).
+    pub samplers: Vec<(u32, String)>,
+}
+
+/// Prefix of the int members standing in for bool inputs (bools can't live in uniform blocks).
+const BOOL_PREFIX: &str = "isf_b_";
+
+/// Unique pass target names, in order of first appearance.
+pub(crate) fn target_names(def: &EffectDef) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in &def.passes {
+        if let Some(t) = &p.target
+            && !out.contains(t)
+        {
+            out.push(t.clone());
+        }
+    }
+    out
+}
+
+/// The GLSL handed to naga.
+pub(crate) fn glsl_source(def: &EffectDef) -> String {
+    if def.glsl.contains("#version") {
+        return def.glsl.clone();
+    }
+    let mut s = String::from(
+        "#version 450\n\
+         layout(set = 0, binding = 0) uniform ISF_Globals {\n\
+         \x20   float TIME; float TIMEDELTA; int FRAMEINDEX; int PASSINDEX;\n\
+         \x20   vec2 RENDERSIZE; float BEAT; float BPM;\n\
+         \x20   vec4 DATE; vec4 AUDIO;\n\
+         \x20   vec4 AUDIO_HITS; vec4 AUDIO_PRESENCE; vec4 AUDIO_TIME;\n\
+         \x20   vec4 AUDIO_ALL; vec4 BEAT_EVENTS;\n\
+         };\n\
+         layout(set = 0, binding = 1) uniform sampler isf_sampler;\n\
+         layout(set = 0, binding = 2) uniform texture2D inputImage;\n",
+    );
+    let mut binding = 3;
+    for t in target_names(def) {
+        s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {t};\n");
+        binding += 1;
+    }
+    if uses_spectrum(def) {
+        s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {SPECTRUM};\n");
+        binding += 1;
+    }
+    if uses_word(&def.glsl, SHADERTOY_AUDIO) {
+        s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {SHADERTOY_AUDIO};\n");
+        binding += 1;
+    }
+    if uses_word(&def.glsl, BLANK) || shadertoy_fallback_channels(def) {
+        s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {BLANK};\n");
+        binding += 1;
+    }
+    for (name, _) in &def.imported {
+        s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {name};\n");
+        binding += 1;
+    }
+    if uses_word(&def.glsl, REPEAT_SAMPLER) {
+        s += &format!("layout(set = 0, binding = {binding}) uniform sampler {REPEAT_SAMPLER};\n");
+        binding += 1;
+    }
+    let mut members = String::new();
+    let mut defines = String::new();
+    for input in &def.inputs {
+        let n = &input.name;
+        match input.ty {
+            InputType::Float { .. } => members += &format!("    float {n};\n"),
+            InputType::Long { .. } => members += &format!("    int {n};\n"),
+            InputType::Bool { .. } | InputType::Event => {
+                members += &format!("    int {BOOL_PREFIX}{n};\n");
+                defines += &format!("#define {n} ({BOOL_PREFIX}{n} != 0)\n");
+            }
+            InputType::Color { .. } => members += &format!("    vec4 {n};\n"),
+            InputType::Point2D { .. } => members += &format!("    vec2 {n};\n"),
+            InputType::Image => {}
+        }
+    }
+    if !members.is_empty() {
+        s += &format!("layout(set = 0, binding = {binding}) uniform ISF_Inputs {{\n{members}}};\n");
+    }
+    s += &defines;
+    s += "layout(location = 0) in vec2 isf_FragNormCoord;\n\
+          layout(location = 0) out vec4 isf_FragColor;\n\
+          #define gl_FragColor isf_FragColor\n\
+          #define vv_FragNormCoord isf_FragNormCoord\n\
+          #define IMG_NORM_PIXEL(img, c) texture(sampler2D(img, isf_sampler), c)\n\
+          #define IMG_THIS_PIXEL(img) IMG_NORM_PIXEL(img, isf_FragNormCoord)\n\
+          #define IMG_THIS_NORM_PIXEL(img) IMG_NORM_PIXEL(img, isf_FragNormCoord)\n\
+          #define IMG_SIZE(img) vec2(textureSize(sampler2D(img, isf_sampler), 0))\n\
+          #define IMG_PIXEL(img, c) IMG_NORM_PIXEL(img, (c) / IMG_SIZE(img))\n\
+          #define IMG_THIS_PIXEL_RECT(img) IMG_THIS_PIXEL(img)\n\
+          #define texture2D(img, c) IMG_NORM_PIXEL(img, c)\n\
+          #define renderSize RENDERSIZE\n";
+    s += &ghost_arcade_shim(def);
+    s += &synesthesia_shim(def);
+    s += &shadertoy_shim(def);
+    s += "#line 1\n";
+    s += &without_redeclared_builtins(&def.glsl);
+    if needs_main_image_wrapper(&def.glsl) {
+        // Shadertoy's origin is bottom-left, openVJ's top-left; its alpha is usually junk.
+        s += "\nvoid main() {\n\
+              \x20   vec4 st_color = vec4(0.0, 0.0, 0.0, 1.0);\n\
+              \x20   mainImage(st_color, vec2(isf_FragNormCoord.x, 1.0 - isf_FragNormCoord.y) * RENDERSIZE);\n\
+              \x20   isf_FragColor = vec4(st_color.rgb, 1.0);\n\
+              }\n";
+    }
+    s
+}
+
+/// openVJ's audio in Shadertoy's sound-channel layout (see [`openvj_core::shadertoy`]).
+pub(crate) const SHADERTOY_AUDIO: &str = openvj_core::shadertoy::AUDIO_TEXTURE;
+/// A transparent 1×1 texture (see [`openvj_core::shadertoy::BLANK_TEXTURE`]).
+pub(crate) const BLANK: &str = openvj_core::shadertoy::BLANK_TEXTURE;
+/// The sampler that repeats (see [`openvj_core::shadertoy::REPEAT_SAMPLER`]).
+pub(crate) const REPEAT_SAMPLER: &str = openvj_core::shadertoy::REPEAT_SAMPLER;
+/// Size of [`SHADERTOY_AUDIO`]: the spectrum on row 0, the waveform on row 1.
+pub(crate) const SHADERTOY_AUDIO_SIZE: (u32, u32) = (512, 2);
+
+/// Shadertoy's built-in uniforms, mapped onto ISF's.
+const SHADERTOY_NAMES: &[(&str, &str)] = &[
+    ("iTime", "TIME"),
+    ("iGlobalTime", "TIME"),
+    ("iTimeDelta", "TIMEDELTA"),
+    ("iFrame", "FRAMEINDEX"),
+    ("iFrameRate", "(1.0 / max(TIMEDELTA, 1e-4))"),
+    ("iResolution", "vec3(RENDERSIZE, 1.0)"),
+    ("iDate", "vec4(DATE.xyz, TIME)"),
+    // Shadertoy's value before anyone clicks, which is what its thumbnails show.
+    ("iMouse", "vec4(0.0)"),
+    ("iSampleRate", "44100.0"),
+    ("iChannelTime", "float[4](TIME, TIME, TIME, TIME)"),
+    (
+        "iChannelResolution",
+        "vec3[4](vec3(RENDERSIZE, 1.0), vec3(RENDERSIZE, 1.0), vec3(RENDERSIZE, 1.0), vec3(RENDERSIZE, 1.0))",
+    ),
+];
+
+/// Whether hand-copied Shadertoy code reads channels it doesn't define (they read blank).
+fn shadertoy_fallback_channels(def: &EffectDef) -> bool {
+    (0..4).any(|i| {
+        let ch = format!("iChannel{i}");
+        uses_word(&def.glsl, &ch) && !def.glsl.contains(&format!("#define {ch} "))
+    })
+}
+
+/// Defines for the Shadertoy names a file uses. Channels the file doesn't define itself
+/// (hand-copied code) read a transparent texture.
+fn shadertoy_shim(def: &EffectDef) -> String {
+    let glsl = &def.glsl;
+    let mut s = String::new();
+    for (name, expr) in SHADERTOY_NAMES {
+        if uses_word(glsl, name) && !def.inputs.iter().any(|i| i.name == *name) && !declares(glsl, name) {
+            s += &format!("#define {name} {expr}\n");
+        }
+    }
+    for i in 0..4 {
+        let ch = format!("iChannel{i}");
+        if uses_word(glsl, &ch) && !glsl.contains(&format!("#define {ch} ")) {
+            s += &format!("#define {ch} sampler2D({BLANK}, isf_sampler)\n");
+        }
+    }
+    s
+}
+
+/// Whether `glsl` declares `name` itself (`vec3 iResolution = …;`, `#define iTime …`), as
+/// Ghost Arcade's Shadertoy ports do.
+fn declares(glsl: &str, name: &str) -> bool {
+    const TYPES: &[&str] =
+        &["float", "int", "uint", "bool", "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "#define", "sampler2D"];
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    glsl.match_indices(name).any(|(i, _)| {
+        let before = glsl[..i].trim_end();
+        let whole = !glsl[..i].ends_with(ident) && !glsl[i + name.len()..].starts_with(ident);
+        whole && TYPES.iter().any(|t| before.ends_with(t) && !before[..before.len() - t.len()].ends_with(ident))
+    })
+}
+
+/// A Shadertoy `mainImage` with no `main` of its own.
+fn needs_main_image_wrapper(glsl: &str) -> bool {
+    uses_word(glsl, "mainImage") && !has_main(glsl)
+}
+
+fn has_main(glsl: &str) -> bool {
+    glsl.match_indices("main").any(|(i, _)| {
+        let before = glsl[..i].trim_end();
+        let after = glsl[i + 4..].trim_start();
+        before.ends_with("void")
+            && after.starts_with('(')
+            && !before[..before.len() - 4].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// Ghost Arcade's built-in audio names, mapped onto openVJ's four bands, beat and tempo.
+const GHOST_ARCADE_NAMES: &[(&str, &str)] = &[
+    ("audioBass", "AUDIO.x"),
+    ("audioMid", "((AUDIO.y + AUDIO.z) * 0.5)"),
+    ("audioHigh", "AUDIO.w"),
+    ("audioLevel", "dot(AUDIO, vec4(0.25))"),
+    ("audioBeatPhase", "fract(BEAT)"),
+    ("audioBeat", "(1.0 - fract(BEAT))"),
+    ("audioBPM", "BPM"),
+    ("audioSpectralCentroid", "dot(AUDIO, vec4(0.125, 0.375, 0.625, 0.875)) / max(dot(AUDIO, vec4(1.0)), 1e-4)"),
+];
+
+/// The spectrum texture's name in the generated GLSL: 256 log-spaced bins, laid out like
+/// Synesthesia's `syn_Spectrum` (r raw, g with release, b smooth, a waveform around 0.5).
+pub(crate) const SPECTRUM: &str = "isf_spectrum";
+
+/// Names that read the spectrum texture.
+const SPECTRUM_USERS: &[&str] = &["syn_Spectrum", "sampleFFT", "sampleWaveform"];
+
+fn uses_spectrum(def: &EffectDef) -> bool {
+    SPECTRUM_USERS.iter().any(|n| uses_word(&def.glsl, n))
+}
+
+/// Synesthesia's built-in names, mapped onto openVJ's analysis (its Mid, MidHigh and High
+/// bands are openVJ's Low mid, High mid and Treble) and beat clock.
+const SYNESTHESIA_NAMES: &[(&str, &str)] = &[
+    ("syn_Level", "AUDIO_ALL.x"),
+    ("syn_BassLevel", "AUDIO.x"),
+    ("syn_MidLevel", "AUDIO.y"),
+    ("syn_MidHighLevel", "AUDIO.z"),
+    ("syn_HighLevel", "AUDIO.w"),
+    ("syn_Hits", "AUDIO_ALL.y"),
+    ("syn_BassHits", "AUDIO_HITS.x"),
+    ("syn_MidHits", "AUDIO_HITS.y"),
+    ("syn_MidHighHits", "AUDIO_HITS.z"),
+    ("syn_HighHits", "AUDIO_HITS.w"),
+    ("syn_Presence", "AUDIO_ALL.z"),
+    ("syn_BassPresence", "AUDIO_PRESENCE.x"),
+    ("syn_MidPresence", "AUDIO_PRESENCE.y"),
+    ("syn_MidHighPresence", "AUDIO_PRESENCE.z"),
+    ("syn_HighPresence", "AUDIO_PRESENCE.w"),
+    ("syn_Time", "AUDIO_ALL.w"),
+    ("syn_CurvedTime", "AUDIO_ALL.w"),
+    ("syn_BassTime", "AUDIO_TIME.x"),
+    ("syn_MidTime", "AUDIO_TIME.y"),
+    ("syn_MidHighTime", "AUDIO_TIME.z"),
+    ("syn_HighTime", "AUDIO_TIME.w"),
+    ("syn_OnBeat", "BEAT_EVENTS.x"),
+    ("syn_ToggleOnBeat", "BEAT_EVENTS.y"),
+    ("syn_RandomOnBeat", "BEAT_EVENTS.z"),
+    ("syn_BeatTime", "BEAT"),
+    ("syn_BPMTwitcher", "BEAT"),
+    ("syn_BPM", "BPM"),
+    ("syn_BPMConfidence", "1.0"),
+    ("syn_BPMSin", "(0.5 - 0.5 * cos(6.28318531 * BEAT))"),
+    ("syn_BPMSin2", "(0.5 - 0.5 * cos(6.28318531 * BEAT / 2.0))"),
+    ("syn_BPMSin4", "(0.5 - 0.5 * cos(6.28318531 * BEAT / 4.0))"),
+    ("syn_BPMSin8", "(0.5 - 0.5 * cos(6.28318531 * BEAT / 8.0))"),
+    ("syn_BPMTri", "(1.0 - abs(2.0 * fract(BEAT) - 1.0))"),
+    ("syn_BPMTri2", "(1.0 - abs(2.0 * fract(BEAT / 2.0) - 1.0))"),
+    ("syn_BPMTri4", "(1.0 - abs(2.0 * fract(BEAT / 4.0) - 1.0))"),
+    ("syn_BPMTri8", "(1.0 - abs(2.0 * fract(BEAT / 8.0) - 1.0))"),
+    ("syn_Spectrum", "sampler2D(isf_spectrum, isf_sampler)"),
+    ("FRAMECOUNT", "float(FRAMEINDEX)"),
+    ("_uv", "isf_FragNormCoord"),
+    ("_xy", "(isf_FragNormCoord * RENDERSIZE)"),
+    ("_uvc", "((isf_FragNormCoord - 0.5) * vec2(RENDERSIZE.x / RENDERSIZE.y, 1.0))"),
+];
+
+/// Defines for the Synesthesia names a file uses but doesn't declare itself.
+fn synesthesia_shim(def: &EffectDef) -> String {
+    let glsl = &def.glsl;
+    let mut s = String::new();
+    for (name, expr) in SYNESTHESIA_NAMES {
+        if uses_word(glsl, name) && !def.inputs.iter().any(|i| i.name == *name) {
+            s += &format!("#define {name} {expr}\n");
+        }
+    }
+    s
+}
+
+/// Defines for the Ghost Arcade names a file uses but doesn't declare itself as an input.
+fn ghost_arcade_shim(def: &EffectDef) -> String {
+    let glsl = &def.glsl;
+    let mut s = String::new();
+    for (name, expr) in GHOST_ARCADE_NAMES {
+        if uses_word(glsl, name) && !def.inputs.iter().any(|i| i.name == *name) {
+            s += &format!("#define {name} {expr}\n");
+        }
+    }
+    // WebGL ISF hosts allow these GLSL ES 1.0 non-keywords as names; GLSL 450 doesn't.
+    for word in ["centroid", "sample", "patch", "buffer", "filter", "input", "output"] {
+        if uses_word(glsl, word) {
+            s += &format!("#define {word} isf_{word}\n");
+        }
+    }
+    if uses_word(glsl, "sampleFFT") && !glsl.contains("float sampleFFT(") {
+        s += &format!(
+            "float sampleFFT(float u) {{ return texture(sampler2D({SPECTRUM}, isf_sampler), vec2(u, 0.5)).g; }}\n"
+        );
+    }
+    if uses_word(glsl, "sampleWaveform") && !glsl.contains("float sampleWaveform(") {
+        s += &format!(
+            "float sampleWaveform(float u) {{ return texture(sampler2D({SPECTRUM}, isf_sampler), vec2(u, 0.5)).a * 2.0 - 1.0; }}\n"
+        );
+    }
+    s
+}
+
+/// Whether `word` appears in `src` as a whole identifier.
+fn uses_word(src: &str, word: &str) -> bool {
+    src.match_indices(word).any(|(i, _)| {
+        let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        !src[..i].ends_with(ident) && !src[i + word.len()..].starts_with(ident)
+    })
+}
+
+/// Blanks out `precision` lines and plain `uniform` lines that redeclare a name openVJ already
+/// provides (`uniform float TIME;`, Ghost Arcade's `uniform float audioBass;`), which WebGL ISF
+/// hosts tolerate. Lines stay so compiler errors keep their line numbers.
+fn without_redeclared_builtins(glsl: &str) -> String {
+    const PROVIDED: &[&str] = &["TIME", "TIMEDELTA", "FRAMEINDEX", "PASSINDEX", "RENDERSIZE", "renderSize", "DATE"];
+    let mut out = String::with_capacity(glsl.len());
+    for line in glsl.lines() {
+        let t = line.trim();
+        let redeclared = t.starts_with("uniform ")
+            && t.ends_with(';')
+            && t.trim_end_matches(';').split_whitespace().last().is_some_and(|n| {
+                PROVIDED.contains(&n) || GHOST_ARCADE_NAMES.iter().chain(SYNESTHESIA_NAMES).any(|(g, _)| *g == n)
+            });
+        if !redeclared && !t.starts_with("precision ") {
+            out += line;
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Parses and validates the GLSL. The error is a readable compiler message.
+pub(crate) fn parse(def: &EffectDef) -> Result<naga::Module, String> {
+    let src = glsl_source(def);
+    let module = naga::front::glsl::Frontend::default()
+        .parse(&naga::front::glsl::Options::from(naga::ShaderStage::Fragment), &src)
+        .map_err(|e| e.emit_to_string(&src))?;
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+        .validate(&module)
+        .map_err(|e| e.emit_to_string(&src))?;
+    Ok(module)
+}
+
+/// The bindings a compiled module uses.
+struct Reflection {
+    blocks: Vec<UniformBlock>,
+    textures: Vec<(u32, String)>,
+    samplers: Vec<(u32, String)>,
+}
+
+fn reflect(module: &naga::Module) -> Result<Reflection, String> {
+    let mut blocks = Vec::new();
+    let mut textures = Vec::new();
+    let mut samplers = Vec::new();
+    for (_, var) in module.global_variables.iter() {
+        let Some(rb) = &var.binding else { continue };
+        if rb.group != 0 {
+            return Err(format!("{}: only descriptor set 0 is supported", var.name.as_deref().unwrap_or("?")));
+        }
+        let ty = &module.types[var.ty];
+        match (&var.space, &ty.inner) {
+            (naga::AddressSpace::Uniform, naga::TypeInner::Struct { members, span }) => {
+                let mut out = Vec::new();
+                for m in members {
+                    let (scalar, width) = match module.types[m.ty].inner {
+                        naga::TypeInner::Scalar(s) => (s, 1),
+                        naga::TypeInner::Vector { size, scalar } => (scalar, size as u32),
+                        _ => continue,
+                    };
+                    let scalar = match scalar.kind {
+                        naga::ScalarKind::Float => Scalar::F32,
+                        naga::ScalarKind::Sint => Scalar::I32,
+                        naga::ScalarKind::Uint | naga::ScalarKind::Bool => Scalar::U32,
+                        _ => continue,
+                    };
+                    if let Some(name) = &m.name {
+                        out.push(Member { name: name.clone(), offset: m.offset, scalar, width });
+                    }
+                }
+                blocks.push(UniformBlock { binding: rb.binding, size: *span, members: out });
+            }
+            (_, naga::TypeInner::Image { .. }) => {
+                textures.push((rb.binding, var.name.clone().unwrap_or_default()));
+            }
+            (_, naga::TypeInner::Sampler { .. }) => {
+                samplers.push((rb.binding, var.name.clone().unwrap_or_default()));
+            }
+            _ => {}
+        }
+    }
+    Ok(Reflection { blocks, textures, samplers })
+}
+
+pub(crate) fn compile(
+    device: &wgpu::Device,
+    vertex: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    def: &EffectDef,
+) -> Result<CompiledEffect, String> {
+    let module = parse(def)?;
+    let Reflection { blocks, textures, samplers } = reflect(&module)?;
+    let mut entries = Vec::new();
+    for b in &blocks {
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: b.binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(b.size as u64),
+            },
+            count: None,
+        });
+    }
+    for (binding, _) in &textures {
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: *binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        });
+    }
+    for (binding, _) in &samplers {
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: *binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        });
+    }
+    let layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(&def.id), entries: &entries });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(&def.id),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let fragment = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(&def.id),
+        source: wgpu::ShaderSource::Naga(Cow::Owned(module)),
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(&def.id),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: vertex,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &fragment,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    Ok(CompiledEffect { pipeline, layout, blocks, textures, samplers })
+}
+
+/// Named values for one pass; anything a block asks for that isn't here is zero.
+#[derive(Default)]
+pub(crate) struct Values(HashMap<String, [f32; 4]>);
+
+impl Values {
+    pub fn set(&mut self, name: &str, v: &[f32]) {
+        let mut a = [0.0; 4];
+        a[..v.len().min(4)].copy_from_slice(&v[..v.len().min(4)]);
+        self.0.insert(name.to_owned(), a);
+    }
+
+    fn get(&self, name: &str) -> Option<&[f32; 4]> {
+        self.0.get(name).or_else(|| self.0.get(name.strip_prefix(BOOL_PREFIX)?))
+    }
+
+    /// Packs a uniform block.
+    pub fn pack(&self, block: &UniformBlock, out: &mut [u8]) {
+        for m in &block.members {
+            let Some(v) = self.get(&m.name) else { continue };
+            for (c, x) in v.iter().enumerate().take(m.width as usize) {
+                let at = m.offset as usize + c * 4;
+                let bytes = match m.scalar {
+                    Scalar::F32 => x.to_le_bytes(),
+                    Scalar::I32 => (x.round() as i32).to_le_bytes(),
+                    Scalar::U32 => (x.max(0.0).round() as u32).to_le_bytes(),
+                };
+                if let Some(dst) = out.get_mut(at..at + 4) {
+                    dst.copy_from_slice(&bytes);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openvj_core::library;
+
+    #[test]
+    fn every_builtin_effect_compiles() {
+        for t in library().all() {
+            let module = parse(&t.def).unwrap_or_else(|e| panic!("{}:\n{e}", t.id()));
+            let Reflection { blocks, textures, samplers } = reflect(&module).unwrap();
+            assert!(!samplers.is_empty(), "{}", t.id());
+            assert!(textures.iter().any(|(_, n)| n == "inputImage"), "{}", t.id());
+            let inputs = blocks.iter().find(|b| b.members.iter().any(|m| m.name != "TIME")).map(|b| b.members.len());
+            let expected = t.def.inputs.iter().filter(|i| i.ty != InputType::Image).count();
+            if expected > 0 {
+                assert!(blocks.len() == 2 && inputs.is_some(), "{}: {blocks:?}", t.id());
+            }
+        }
+    }
+
+    #[test]
+    fn varda_style_files_and_bools_pack_by_name() {
+        let src = r#"/*{ "INPUTS": [ {"NAME": "inputImage", "TYPE": "image"},
+                {"NAME": "amount", "TYPE": "float"}, {"NAME": "on", "TYPE": "bool"} ] }*/
+            #version 450
+            layout(location = 0) out vec4 fragColor;
+            layout(location = 0) in vec2 uv;
+            layout(set = 0, binding = 0) uniform ISFUniforms { float TIME; vec2 RENDERSIZE; };
+            layout(set = 0, binding = 1) uniform sampler samp;
+            layout(set = 0, binding = 2) uniform texture2D inputImage;
+            layout(set = 0, binding = 3) uniform P { float amount; int on; };
+            void main() { fragColor = texture(sampler2D(inputImage, samp), uv) * amount * float(on) + TIME; }"#;
+        let def = EffectDef::parse(src, "varda").unwrap();
+        let Reflection { blocks, textures, samplers } = reflect(&parse(&def).unwrap()).unwrap();
+        assert_eq!(samplers, [(1, "samp".to_owned())]);
+        assert_eq!(textures, [(2, "inputImage".to_owned())]);
+        let p = blocks.iter().find(|b| b.binding == 3).unwrap();
+        let mut v = Values::default();
+        v.set("amount", &[0.5]);
+        v.set("on", &[1.0]);
+        let mut buf = vec![0u8; p.size as usize];
+        v.pack(p, &mut buf);
+        assert_eq!(f32::from_le_bytes(buf[0..4].try_into().unwrap()), 0.5);
+        assert_eq!(i32::from_le_bytes(buf[4..8].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn ghost_arcade_names_compile() {
+        let src = r#"/*{ "INPUTS": [ {"NAME": "inputImage", "TYPE": "image"} ] }*/
+            precision highp float;
+            uniform float TIME;
+            uniform vec2 renderSize;
+            uniform float audioBass;
+            void main() {
+                float audioMidish = audioMid + sampleFFT(0.1) + sampleWaveform(0.5) + audioBeatPhase;
+                vec2 uv = gl_FragCoord.xy / renderSize;
+                gl_FragColor = IMG_THIS_PIXEL(inputImage) * (audioBass + audioLevel + audioMidish + uv.x);
+            }"#;
+        let def = EffectDef::parse(src, "ga").unwrap();
+        parse(&def).unwrap_or_else(|e| panic!("{e}"));
+        assert!(uses_word("x audioMid;", "audioMid") && !uses_word("audioMidish", "audioMid"));
+    }
+
+    #[test]
+    fn synesthesia_names_compile() {
+        let src = r#"/*{ "INPUTS": [] }*/
+            void main() {
+                vec2 p = _uvc * (1.0 + syn_BassHits) + _uv + _xy / RENDERSIZE;
+                float t = syn_BassTime + syn_Time + syn_MidHighPresence + syn_HighLevel + syn_Level;
+                float b = syn_OnBeat + syn_ToggleOnBeat + syn_RandomOnBeat + syn_BeatTime + syn_BPMSin4
+                    + syn_BPMTri8 + syn_BPM / 120.0 + syn_BPMConfidence + FRAMECOUNT;
+                vec4 spec = texture(syn_Spectrum, vec2(p.x, 0.5));
+                gl_FragColor = vec4(p, t + b, spec.g);
+            }"#;
+        let def = EffectDef::parse(src, "syn").unwrap();
+        let module = parse(&def).unwrap_or_else(|e| panic!("{e}"));
+        let r = reflect(&module).unwrap();
+        assert!(r.textures.iter().any(|(_, n)| n == SPECTRUM), "{:?}", r.textures);
+    }
+
+    #[test]
+    fn hand_copied_shadertoy_code_compiles() {
+        let src = "// Shadertoy\nvoid mainImage( out vec4 fragColor, in vec2 fragCoord ) {\n\
+                   \x20   vec2 uv = fragCoord / iResolution.xy;\n\
+                   \x20   vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0, 2, 4)) + texture(iChannel0, uv).rgb;\n\
+                   \x20   fragColor = vec4(col + float(iFrame % 2) * iTimeDelta + iMouse.x + iDate.w + iChannelTime[1] + iChannelResolution[0].x, 1.0);\n\
+                   }";
+        let def = EffectDef::parse(src, "colours").unwrap();
+        let r = reflect(&parse(&def).unwrap()).unwrap();
+        assert!(r.textures.iter().any(|(_, n)| n == BLANK), "{:?}", r.textures);
+        assert!(
+            glsl_source(&def)
+                .contains("mainImage(st_color, vec2(isf_FragNormCoord.x, 1.0 - isf_FragNormCoord.y) * RENDERSIZE)")
+        );
+        // A file with its own main isn't wrapped again.
+        let own = "/*{}*/ void mainImage(out vec4 c, in vec2 f) { c = vec4(1.0); }\nvoid main() { mainImage(gl_FragColor, vec2(0.0)); }";
+        let def = EffectDef::parse(own, "x").unwrap();
+        assert!(!glsl_source(&def).contains("st_color"));
+        parse(&def).unwrap();
+    }
+
+    #[test]
+    fn converted_shadertoy_shaders_compile() {
+        use openvj_core::shadertoy::from_api_json;
+        let json = serde_json::json!({"Shader": {"info": {"id": "AbCd12", "name": "Test", "username": "me"},
+            "renderpass": [
+                { "type": "common", "name": "Common", "code": "#define PI 3.14159\nfloat sat(float x) { return clamp(x, 0.0, 1.0); }" },
+                { "type": "image", "name": "Image",
+                  "inputs": [{"id": "4dXGR8", "ctype": "buffer", "channel": 0}, {"id": 9, "ctype": "musicstream", "channel": 1},
+                             {"id": 30, "ctype": "webcam", "channel": 2}, {"id": 31, "ctype": "keyboard", "channel": 3}],
+                  "code": "const float K = 2.0;\nfloat wave(float x) { return sin(x * PI); }\nvoid mainImage(out vec4 c, in vec2 f) {\n\
+                           vec2 uv = f / iResolution.xy;\n\
+                           float fft = texture(iChannel1, vec2(uv.x, 0.25)).x;\n\
+                           c = texture(iChannel0, uv) * K + texture(iChannel2, uv) + fft * wave(iTime) + texelFetch(iChannel3, ivec2(32, 0), 0).x;\n}" },
+                { "type": "buffer", "name": "Buffer A", "outputs": [{"id": "4dXGR8", "channel": 0}],
+                  "inputs": [{"id": "4dXGR8", "ctype": "buffer", "channel": 0}],
+                  "code": "const float K = 0.98;\nfloat wave(float x) { return cos(x); }\nvoid mainImage(out vec4 c, in vec2 f) {\n\
+                           c = sat(K) * texture(iChannel0, f / iResolution.xy) + vec4(wave(iTime) * step(length(f - iResolution.xy * 0.5), 20.0));\n}" },
+            ]}})
+        .to_string();
+        let c = from_api_json(&json).unwrap();
+        assert!(c.is_effect);
+        let def = EffectDef::parse(&c.source, "x").unwrap();
+        let r = reflect(&parse(&def).unwrap_or_else(|e| panic!("{e}\n{}", glsl_source(&def)))).unwrap();
+        let names: Vec<_> = r.textures.iter().map(|(_, n)| n.as_str()).collect();
+        for t in ["inputImage", "BufferA", "ShadertoyInput", SHADERTOY_AUDIO] {
+            assert!(names.contains(&t), "{t} in {names:?}");
+        }
+    }
+
+    #[test]
+    fn spectrum_is_bound_only_when_used() {
+        let src = r#"/*{ "INPUTS": [] }*/ void main() { gl_FragColor = vec4(syn_BassLevel); }"#;
+        let r = reflect(&parse(&EffectDef::parse(src, "x").unwrap()).unwrap()).unwrap();
+        assert!(!r.textures.iter().any(|(_, n)| n == SPECTRUM));
+    }
+
+    #[test]
+    fn every_bundled_shader_compiles() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders");
+        let r = openvj_core::effect_folders::Scanner::new(vec![dir], crate::check_effect).scan().unwrap();
+        let errors: Vec<_> = r.errors.iter().map(|e| format!("{}: {}", e.path.display(), e.message)).collect();
+        assert!(errors.is_empty(), "{errors:#?}");
+        assert!(r.generators.len() > 300 && r.effects.len() > 10, "{} / {}", r.generators.len(), r.effects.len());
+    }
+
+    #[test]
+    fn compile_errors_are_readable() {
+        let def = EffectDef::parse(r#"/*{ "INPUTS": [] }*/ void main() { gl_FragColor = nope; }"#, "bad").unwrap();
+        let err = parse(&def).err().unwrap();
+        assert!(err.contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn readme_example_compiles() {
+        let readme = include_str!("../../../README.md");
+        let start = readme.find("```glsl\n").expect("README has a GLSL example") + 8;
+        let src = &readme[start..start + readme[start..].find("```").unwrap()];
+        let def = EffectDef::parse(src, "readme").unwrap();
+        parse(&def).unwrap_or_else(|e| panic!("{e}"));
+    }
+}

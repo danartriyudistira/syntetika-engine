@@ -1,0 +1,234 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System.Runtime.InteropServices;
+
+namespace Nota.Infrastructure;
+
+/// <summary>Audio (M7-1) and MIDI (M7-2) device settings.</summary>
+/// <remarks>Part of <see cref="NotaEngine"/>'s P/Invoke surface; see nota_engine.h.</remarks>
+internal static partial class NativeMethods
+{
+    [LibraryImport(Lib, EntryPoint = "nota_audio_record_selftest")]
+    internal static partial int AudioRecordSelfTest(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_refresh_devices")]
+    internal static partial void AudioRefreshDevices();
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_output_device_count")]
+    internal static partial int AudioOutputDeviceCount();
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_input_device_count")]
+    internal static partial int AudioInputDeviceCount();
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_output_device_uid")]
+    internal static partial IntPtr AudioOutputDeviceUid(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_output_device_name")]
+    internal static partial IntPtr AudioOutputDeviceName(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_input_device_uid")]
+    internal static partial IntPtr AudioInputDeviceUid(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_input_device_name")]
+    internal static partial IntPtr AudioInputDeviceName(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_set_output_device", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult AudioSetOutputDevice(IntPtr engine, string uid);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_set_input_device", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult AudioSetInputDevice(IntPtr engine, string uid);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_set_sample_rate")]
+    internal static partial NotaResult AudioSetSampleRate(IntPtr engine, double sampleRate);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_set_buffer_frames")]
+    internal static partial NotaResult AudioSetBufferFrames(IntPtr engine, int frames);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_set_wasapi_exclusive")]
+    internal static partial NotaResult AudioSetWasapiExclusive(IntPtr engine, int enabled);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_wasapi_exclusive")]
+    internal static partial int AudioWasapiExclusive(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_output_device")]
+    internal static partial IntPtr AudioOutputDevice(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_input_device")]
+    internal static partial IntPtr AudioInputDevice(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_sample_rate")]
+    internal static partial double AudioSampleRate(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_buffer_frames")]
+    internal static partial int AudioBufferFrames(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_apply")]
+    internal static partial NotaResult AudioApply(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_negotiated_sample_rate")]
+    internal static partial double AudioNegotiatedSampleRate(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_negotiated_buffer_frames")]
+    internal static partial int AudioNegotiatedBufferFrames(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_exclusive_fallback")]
+    internal static partial int AudioExclusiveFallback(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_silent_fallback")]
+    internal static partial int AudioSilentFallback(IntPtr engine);
+
+    // --- ASIO (Windows; specs/049) ---
+    [LibraryImport(Lib, EntryPoint = "nota_audio_set_system")]
+    internal static partial NotaResult AudioSetSystem(IntPtr engine, int system);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_system")]
+    internal static partial int AudioSystem(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_active_system")]
+    internal static partial int AudioActiveSystem(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_available")]
+    internal static partial int AudioAsioAvailable();
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_driver_count")]
+    internal static partial int AudioAsioDriverCount();
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_driver_id")]
+    internal static partial IntPtr AudioAsioDriverId(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_driver_name")]
+    internal static partial IntPtr AudioAsioDriverName(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_set_asio_driver", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult AudioSetAsioDriver(IntPtr engine, string id);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_driver")]
+    internal static partial IntPtr AudioAsioDriver(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_channel_count")]
+    internal static partial int AudioAsioChannelCount(IntPtr engine, int isInput);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_channel_name")]
+    internal static partial IntPtr AudioAsioChannelName(IntPtr engine, int isInput, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_set_asio_pair")]
+    internal static partial NotaResult AudioSetAsioPair(IntPtr engine, int isInput, int firstChannel);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_pair")]
+    internal static partial int AudioAsioPair(IntPtr engine, int isInput);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_open_control_panel")]
+    internal static partial NotaResult AudioAsioOpenControlPanel(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_asio_panel_open")]
+    internal static partial int AudioAsioPanelOpen(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_poll_device_event")]
+    internal static partial int AudioPollDeviceEvent(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_fallback_reason")]
+    internal static partial IntPtr AudioFallbackReason(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_input_latency_frames")]
+    internal static partial int AudioInputLatencyFrames(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_output_latency_frames")]
+    internal static partial int AudioOutputLatencyFrames(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_asio_selftest")]
+    internal static partial int AsioSelfTest();
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_refresh_devices")]
+    internal static partial void MidiRefreshDevices();
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_input_device_count")]
+    internal static partial int MidiInputDeviceCount();
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_input_device_uid")]
+    internal static partial IntPtr MidiInputDeviceUid(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_effective_input_uid")]
+    internal static partial int AudioEffectiveInputUid(IntPtr engine, [Out] byte[] outBuf, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_audio_effective_output_uid")]
+    internal static partial int AudioEffectiveOutputUid(IntPtr engine, [Out] byte[] outBuf, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_input_device_name")]
+    internal static partial IntPtr MidiInputDeviceName(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_set_input_enabled", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult MidiSetInputEnabled(IntPtr engine, string uid, int enabled);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_input_enabled", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int MidiInputEnabled(IntPtr engine, string uid);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_set_mpe")]
+    internal static partial NotaResult MidiSetMpe(IntPtr engine, int enabled, int bendRange);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_mpe_enabled")]
+    internal static partial int MidiMpeEnabled(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_mpe_bend_range")]
+    internal static partial int MidiMpeBendRange(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_mpe_selftest")]
+    internal static partial int MpeSelfTest();
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_apply")]
+    internal static partial NotaResult MidiApply(IntPtr engine);
+
+    // Fills `buf` with up to `max` events of 4 int32 each {kind, channel, number, value};
+    // returns the event count. Used by MIDI-learn to drain incoming CC/note-on.
+    [LibraryImport(Lib, EntryPoint = "nota_midi_poll_control_events")]
+    internal static partial int MidiPollControlEvents(IntPtr engine, [Out] int[] buf, int max);
+
+    // --- control surfaces (specs/051) ---
+    [LibraryImport(Lib, EntryPoint = "nota_midi_ports_generation")]
+    internal static partial uint MidiPortsGeneration();
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_port_count")]
+    internal static partial int MidiPortCount(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_port_source")]
+    internal static partial int MidiPortSource(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_port_uid")]
+    internal static partial IntPtr MidiPortUid(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_port_name")]
+    internal static partial IntPtr MidiPortName(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_port_output_uid")]
+    internal static partial IntPtr MidiPortOutputUid(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_set_claims")]
+    internal static unsafe partial NotaResult MidiSetClaims(IntPtr engine, MidiClaim* claims, int count);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_set_learn_listening")]
+    internal static partial void MidiSetLearnListening(IntPtr engine, int listening);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_poll_surface_events")]
+    internal static partial int MidiPollSurfaceEvents(IntPtr engine, [Out] int[] buf, int max);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_surface_dropped")]
+    internal static partial uint MidiSurfaceDropped(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_poll_sysex")]
+    internal static partial int MidiPollSysex(IntPtr engine, out int source, [Out] byte[] buf, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_send", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial NotaResult MidiSend(IntPtr engine, string outputUid, byte* bytes, int len);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_surface_selftest")]
+    internal static partial int MidiSurfaceSelfTest();
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_test_port_add", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int MidiTestPortAdd(IntPtr engine, string name);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_test_inject")]
+    internal static unsafe partial NotaResult MidiTestInject(IntPtr engine, int source, byte* bytes, int len);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_test_take_sent")]
+    internal static partial int MidiTestTakeSent(IntPtr engine, int source, [Out] byte[] buf, int cap);
+}

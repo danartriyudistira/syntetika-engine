@@ -1,0 +1,756 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices — built-in Nota Operator editor (instrument kind 9): a 4-operator FM
+// synth in the 700 × 260 card the almanac draws for it.
+//
+//   Wheels 56   pitch bend and mod wheel, on screen on every tab — the two hand controls
+//               a player reaches for first.
+//   Centre      three tabs:
+//               Operators   — the four operators as a table: role in words, wave (four
+//                             drawn glyphs in a 2 × 2 block), coarse ratio, semitones,
+//                             fine detune, level with its dB.
+//               Algorithm   — the 11 topologies as sketches, feedback, and the routing
+//                             diagram (drag one operator onto another to re-route).
+//               Filter · Amp— the subtractive filter's response and the live harmonic
+//                             spectrum behind the curve, with type / freq / reso / key track / volume.
+//   Rail 186    Global (FM depth, feedback, tone, glide, bend range, voice mode and
+//               volume) or Env (one operator's ADSR, drawn and draggable,
+//               with key and velocity tracking).
+//
+// Neutral ink is a carrier — what reaches the output; teal is a modulator. Everything is a
+// plugin param → automation / persist / clone.
+
+using System;
+using System.Collections.Generic;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application;
+using static Nota.App.DeviceCardKit;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+internal sealed class OperatorInstrumentCard : IInstrumentCard
+{
+    public bool BodyOnly => true;
+    public string Subtitle => "FM";
+    public double CardWidth => 700;
+
+    private const double WheelsW = 56, RailW = 186, TabH = 20, StatusH = 18;
+
+    // Coarse ratio table — mirrors OperatorSynth::kRatio.
+    private static readonly double[] Ratios = { 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16 };
+    private static readonly string[] WaveShort = { "Sin", "Tri", "Saw", "Sqr" };
+    // The drawn glyph for each — WaveIcon's own order is saw, square, triangle, sine, the
+    // engine's here is sine, triangle, saw, square.
+    private static readonly int[] WaveGlyph = { 3, 2, 0, 1 };
+    private static readonly string[] FilterNames = { "LP", "HP", "BP" };
+    private static readonly string[] KeyTrkNames = { "0", "½", "1" };
+    private static readonly string[] BendNames = { "±2", "±5", "±12" };
+    private static readonly float[] BendStops = { 1f / 11f, 4f / 11f, 1f };
+    private static readonly string[] OpId = { "a", "b", "c", "d" };
+    private static readonly string[] TabNames = { "Operators", "Algorithm", Loc.T("device.operator.env_tab"), "Filter · Amp" };
+    private static readonly string[] RailTabs = { "Global" };
+    private static readonly string[] TabHints =
+    {
+        "wave · ratio · semi · fine · level",
+        Loc.T("device.operator.11_topologies_feedback_on_a"),
+        Loc.T("device.operator.env_tab_hint"),
+        "type · freq · reso · key track",
+    };
+    private const int EnvTab = 2;
+
+    // Engine's perceptual map (OperatorSynth.h): lo * (hi/lo)^v.
+    private static double ExpMap(float v, double lo, double hi) => lo * Math.Pow(hi / lo, Math.Clamp(v, 0f, 1f));
+    private static string Secs(float v, double lo, double hi) => NotaNum.Time(ExpMap(v, lo, hi));
+    private static string Hz(float v) => NotaNum.Hz(ExpMap(v, 60, 18000));
+    private static string Glide(float v) => v <= 1e-4f ? "off" : NotaNum.Time(ExpMap(v, 0.005, 1.2));
+    private static string Level(float v) => v <= 1e-3f ? "−∞" : NotaNum.Db(AudioMath.LinToDb(v));
+    private static string Cents(float v) => NotaNum.Unit((v - 0.5f) * 96, "+0;−0;0", "c");
+    private static string RatioText(float v)
+    {
+        double r = Ratios[Math.Clamp((int)Math.Round(v * 15), 0, 15)];
+        return "×" + NotaNum.Str(r, r < 1 ? "0.0#" : "0");
+    }
+    private static int BendRange(float v) => (int)Math.Round(1 + v * 11);
+
+    // The Semitones knob: whole steps, 0 at centre (±12 st of travel, as Volt's Semi knob) — and
+    // the same rounding as the engine (std::round: halves away from zero, in double), or a value
+    // at a half step would read +4 while the operator already plays +5.
+    private const int SemisRange = 12;
+    private static string Semis(float v)
+        => NotaNum.Str(Math.Round(((double)v - 0.5) * 2 * SemisRange, MidpointRounding.AwayFromZero), "+0;−0;0");
+
+    public Control Build(DeviceCardContext ctx)
+    {
+        var engine = ctx.Engine;
+        int track = ctx.TrackId;
+        int pc = engine.PluginParamCount(track, -1);
+        var idx = new Dictionary<string, int>();
+        for (int i = 0; i < pc; i++) idx[engine.PluginParamId(track, -1, i)] = i;
+        int I(string id) => idx.TryGetValue(id, out var i) ? i : -1;
+        float G(string id) => I(id) is var i and >= 0 ? engine.PluginParamGet(track, -1, i) : 0f;
+        void SetP(string id, float v) { if (I(id) is var i and >= 0) engine.PluginParamSet(track, -1, i, Math.Clamp(v, 0f, 1f)); }
+        void Begin(string id) { if (I(id) >= 0) engine.BeginAutomationWrite(track, AutomationTarget.PluginParam, -1, -1, id); }
+        void End(string id) { if (I(id) >= 0) engine.EndAutomationWrite(track, AutomationTarget.PluginParam, -1, -1, id); }
+        int Sel(string id, int n) => Math.Clamp((int)Math.Round(G(id) * (n - 1)), 0, n - 1);
+        int AlgoIdx() => Math.Clamp((int)Math.Round(G("algo") * (OperatorTopo.Count - 1)), 0, OperatorTopo.Count - 1);
+
+        var readouts = new List<Action>();
+        int tab = 0, railTab = 0, envOp = 3;   // Operators · Global · the D carrier
+        var specBins = new float[32 + 8];   // the harmonic bars, then the four operator envelopes (#531)
+
+        var routing = new OperatorRoutingViz { VerticalAlignment = VerticalAlignment.Stretch };
+        var minis = new OperatorAlgoMini[OperatorTopo.Count];
+        var filtCurve = new VoltFilter(engine, track)
+        { Spectrum = new FilterSpectrum(engine, track), VerticalAlignment = VerticalAlignment.Stretch, MinHeight = 60, FreqRange = (60, 18000) };
+        var env = new VoltEnv(engine, track) { MinHeight = 60, VerticalAlignment = VerticalAlignment.Stretch };
+        Action applyEnv = () => { };
+
+        void SyncSpectrum()
+        {
+            int n = engine.InstrumentScope(track, specBins);
+            if (n >= 40) env.SetPlay((int)specBins[32 + envOp * 2], specBins[32 + envOp * 2 + 1]);
+        }
+        void Refresh()
+        {
+            int a = AlgoIdx();
+            routing.Set(a);
+            for (int i = 0; i < minis.Length; i++) minis[i].SetActive(i == a);
+            filtCurve.Target("FILTER", (I("filfreq"), "filfreq"), (I("filreso"), "filreso"), Sel("filtype", 3));
+            env.Refresh();
+            SyncSpectrum();
+            foreach (var r in readouts) r();
+        }
+        routing.AlgoPicked += a => { SetP("algo", a / (float)(OperatorTopo.Count - 1)); applyEnv(); Refresh(); };
+        ctx.AddDeviceRefresher(SyncSpectrum);
+
+        // ---- shared builders --------------------------------------------------
+        static TextBlock Cap(string t, IBrush? c = null) => new()
+        {
+            Text = NotaText.Label(t), FontSize = NotaType.KnobLabel, FontWeight = FontWeight.Medium,
+            Foreground = c ?? TextTertiary,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        static TextBlock Mono(string t, IBrush? c = null, double fs = 8)
+        {
+            var tb = new TextBlock { Text = t, FontSize = fs, Foreground = c ?? TextSecondary, VerticalAlignment = VerticalAlignment.Center };
+            tb.FontFamily = NotaFonts.ValuesFamily;
+            return tb;
+        }
+
+        Control Knob(string id, string name, Func<float, string> fmt, double size = 34, double cellW = 46, IBrush? arc = null)
+            => InstrumentControls.InstKnob(ctx, idx, id, name, Refresh, fmt, size, cellW, arc);
+
+        // A knob for a table cell: the column header carries the label, so the cell is
+        // just the knob and its value — two lines instead of three.
+        Control TableKnob(string id, string name, Func<float, string> fmt, IBrush? arc = null)
+        {
+            if (!idx.TryGetValue(id, out var pi)) return new Panel();
+            var value = new TextBlock
+            {
+                Text = fmt(G(id)), FontSize = NotaType.KnobValue, FontFamily = NotaFonts.ValuesFamily,
+                Foreground = TextPrimary, VerticalAlignment = VerticalAlignment.Center,
+            };
+            var knob = new Nota.App.Knob(G(id), 1.0)
+            {
+                Accent = true, ArcColor = arc, Default = engine.InstrumentParamDefault(track, pi),
+                Width = NotaSize.KnobSecondary, Height = NotaSize.KnobSecondary, VerticalAlignment = VerticalAlignment.Center,
+            };
+            knob.ValueChanged += v => { engine.PluginParamSet(track, -1, pi, (float)v); value.Text = fmt((float)v); Refresh(); };
+            knob.GestureBegin += () => Begin(id);
+            knob.GestureEnd += () => End(id);
+            ctx.AddInstFader(pi, knob, value, fmt);
+            MidiLearn.Bind(knob, MidiTarget.PluginParam(track, -1, pi), name);
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center,
+                Children = { knob, value },
+            };
+        }
+
+        Control Chips(string id, string[] names, bool fill = false)
+        {
+            int n = names.Length;
+            var seg = Segments(names, () => Sel(id, n), iv => { SetP(id, iv / (float)(n - 1)); applyEnv(); Refresh(); }, out var sync, fill: fill);
+            readouts.Add(sync);
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(seg, MidiTarget.PluginParam(track, -1, pi), id);
+            return seg;
+        }
+
+        // The wave: the four shapes drawn (WaveIcon, as Volt's osc strip draws them) in a
+        // 2 × 2 block (as Grain lays out its windows). The words the chips spelled — "Sin",
+        // "Tri", "Saw", "Sqr" — took the width the SEMI column needs in the 700 card, and a
+        // waveform reads faster drawn than named. The picked cell rises in the soft tint with
+        // an accent glyph; the click is handled so right-click still bubbles to the parameter
+        // menu, and the cells carry the words as tooltips.
+        Control WavePicker(string id)
+        {
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto"),
+                ColumnSpacing = 1, RowSpacing = 1,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+            };
+            var cells = new Border[4];
+            var icons = new WaveIcon[4];
+            for (int i = 0; i < 4; i++)
+            {
+                int iv = i;
+                var ic = new WaveIcon(WaveGlyph[i])
+                {
+                    Width = 15, Height = 11,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                };
+                var c = new Border
+                {
+                    CornerRadius = NotaRadius.Cell, Padding = new Thickness(2), Background = Brushes.Transparent,
+                    Cursor = new Cursor(StandardCursorType.Hand), Child = ic,
+                };
+                ToolTip.SetTip(c, WaveShort[i]);
+                c.PointerPressed += (_, e) =>
+                {
+                    if (!e.GetCurrentPoint(c).Properties.IsLeftButtonPressed) return;
+                    SetP(id, iv / 3f); applyEnv(); Refresh(); e.Handled = true;
+                };
+                Grid.SetColumn(c, i % 2); Grid.SetRow(c, i / 2);
+                cells[i] = c; icons[i] = ic; grid.Children.Add(c);
+            }
+            void Paint()
+            {
+                int cur = Sel(id, 4);
+                for (int i = 0; i < 4; i++)
+                {
+                    bool on = i == cur;
+                    cells[i].Background = on ? NotaPalette.AccentSoft : Brushes.Transparent;
+                    if (on) cells[i].BindResource(Border.BoxShadowProperty, "Shadow.Lifted");
+                    else cells[i].BoxShadow = default;
+                    icons[i].Stroke = on ? AccentBright : TextTertiary;
+                    icons[i].InvalidateVisual();
+                }
+            }
+            readouts.Add(Paint); Paint();
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(grid, MidiTarget.PluginParam(track, -1, pi), id);
+            var host = new Border
+            {
+                Background = NotaPalette.Groove, CornerRadius = NotaRadius.Cell, Padding = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+                Child = grid,
+            };
+            host.BindResource(Border.BoxShadowProperty, "Shadow.Groove");
+            return host;
+        }
+
+        Grid Slider(string label, string id, Func<string> text, double labelW = 54, double valueW = 38)
+        {
+            int pi = I(id);
+            var row = SliderRow(label, () => G(id), v => { SetP(id, (float)v); Refresh(); }, text, out var sync,
+                begin: pi >= 0 ? () => Begin(id) : null,
+                end: pi >= 0 ? () => End(id) : null,
+                reset: pi >= 0 ? () => { SetP(id, engine.InstrumentParamDefault(track, pi)); Refresh(); } : null,
+                labelWidth: labelW, valueWidth: valueW);
+            readouts.Add(sync);
+            if (pi >= 0) MidiLearn.Bind(row, MidiTarget.PluginParam(track, -1, pi), id);
+            return row;
+        }
+
+        Control Toggle(string label, string id, Func<string>? live = null)
+        {
+            var host = Switch(label, () => G(id) >= 0.5f, () => { SetP(id, G(id) >= 0.5f ? 0f : 1f); Refresh(); }, out var sync, liveLabel: live);
+            readouts.Add(sync);
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(host, MidiTarget.PluginParam(track, -1, pi), label);
+            return host;
+        }
+
+        // ---- the wheels rail --------------------------------------------------
+        Control Wheel(string id, double def, bool spring, out Func<bool> dragging)
+        {
+            var w = new PerformWheel { Default = def, Spring = spring, VerticalAlignment = VerticalAlignment.Stretch, Norm = G(id) };
+            w.ValueChanged += v => { SetP(id, (float)v); Refresh(); };
+            w.GestureBegin += () => Begin(id);
+            w.GestureEnd += () => End(id);
+            if (I(id) is var pi and >= 0) MidiLearn.Bind(w, MidiTarget.PluginParam(track, -1, pi), id);
+            readouts.Add(() => { if (!w.Dragging) w.Norm = G(id); });
+            if (!spring) ValueEntry.Attach(w, w.EntryField(id == "modwheel" ? "Mod wheel" : id, NotaNum.Pct));   // the bend wheel springs back
+            dragging = () => w.Dragging;
+            return w;
+        }
+
+        var bendWheel = Wheel("bend", 0.5, true, out _);
+        var modWheel = Wheel("modwheel", 0, false, out _);
+        var bendVal = Mono("", TextPrimary, NotaType.KnobValue);
+        var modVal = Mono("", TextSecondary, NotaType.KnobValue);
+        bendVal.HorizontalAlignment = modVal.HorizontalAlignment = HorizontalAlignment.Center;
+        readouts.Add(() =>
+        {
+            int range = BendRange(G("bendrange"));
+            double semis = (G("bend") - 0.5) * 2 * range;
+            bool centred = Math.Abs(semis) < 0.05;
+            bendVal.Text = centred ? $"±{range} st" : NotaNum.Unit(semis, "+0.0;−0.0;0", "st");
+            bendVal.Foreground = centred ? TextSecondary : TextPrimary;
+            modVal.Text = NotaNum.Pct(G("modwheel"));
+            modVal.Foreground = G("modwheel") > 1e-3f ? TextPrimary : TextSecondary;
+        });
+
+        var wheelPair = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), VerticalAlignment = VerticalAlignment.Stretch };
+        bendWheel.HorizontalAlignment = modWheel.HorizontalAlignment = HorizontalAlignment.Center;
+        wheelPair.Children.Add(bendWheel);
+        Grid.SetColumn(modWheel, 1); wheelPair.Children.Add(modWheel);
+
+        var wheelLabels = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+        var pitchCap = Cap("PITCH"); pitchCap.HorizontalAlignment = HorizontalAlignment.Center;
+        var modCap = Cap("MOD"); modCap.HorizontalAlignment = HorizontalAlignment.Center;
+        wheelLabels.Children.Add(pitchCap);
+        Grid.SetColumn(modCap, 1); wheelLabels.Children.Add(modCap);
+
+        var wheelVals = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+        wheelVals.Children.Add(bendVal);
+        Grid.SetColumn(modVal, 1); wheelVals.Children.Add(modVal);
+
+        var wheelsGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), RowSpacing = 4, Margin = new Thickness(4, 5) };
+        var wheelsCap = Cap("WHEELS"); wheelsCap.HorizontalAlignment = HorizontalAlignment.Center;
+        wheelsGrid.Children.Add(wheelsCap);
+        Grid.SetRow(wheelPair, 1); wheelsGrid.Children.Add(wheelPair);
+        Grid.SetRow(wheelLabels, 2); wheelsGrid.Children.Add(wheelLabels);
+        Grid.SetRow(wheelVals, 3); wheelsGrid.Children.Add(wheelVals);
+        var wheelsPanel = SectionBox(wheelsGrid);
+        wheelsPanel.Width = WheelsW;
+
+        // ---- Operators tab ----------------------------------------------------
+        // One grid for the whole table — a per-row grid would size its Auto columns on its
+        // own content and the headers would drift off the cells they name.
+        var opsGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("58,Auto,64,58,64,*"), ColumnSpacing = 5,
+            RowDefinitions = new RowDefinitions("Auto,*,*,*,*"),
+        };
+        void Cell(Control c, int row, int col) { Grid.SetRow(c, row); Grid.SetColumn(c, col); opsGrid.Children.Add(c); }
+
+        var levelHead = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var dbCap = Cap("dB"); Grid.SetColumn(dbCap, 1);
+        levelHead.Children.Add(Cap("LEVEL")); levelHead.Children.Add(dbCap);
+        var headCells = new Control[] { Cap("OP"), Cap("WAVE"), Cap("CRS"), Cap("SEMI"), Cap("FINE"), levelHead };
+        for (int c = 0; c < headCells.Length; c++) Cell(headCells[c], 0, c);
+
+        for (int o = 0; o < 4; o++)
+        {
+            int op = o;
+            string pre = OpId[op];
+            var bar = new Border { Width = 2, Height = 18, CornerRadius = NotaRadius.Fine, VerticalAlignment = VerticalAlignment.Center };
+            var letter = new TextBlock
+            {
+                Text = OperatorTopo.Names[op], FontSize = NotaType.DeviceSection, FontWeight = FontWeight.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var role = new TextBlock
+            {
+                FontSize = NotaType.KnobLabel, FontWeight = FontWeight.Medium,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            readouts.Add(() =>
+            {
+                var tgt = OperatorTopo.Algo[AlgoIdx()];
+                bool carrier = tgt[op] == 4;
+                var ink = carrier ? NotaPalette.VizInk : Teal;
+                role.Text = carrier ? "out" : "→ " + OperatorTopo.Names[tgt[op]];
+                role.Foreground = ink; letter.Foreground = ink; bar.Background = carrier ? NotaPalette.VizInk : Teal;
+            });
+
+            // A hairline under each row, drawn behind its cells across the full width.
+            if (op > 0)
+            {
+                var rule = new Border { BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0) };
+                Grid.SetRow(rule, op + 1); Grid.SetColumnSpan(rule, 6); opsGrid.Children.Add(rule);
+            }
+            string lid = pre + "level";
+            Cell(new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center,
+                Children = { bar, letter, role },
+            }, op + 1, 0);
+            Cell(WavePicker(pre + "wave"), op + 1, 1);
+            Cell(TableKnob(pre + "coarse", OperatorTopo.Names[op] + " Coarse", RatioText), op + 1, 2);
+            Cell(TableKnob(pre + "semi", OperatorTopo.Names[op] + " Semi", Semis), op + 1, 3);
+            Cell(TableKnob(pre + "fine", OperatorTopo.Names[op] + " Fine", Cents, arc: Teal), op + 1, 4);
+            Cell(Slider("", lid, () => Level(G(lid)), labelW: 0, valueW: 36), op + 1, 5);
+        }
+        var opsBody = new Border { Padding = new Thickness(7, 3), Child = opsGrid };
+
+        // ---- Algorithm tab ----------------------------------------------------
+        // The eleven sketches on one row, then feedback, then the routing diagram — which
+        // needs the height, because the deepest topology stacks four operators.
+        var tiles = new Grid { ColumnSpacing = 4, Height = 56 };
+        for (int i = 0; i < OperatorTopo.Count; i++) tiles.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+        for (int i = 0; i < OperatorTopo.Count; i++)
+        {
+            var mini = new OperatorAlgoMini(i);
+            mini.Clicked += a => { SetP("algo", a / (float)(OperatorTopo.Count - 1)); applyEnv(); Refresh(); };
+            minis[i] = mini;
+            Grid.SetColumn(mini, i); tiles.Children.Add(mini);
+        }
+        var fbRow = Slider("FEEDBACK", "feedback", () => NotaNum.Pct(G("feedback")));
+
+        var algoGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*"), RowSpacing = NotaSpace.DeviceGap };
+        algoGrid.Children.Add(tiles);
+        Grid.SetRow(fbRow, 1); algoGrid.Children.Add(fbRow);
+        Grid.SetRow(routing, 2); algoGrid.Children.Add(routing);
+        var algoBody = new Border { Padding = new Thickness(7, 5), Child = algoGrid };
+
+        // ---- Filter · Amp tab -------------------------------------------------
+        var typeRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        var typeChips = Chips("filtype", FilterNames);
+        typeChips.HorizontalAlignment = HorizontalAlignment.Right;
+        typeRow.Children.Add(Cap("FILTER"));
+        Grid.SetColumn(typeChips, 1); typeRow.Children.Add(typeChips);
+
+        var keyTrkChips = Chips("filkeytrk", KeyTrkNames);
+        var keyTrkCell = new StackPanel
+        {
+            Spacing = 3, VerticalAlignment = VerticalAlignment.Center,
+            Children = { Cap("KEY TRK"), keyTrkChips, Mono("", TextSecondary, NotaType.KnobValue) },
+        };
+        var keyTrkVal = (TextBlock)keyTrkCell.Children[2];
+        readouts.Add(() => keyTrkVal.Text = NotaNum.Pct(G("filkeytrk")));
+
+        var filtBottom = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            Children = { Knob("volume", "Volume", v => NotaNum.Pct(v), cellW: 44), Knob("glide", "Glide", Glide, cellW: 44), keyTrkCell },
+        };
+        var filtLeft = new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                typeRow,
+                Slider("FREQ", "filfreq", () => Hz(G("filfreq")), labelW: 32),
+                Slider("RESO", "filreso", () => NotaNum.Pct(G("filreso")), labelW: 32),
+                new Border
+                {
+                    BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0),
+                    Padding = new Thickness(0, 4, 0, 0), Child = filtBottom,
+                },
+            },
+        };
+
+        var respHead = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Height = 11 };
+        var respVal = Mono("", TextSecondary, NotaType.Axis); respVal.HorizontalAlignment = HorizontalAlignment.Right;
+        respHead.Children.Add(Cap("RESPONSE"));
+        Grid.SetColumn(respVal, 1); respHead.Children.Add(respVal);
+        readouts.Add(() => respVal.Text = $"{Hz(G("filfreq"))} · Q {NotaNum.Str(1.0 / Math.Max(0.05, 2.0 - 1.9 * G("filreso")), "0.0")}");
+
+
+        var filtRight = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 3 };
+        filtRight.Children.Add(respHead);
+        Grid.SetRow(filtCurve, 1); filtRight.Children.Add(filtCurve);
+
+        var filtGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("160,*"), ColumnSpacing = 9 };
+        filtGrid.Children.Add(filtLeft);
+        Grid.SetColumn(filtRight, 1); filtGrid.Children.Add(filtRight);
+        var filtBody = new Border { Padding = new Thickness(7, 5), Child = filtGrid };
+
+        // ---- Env tab ----------------------------------------------------------
+        // The selected operator's envelope (#531): A B C D picks it, its role beside; the
+        // drawn curve (drag the breakpoints, bend decay and release by their diamonds), Lin /
+        // Exp, one row of A D S R knobs, and the level scalings at the right.
+        var opCells = new Border[4];
+        var opTexts = new TextBlock[4];
+        var opPick = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1 };
+        for (int i = 0; i < 4; i++)
+        {
+            int iv = i;
+            var tb = new TextBlock { Text = OperatorTopo.Names[i], FontSize = NotaType.DeviceSection, VerticalAlignment = VerticalAlignment.Center };
+            var chip = new Border
+            {
+                CornerRadius = NotaRadius.Cell, Padding = new Thickness(6, 1), Cursor = new Cursor(StandardCursorType.Hand),
+                Background = Brushes.Transparent, Child = tb,
+            };
+            chip.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(chip).Properties.IsLeftButtonPressed) return;
+                envOp = iv; applyEnv(); Refresh(); e.Handled = true;
+            };
+            opCells[i] = chip; opTexts[i] = tb; opPick.Children.Add(chip);
+        }
+        var opPickHost = new Border
+        {
+            Background = NotaPalette.BgSunken, BorderBrush = BorderDef, BorderThickness = new Thickness(1),
+            CornerRadius = NotaRadius.Field, Padding = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Right,
+            Child = opPick,
+        };
+        var envRoleText = Mono("", TextSecondary, NotaType.Axis);
+
+        var envStages = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*") };
+        var envKnobHosts = new Panel[4];
+        for (int i = 0; i < 4; i++) { envKnobHosts[i] = new Panel(); Grid.SetColumn(envKnobHosts[i], i); envStages.Children.Add(envKnobHosts[i]); }
+        // The four ADSR knobs belong to whichever operator is selected, so they are rebuilt
+        // per operator once and swapped — a knob is bound to one param index for its life.
+        var stageCells = new Control[4, 4];
+        Func<float, string> StageFmt(int s) => s switch
+        {
+            0 => v => Secs(v, 0.001, 4.0),
+            1 => v => Secs(v, 0.002, 6.0),
+            2 => v => Level(v),
+            _ => v => Secs(v, 0.002, 8.0),
+        };
+        env.Format = (s, n) => StageFmt(s)((float)n);   // ⌥-click a breakpoint to type it
+        env.Seconds = (s, n) => s switch { 0 => ExpMap((float)n, 0.001, 4.0), 1 => ExpMap((float)n, 0.002, 6.0), _ => ExpMap((float)n, 0.002, 8.0) };
+        var curveHosts = new Control[4];
+        var curveHost = new Panel { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+        for (int o = 0; o < 4; o++)
+        {
+            curveHosts[o] = Chips(OpId[o] + "envexp", new[] { Loc.T("device.env.lin"), Loc.T("device.env.exp") });
+            curveHosts[o].IsVisible = false;
+            curveHost.Children.Add(curveHosts[o]);
+        }
+        string[] stageIds = { "atk", "dec", "sus", "rel" };
+        string[] stageNames = { "Attack", "Decay", "Sustain", "Release" };
+        for (int o = 0; o < 4; o++)
+        {
+            for (int s = 0; s < 4; s++)
+            {
+                string id = OpId[o] + stageIds[s];
+                stageCells[o, s] = Knob(id, stageNames[s], StageFmt(s), cellW: 40);
+                stageCells[o, s].IsVisible = false;
+                envKnobHosts[s].Children.Add(stageCells[o, s]);
+            }
+        }
+
+        applyEnv = () =>
+        {
+            string p = OpId[envOp];
+            var tgt = OperatorTopo.Algo[AlgoIdx()];
+            bool carrier = tgt[envOp] == 4;
+            env.Target($"{OperatorTopo.Names[envOp]} ENV",
+                (I(p + "atk"), p + "atk"), (I(p + "dec"), p + "dec"), (I(p + "sus"), p + "sus"), (I(p + "rel"), p + "rel"));
+            env.Shape((I(p + "dcurve"), p + "dcurve"), (I(p + "rcurve"), p + "rcurve"), (I(p + "envexp"), p + "envexp"));
+            for (int o = 0; o < 4; o++) curveHosts[o].IsVisible = o == envOp;
+            envRoleText.Text = carrier ? "carrier → out" : "mod → " + OperatorTopo.Names[tgt[envOp]];
+            envRoleText.Foreground = carrier ? TextPrimary : Teal;
+            for (int o = 0; o < 4; o++)
+                for (int s = 0; s < 4; s++) stageCells[o, s].IsVisible = o == envOp;
+            for (int i = 0; i < 4; i++)
+            {
+                bool on = i == envOp;
+                bool carr = tgt[i] == 4;
+                opCells[i].Background = on ? (carr ? Brass : Teal) : Brushes.Transparent;
+                opTexts[i].Foreground = on ? OnAccent : carr ? TextPrimary : Teal;
+                opTexts[i].FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal;
+            }
+        };
+        readouts.Add(() => applyEnv());
+
+        var envHead = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), ColumnSpacing = 6 };
+        envHead.Children.Add(Cap("ENV"));
+        envRoleText.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(envRoleText, 1); envHead.Children.Add(envRoleText);
+        Grid.SetColumn(curveHost, 2); envHead.Children.Add(curveHost);
+        Grid.SetColumn(opPickHost, 3); envHead.Children.Add(opPickHost);
+        var envStagesHost = new Border
+        {
+            BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(0, 3, 0, 0), Child = envStages,
+        };
+        var envLeft = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 3 };
+        envLeft.Children.Add(envHead);
+        Grid.SetRow(env, 1); envLeft.Children.Add(env);
+        Grid.SetRow(envStagesHost, 2); envLeft.Children.Add(envStagesHost);
+        var envRight = new StackPanel
+        {
+            Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                Slider("KEY→LVL", "keylevel", () => NotaNum.Pct(G("keylevel")), labelW: 50, valueW: 30),
+                Slider("VEL→LVL", "veltolevel", () => NotaNum.Pct(G("veltolevel")), labelW: 50, valueW: 30),
+            },
+        };
+        var envRightHost = new Border
+        {
+            BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(1, 0, 0, 0),
+            Padding = new Thickness(7, 0, 0, 0), Width = 132, Child = envRight,
+        };
+        var envGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 7 };
+        envGrid.Children.Add(envLeft);
+        Grid.SetColumn(envRightHost, 1); envGrid.Children.Add(envRightHost);
+        var envBody = new Border { Padding = new Thickness(7, 5), Child = envGrid };
+
+        // ---- the tab strip ----------------------------------------------------
+        var bodies = new Control[] { opsBody, algoBody, envBody, filtBody };
+        var tabCells = new Border[TabNames.Length];
+        var tabTexts = new TextBlock[TabNames.Length];
+        var hint = Mono("", TextTertiary, NotaType.Axis);
+        hint.Margin = new Thickness(0, 0, 8, 0);
+        hint.HorizontalAlignment = HorizontalAlignment.Right;
+        var tabRow = new StackPanel { Orientation = Orientation.Horizontal };
+        void ShowTab()
+        {
+            for (int i = 0; i < TabNames.Length; i++)
+            {
+                bool on = i == tab;
+                tabCells[i].Background = on ? NotaPalette.SurfaceRaised : Brushes.Transparent;
+                tabCells[i].BorderBrush = on ? Brass : Brushes.Transparent;
+                tabTexts[i].Foreground = on ? TextPrimary : TextTertiary;
+                tabTexts[i].FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal;
+                bodies[i].IsVisible = on;
+            }
+            hint.Text = TabHints[tab];
+            Refresh();
+        }
+        for (int i = 0; i < TabNames.Length; i++)
+        {
+            int iv = i;
+            var tb = new TextBlock { Text = TabNames[i], FontSize = NotaType.DeviceSection, VerticalAlignment = VerticalAlignment.Center };
+            var cell = new Border
+            {
+                Padding = new Thickness(7, 0), BorderThickness = new Thickness(0, 0, 0, 2),
+                Cursor = new Cursor(StandardCursorType.Hand), Child = tb,
+            };
+            cell.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(cell).Properties.IsLeftButtonPressed) return;
+                tab = iv; ShowTab(); e.Handled = true;
+            };
+            tabCells[i] = cell; tabTexts[i] = tb; tabRow.Children.Add(cell);
+        }
+        var tabStrip = new Grid { Height = TabH, ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        tabStrip.Children.Add(tabRow);
+        Grid.SetColumn(hint, 1); tabStrip.Children.Add(hint);
+
+        var tabHost = new Panel();
+        foreach (var b in bodies) tabHost.Children.Add(b);
+        var tabGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        tabGrid.Children.Add(HeaderStrip(tabStrip));
+        Grid.SetRow(tabHost, 1); tabGrid.Children.Add(tabHost);
+        var tabPanel = SectionBox(tabGrid);
+
+        // ---- rail · Global ----------------------------------------------------
+        var bendChips = Segments(BendNames, () => NearestExact(G("bendrange"), BendStops),
+            iv => { SetP("bendrange", BendStops[iv]); Refresh(); }, out var bendSync);
+        readouts.Add(bendSync);
+        if (I("bendrange") is var bri and >= 0) MidiLearn.Bind(bendChips, MidiTarget.PluginParam(track, -1, bri), "Bend Range");
+        var bendRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        bendChips.HorizontalAlignment = HorizontalAlignment.Right;
+        bendRow.Children.Add(Cap("BEND"));
+        Grid.SetColumn(bendChips, 1); bendRow.Children.Add(bendChips);
+
+        var modeRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center,
+            Children = { Toggle("Mono", "mono"), Toggle("Vel → FM", "veltofm", () => G("veltofm") >= 0.5f ? $"Vel → FM  {NotaNum.Pct(G("veltofm"))}" : Loc.T("device.operator.vel_fm_off")) },
+        };
+
+        // Volume alone, centred in the rail — the track meter already shows the level.
+        var globalBottom = Knob("volume", "Volume", v => NotaNum.Pct(v), size: NotaSize.KnobMain, cellW: 52);
+        globalBottom.HorizontalAlignment = HorizontalAlignment.Center;
+        globalBottom.VerticalAlignment = VerticalAlignment.Center;
+
+        var globalTop = new StackPanel
+        {
+            Spacing = 6, Margin = new Thickness(8, 6, 8, 0),
+            Children =
+            {
+                Slider("FM", "fmdepth", () => NotaNum.Pct(G("fmdepth") * 2)),
+                Slider("FEEDBACK", "feedback", () => NotaNum.Pct(G("feedback"))),
+                Slider("TONE", "filfreq", () => Hz(G("filfreq"))),
+                Slider("GLIDE", "glide", () => Glide(G("glide"))),
+                bendRow,
+                modeRow,
+            },
+        };
+        var globalGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        globalGrid.Children.Add(globalTop);
+        var globalBottomFrame = new Border
+        {
+            BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0),
+            Margin = new Thickness(8, 6, 8, 6), Padding = new Thickness(0, 5, 0, 0), Child = globalBottom,
+        };
+        Grid.SetRow(globalBottomFrame, 1); globalGrid.Children.Add(globalBottomFrame);
+
+        // ---- the rail's own two tabs ------------------------------------------
+        var railBodies = new Control[] { globalGrid };
+        var railCells = new Border[RailTabs.Length];
+        var railTexts = new TextBlock[RailTabs.Length];
+        var railTabGrid = new Grid { Height = TabH, ColumnDefinitions = new ColumnDefinitions("*") };
+        void ShowRailTab()
+        {
+            for (int i = 0; i < RailTabs.Length; i++)
+            {
+                bool on = i == railTab;
+                railCells[i].Background = on ? NotaPalette.SurfaceRaised : Brushes.Transparent;
+                railCells[i].BorderBrush = on ? Brass : Brushes.Transparent;
+                railTexts[i].Foreground = on ? TextPrimary : TextTertiary;
+                railTexts[i].FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal;
+                railBodies[i].IsVisible = on;
+            }
+            Refresh();
+        }
+        for (int i = 0; i < RailTabs.Length; i++)
+        {
+            int iv = i;
+            var tb = new TextBlock
+            {
+                Text = RailTabs[i], FontSize = NotaType.DeviceSection,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            };
+            var cell = new Border
+            {
+                BorderThickness = new Thickness(0, 0, 0, 2), Cursor = new Cursor(StandardCursorType.Hand), Child = tb,
+            };
+            cell.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(cell).Properties.IsLeftButtonPressed) return;
+                railTab = iv; ShowRailTab(); e.Handled = true;
+            };
+            railCells[i] = cell; railTexts[i] = tb;
+            Grid.SetColumn(cell, i); railTabGrid.Children.Add(cell);
+        }
+        var railHost = new Panel();
+        foreach (var b in railBodies) railHost.Children.Add(b);
+        var railGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        railGrid.Children.Add(HeaderStrip(railTabGrid));
+        Grid.SetRow(railHost, 1); railGrid.Children.Add(railHost);
+        var rail = SectionBox(railGrid);
+        rail.Width = RailW;
+
+
+        // ---- assembly ---------------------------------------------------------
+        var body = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = NotaSpace.DeviceGap,
+            Margin = new Thickness(NotaSpace.DeviceGap),
+        };
+        body.Children.Add(wheelsPanel);
+        Grid.SetColumn(tabPanel, 1); body.Children.Add(tabPanel);
+        Grid.SetColumn(rail, 2); body.Children.Add(rail);
+
+        var root = new Border { Background = NotaPalette.SurfaceCard, Child = body };
+
+        ctx.SetInstLiveViz(Refresh);
+        applyEnv();
+        ShowRailTab();
+        ShowTab();
+        return root;
+    }
+
+    public string? VoiceLabel(IAudioEngine engine, int trackId, int active)
+    {
+        int i = -1, pc = engine.PluginParamCount(trackId, -1);
+        for (int k = 0; k < pc; k++) if (engine.PluginParamId(trackId, -1, k) == "mono") { i = k; break; }
+        if (i < 0) return null;
+        return engine.PluginParamGet(trackId, -1, i) >= 0.5f ? $"{Math.Min(active, 1)}/1" : null;
+    }
+
+    // A device section: card ground, hairline, radius 6 — the almanac's section box.
+    private static Decorator SectionBox(Control child) => DeviceCardKit.Section(child);
+
+    // A section's own header strip: a hairline under it, nothing else.
+    private static Border HeaderStrip(Control child) => new()
+    {
+        BorderBrush = BorderDef, BorderThickness = new Thickness(0, 0, 0, 1), Child = child,
+    };
+
+}

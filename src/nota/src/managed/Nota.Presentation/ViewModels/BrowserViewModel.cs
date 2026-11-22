@@ -1,0 +1,1525 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// M4.1-C: left browser. Aggregates built-in instruments/effects, the scanned
+// plugin catalog (AU/VST3), and (M7-4) real samples, projects and presets from
+// configurable folders. Double-clicking an item in the view adds/opens/applies
+// it (handled by MainWindow).
+
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using CommunityToolkit.Mvvm.ComponentModel;
+using Nota.Application;
+using Nota.Application.Samples;
+using Nota.Application.Localization;
+
+namespace Nota.Presentation;
+
+public enum BrowserItemKind
+{
+    BuiltinInstrument, BuiltinEffect, BuiltinMidiEffect, PluginInstrument, PluginEffect, Sample, Project, Preset, Folder,
+    /// <summary>A section header row (BUILT-IN / PLUG-INS) inside a flattened list — never
+    /// selectable, draggable or activatable.</summary>
+    Group,
+    /// <summary>A Standard MIDI File (.mid) — drops as MIDI clip(s).</summary>
+    MidiFile,
+    /// <summary>A file the Files browse view lists but Nota can't add (spec 092): shown
+    /// faded, never dragged, opened or auditioned.</summary>
+    OtherFile,
+    /// <summary>A Modular-only node (LFO, Envelope Follower, …; spec 095): the browser's
+    /// Modular tab lists them and only the Modular canvas takes one.</summary>
+    ModularNode,
+}
+
+/// <summary>Active library filter for the device tabs (Instr / FX / MIDI).</summary>
+public enum BrowserFilter { None, Favorites, Tag }
+
+/// <summary>The Files browse view's list: filled, an empty folder, or a folder Nota can't read.</summary>
+public enum BrowseListState { Ok, Empty, Unreadable }
+
+public sealed class BrowserItem : INotifyPropertyChanged
+{
+    private SampleInfo? _sample;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>What the sample index knows about a Files row (tempo, key, loop or one-shot);
+    /// null until it has been analysed. Fills in live as the background scan runs.</summary>
+    public SampleInfo? Sample
+    {
+        get => _sample;
+        set
+        {
+            if (ReferenceEquals(_sample, value)) return;
+            _sample = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Sample)));
+        }
+    }
+
+    public required string Name { get; init; }
+    public required BrowserItemKind Kind { get; init; }
+    public int CatalogIndex { get; init; } = -1; // plugins
+    public int BuiltinKind { get; init; } = -1;   // effects: 0=EQ,1=Compressor,2=Reverb,3=Delay,4=Utility · instruments: 0=Synth,2=Physical,5=Aurora
+    public string Sub { get; init; } = "";        // type / manufacturer / folder
+    public string Format { get; init; } = "";     // plug-ins: "VST3" / "AU" (Sub carries the vendor)
+    public string Vendor { get; init; } = "";     // plug-ins: the manufacturer
+    public string Category { get; init; } = "";   // plug-ins: VST3 sub-categories ("Fx|Reverb") or the AU type
+    public string DeviceCategory { get; init; } = ""; // device rows: the browser shelf ("Reverb & delay"), see DeviceCategories
+    public string Path { get; init; } = "";       // file/bundle path for samples/projects/presets
+    /// <summary>Long-form description for the row's tooltip, where <see cref="Sub"/> (the
+    /// narrow tag column) has no room for it. Falls back to Sub when empty.</summary>
+    public string Tip { get; init; } = "";
+    /// <summary>Extra search words a row matches on but doesn't show (Modular nodes' aliases).</summary>
+    public string Keywords { get; init; } = "";
+
+    /// <summary>Section-header row (see <see cref="BrowserItemKind.Group"/>): Name is the
+    /// caption and <see cref="GroupCount"/> how many rows it heads.</summary>
+    public bool IsGroup => Kind == BrowserItemKind.Group;
+    public int GroupCount { get; init; }
+
+    /// <summary>The brand prefix a built-in device name carries ("Nota"), or "" — the browser
+    /// prints it in tertiary ink so names scan on their distinctive word.</summary>
+    public string Prefix => Name.StartsWith("Nota ", StringComparison.Ordinal) ? "Nota" : "";
+    /// <summary>The name without its brand prefix.</summary>
+    public string ShortName => Prefix.Length > 0 ? Name[5..] : Name;
+    /// <summary>True for a scanned AU/VST3 row (as opposed to one of Nota's own devices).</summary>
+    public bool IsPlugin => Kind is BrowserItemKind.PluginInstrument or BrowserItemKind.PluginEffect;
+
+    // --- tree (Instruments / FX / MIDI): a built-in device parent with factory-preset children,
+    // filed into category folders (Pads, Bass, Vocals …) with any unfiled presets loose on top ---
+    public int Depth { get; init; }                            // 0 = device/plugin, 1 = folder or preset, 2 = preset in a folder
+    public List<BrowserItem> Children { get; } = new();        // presets and category folders under this device
+    public bool HasChildren => Children.Count > 0;
+    public bool IsExpanded { get; set; }                       // toggled by the view-model
+    /// <summary>The Files tab's Downloaded folder (installed sample packs): its own icon, listed first.</summary>
+    public bool IsDownloads { get; init; }
+    /// <summary>A top-level sample folder of the Files tab (spec 092): its index in the
+    /// settings' folder list, or −1 for any other row.</summary>
+    public int PlaceIndex { get; init; } = -1;
+    /// <summary>A sample folder that can't be found (an unplugged drive): shown dimmed, empty.</summary>
+    public bool Unavailable { get; init; }
+    /// <summary>A drive / volume row of the browse view's Computer level.</summary>
+    public bool IsVolume { get; init; }
+    /// <summary>A browse-view file's size in bytes (shown in its own column); null elsewhere.</summary>
+    public long? Size { get; init; }
+
+    /// <summary>Projects tab (spec 092, #582): when the project was last saved; null if unknown.</summary>
+    public DateTime? Modified { get; init; }
+
+    private Nota.Application.Browser.ProjectSummary? _summary;
+    /// <summary>Projects tab: tempo, key, length, tracks — read in the background, null until then.</summary>
+    public Nota.Application.Browser.ProjectSummary? Summary
+    {
+        get => _summary;
+        set
+        {
+            if (ReferenceEquals(_summary, value)) return;
+            _summary = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Summary)));
+        }
+    }
+
+    private bool _isOpen;
+    /// <summary>Projects tab: this is the project open in Nota.</summary>
+    public bool IsOpen
+    {
+        get => _isOpen;
+        set
+        {
+            if (_isOpen == value) return;
+            _isOpen = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsOpen)));
+        }
+    }
+
+    private bool _located;
+    /// <summary>The row is the source file of the clip selected in the arrangement / Session
+    /// (spec 092, #581): the view marks it.</summary>
+    public bool Located
+    {
+        get => _located;
+        set
+        {
+            if (_located == value) return;
+            _located = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Located)));
+        }
+    }
+
+    public string Display => string.IsNullOrEmpty(Sub) ? Name : $"{Name}  ·  {Sub}";
+    public override string ToString() => Display;
+
+    /// <summary>Stable identity for favorites/tags — keyed by device kind, never the
+    /// volatile plugin catalog index. Empty for non-device rows (presets/samples/etc).</summary>
+    public string LibraryKey => Kind switch
+    {
+        BrowserItemKind.BuiltinInstrument => $"bi:{BuiltinKind}",
+        BrowserItemKind.BuiltinEffect => $"be:{BuiltinKind}",
+        BrowserItemKind.BuiltinMidiEffect => $"bm:{BuiltinKind}",
+        // Keyed on the format, not the (display-only) vendor, so favorites and tags
+        // saved before the vendor moved into Sub still resolve.
+        BrowserItemKind.PluginInstrument or BrowserItemKind.PluginEffect => $"pl:{Name}|{Format}",
+        _ => "",
+    };
+}
+
+public sealed partial class BrowserViewModel : ObservableObject
+{
+    // A safety cap on the Files scan, not a browsing limit: installed sample packs alone run to
+    // tens of thousands of files (the tree builds in ~150 ms for 45k).
+    private const int MaxSamples = 100_000;
+    private static readonly string[] SampleExts = { ".wav", ".flac", ".mp3" };
+
+    private readonly IPluginCatalog _catalog;
+    private readonly IPresetLibrary _presets;
+    private readonly IMosaicPacks? _mosaic;
+    private readonly IFactoryPresets _factory;
+    private readonly IDrumKits? _kits;
+    private readonly ISettingsService? _settings;
+    private readonly IBrowserLibrary? _library;
+    private readonly ISampleIndex? _index;
+
+    // Files tab: every audio leaf (for live tag updates), the sample filter, and "similar
+    // sounds" mode — a flat list of the closest samples to an anchor, in place of the tree.
+    private readonly List<BrowserItem> _sampleLeaves = new();
+    private SampleFilter _sampleFilter = SampleFilter.Empty;
+    private BrowserItem? _similarAnchor;
+    private List<BrowserItem> _similarRows = new();
+
+    // Full trees (top-level devices/plugins with factory-preset children); the public
+    // Instruments/Effects collections are the flattened, filtered *visible* projection.
+    private readonly List<BrowserItem> _instrTree = new();
+    private readonly List<BrowserItem> _fxTree = new();
+    private readonly List<BrowserItem> _midiTree = new();
+    private readonly List<BrowserItem> _sampleTree = new();   // Files tab: folder hierarchy roots
+    private readonly List<BrowserItem> _presetTree = new();   // Presets tab: category → device → preset
+    private readonly HashSet<string> _expandedTreeKeys = new(StringComparer.OrdinalIgnoreCase); // folder expansion (Files+Presets), survives rescans
+    private readonly string[] _treeQuery = { "", "", "", "", "" };   // per tree tab: 0 Instr, 1 FX, 2 MIDI, 3 Files, 4 Presets
+
+    private BrowserFilter _filterMode = BrowserFilter.None;
+    private string _filterTagId = "";
+    private bool _groupBySource = true;
+    private bool _favoritesFirst = true;
+
+    /// <summary>Split the device tabs into BUILT-IN / PLUG-INS sections with counts.</summary>
+    public bool GroupBySource
+    {
+        get => _groupBySource;
+        set { if (_groupBySource == value) return; _groupBySource = value; RebuildDeviceTabs(); }
+    }
+
+    /// <summary>Float favorited devices to the top of their section.</summary>
+    public bool FavoritesFirst
+    {
+        get => _favoritesFirst;
+        set { if (_favoritesFirst == value) return; _favoritesFirst = value; RebuildDeviceTabs(); }
+    }
+
+    // The category chip picked on each device tab (0 Instruments, 1 Audio effects, 2 MIDI
+    // effects), "" for none. Held while the app runs; a restart starts unfiltered.
+    private readonly string[] _categoryFilter = { "", "", "" };
+
+    /// <summary>The category a device tab is narrowed to, or "" for the whole list.</summary>
+    public string CategoryFilter(int tab) => tab is >= 0 and < 3 ? _categoryFilter[tab] : "";
+
+    /// <summary>Narrows a device tab to one category ("" clears it) and refreshes it.</summary>
+    public void SetCategoryFilter(int tab, string category)
+    {
+        if (tab is < 0 or >= 3 || _categoryFilter[tab] == (category ?? "")) return;
+        _categoryFilter[tab] = category ?? "";
+        RebuildVisible(tab);
+    }
+
+    /// <summary>A device tab's category chips, in order: the fixed categories, then Other
+    /// when a device on the tab lands there (an unrecognised plug-in).</summary>
+    public IReadOnlyList<string> CategoriesOn(int tab)
+    {
+        var list = DeviceCategories.Order(TypeOf(tab)).ToList();
+        var tree = tab == 2 ? _midiTree : tab == 1 ? _fxTree : _instrTree;
+        if (tree.Any(n => ShelfOf(tab, n) == DeviceCategories.Other)) list.Add(DeviceCategories.Other);
+        return list;
+    }
+
+    private string ShelfOf(int tab, BrowserItem node)
+        => DeviceCategories.Position(TypeOf(tab), node.DeviceCategory) == int.MaxValue ? DeviceCategories.Other : node.DeviceCategory;
+
+    private bool PassesCategoryFilter(int tab, BrowserItem node)
+        => _categoryFilter[tab].Length == 0 || ShelfOf(tab, node) == _categoryFilter[tab];
+
+    private static BuiltinDeviceType TypeOf(int tab)
+        => tab == 2 ? BuiltinDeviceType.MidiEffect : tab == 1 ? BuiltinDeviceType.AudioEffect : BuiltinDeviceType.Instrument;
+
+    private void RebuildDeviceTabs() { RebuildVisible(0); RebuildVisible(1); RebuildVisible(2); }
+
+    public ObservableCollection<BrowserItem> Instruments { get; } = new();
+    public ObservableCollection<BrowserItem> Effects { get; } = new();
+    public ObservableCollection<BrowserItem> MidiEffects { get; } = new();
+    public BulkObservableCollection<BrowserItem> Samples { get; } = new();
+    public ObservableCollection<BrowserItem> Projects { get; } = new();
+    public BulkObservableCollection<BrowserItem> Presets { get; } = new();
+
+    public BrowserViewModel(IPluginCatalog catalog, IPresetLibrary presets, IFactoryPresets factory,
+                            ISettingsService? settings = null, IBrowserLibrary? library = null,
+                            IDrumKits? kits = null, ISampleIndex? sampleIndex = null, IMosaicPacks? mosaic = null,
+                            Nota.Application.Browser.IProjectSummaries? projectSummaries = null)
+    {
+        _projectSummaries = projectSummaries;
+        _mosaic = mosaic;
+        _index = sampleIndex;
+        _catalog = catalog;
+        _presets = presets;
+        _factory = factory;
+        _kits = kits;
+        _settings = settings;
+        _library = library;
+        if (_library is not null) _library.Changed += OnLibraryChanged;
+        Rebuild();
+    }
+
+    // --- favorites / tags (library metadata) --------------------------------
+
+    /// <summary>All user tags (empty if no library service).</summary>
+    public IReadOnlyList<BrowserTag> Tags => _library?.Tags ?? Array.Empty<BrowserTag>();
+
+    public BrowserFilter FilterMode => _filterMode;
+    public string FilterTagId => _filterTagId;
+
+    /// <summary>Raised after favorites/tags change so the view can rebuild its filter chips.</summary>
+    public event Action? LibraryChanged;
+
+    public bool IsFavorite(BrowserItem it) => _library?.IsFavorite(it.LibraryKey) ?? false;
+    public bool IsTagAssigned(BrowserItem it, string tagId) => _library?.TagIdsFor(it.LibraryKey).Contains(tagId) ?? false;
+
+    /// <summary>Resolved tags assigned to a device row (in library order), for row markers.</summary>
+    public IReadOnlyList<BrowserTag> TagsFor(BrowserItem it)
+    {
+        if (_library is null) return Array.Empty<BrowserTag>();
+        var ids = _library.TagIdsFor(it.LibraryKey);
+        return ids.Count == 0 ? Array.Empty<BrowserTag>() : _library.Tags.Where(t => ids.Contains(t.Id)).ToList();
+    }
+
+    public void ToggleFavorite(BrowserItem it) { if (it.LibraryKey.Length > 0) _library?.SetFavorite(it.LibraryKey, !IsFavorite(it)); }
+    public void AssignTag(BrowserItem it, string tagId, bool on) { if (it.LibraryKey.Length > 0) _library?.AssignTag(it.LibraryKey, tagId, on); }
+    public BrowserTag? CreateTag(string title, string color) => _library?.CreateTag(title, color);
+    public void UpdateTag(string id, string title, string color) => _library?.UpdateTag(id, title, color);
+    public void DeleteTag(string id) => _library?.DeleteTag(id);
+
+    /// <summary>Sets the active header filter for the device tabs and refreshes them.</summary>
+    public void SetLibraryFilter(BrowserFilter mode, string tagId = "")
+    {
+        _filterMode = mode;
+        _filterTagId = tagId ?? "";
+        RebuildDeviceTabs();
+    }
+
+    // Any favorite/tag mutation → refresh device rows (markers + active filter). If the
+    // filtered-on tag was deleted, drop back to the unfiltered view.
+    private void OnLibraryChanged()
+    {
+        if (_filterMode == BrowserFilter.Tag && !Tags.Any(t => t.Id == _filterTagId))
+        { _filterMode = BrowserFilter.None; _filterTagId = ""; }
+        RebuildDeviceTabs();
+        LibraryChanged?.Invoke();
+    }
+
+    private bool PassesLibraryFilter(BrowserItem node) => _filterMode switch
+    {
+        BrowserFilter.Favorites => _library?.IsFavorite(node.LibraryKey) ?? false,
+        BrowserFilter.Tag => _library?.TagIdsFor(node.LibraryKey).Contains(_filterTagId) ?? false,
+        _ => true,
+    };
+
+    /// <summary>Rescan plugins out-of-process, then rebuild the lists.</summary>
+    public int Scan(string workerPath)
+    {
+        int n = _catalog.Scan(workerPath);
+        Rebuild();
+        return n;
+    }
+
+    public void Rebuild()
+    {
+        _instrTree.Clear();
+        _fxTree.Clear();
+        _midiTree.Clear();
+        
+        // The built-in devices come from one registry (BuiltinDeviceCatalog) — the command
+        // palette reads the same list, with each device's semantic descriptor.
+        var builtins = BuiltinDeviceCatalog.All.Select(d => new BrowserItem
+        {
+            Name = d.Name,
+            Kind = d.Type switch
+            {
+                BuiltinDeviceType.Instrument => BrowserItemKind.BuiltinInstrument,
+                BuiltinDeviceType.AudioEffect => BrowserItemKind.BuiltinEffect,
+                _ => BrowserItemKind.BuiltinMidiEffect,
+            },
+            BuiltinKind = d.Kind,
+            Sub = d.Sub,
+            DeviceCategory = DeviceCategories.For(d),
+        }).OrderBy(x => x.Name).ToList();
+        _instrTree.AddRange(builtins.Where(b => b.Kind == BrowserItemKind.BuiltinInstrument));
+        _fxTree.AddRange(builtins.Where(b => b.Kind == BrowserItemKind.BuiltinEffect));
+        _midiTree.AddRange(builtins.Where(b => b.Kind == BrowserItemKind.BuiltinMidiEffect));
+
+        // Attach factory presets under their parent built-in device: unfiled ones (Init) loose
+        // at the top, the rest in a folder per category, folders in catalog order.
+        var folders = new Dictionary<(BrowserItem, string), BrowserItem>();
+        foreach (var fp in _factory.All())
+        {
+            var tree = fp.IsMidiEffect ? _midiTree : fp.IsInstrument ? _instrTree : _fxTree;
+            var parentKind = fp.IsMidiEffect ? BrowserItemKind.BuiltinMidiEffect
+                : fp.IsInstrument ? BrowserItemKind.BuiltinInstrument : BrowserItemKind.BuiltinEffect;
+            var parent = tree.Find(d => d.BuiltinKind == fp.BuiltinKind && d.Kind == parentKind);
+            if (parent is null) continue;
+            bool filed = fp.Category.Length > 0;
+            var preset = new BrowserItem
+            {
+                Name = fp.DisplayName,
+                Kind = BrowserItemKind.Preset,
+                Sub = filed ? fp.Category : "preset",
+                Path = "factory:" + fp.Id,
+                Depth = filed ? 2 : 1,
+            };
+            if (!filed) { parent.Children.Insert(parent.Children.Count(c => !c.HasChildren), preset); continue; }
+            if (!folders.TryGetValue((parent, fp.Category), out var folder))
+            {
+                folder = new BrowserItem
+                {
+                    Name = fp.Category,
+                    Kind = BrowserItemKind.Folder,
+                    Path = $"category:{parent.LibraryKey}/{fp.Category}",
+                    Depth = 1,
+                };
+                folders[(parent, fp.Category)] = folder;
+                parent.Children.Add(folder);
+            }
+            folder.Children.Add(preset);
+        }
+        // Factory drum kits hang under the Drum Rack and Nota Rhythm alongside their presets —
+        // a kit is what a "preset" means for those two, and both share the one set of kits.
+        if (_kits is not null)
+            foreach (var (kind, prefix, rhythm) in new[] { (4, "kit:", false), (12, "rhythmkit:", true) })
+            {
+                var dev = _instrTree.Find(d => d.Kind == BrowserItemKind.BuiltinInstrument && d.BuiltinKind == kind);
+                if (dev is null) continue;
+                foreach (var kit in _kits.All())
+                    dev.Children.Add(new BrowserItem
+                    {
+                        Name = kit.Name,
+                        Kind = BrowserItemKind.Preset,
+                        Sub = "kit",
+                        Tip = rhythm ? Loc.F("browser.pads_8_on_the_voices", kit.Blurb, kit.PadCount) : Loc.F("browser.pads", kit.Blurb, kit.PadCount),
+                        Path = prefix + kit.Id,
+                        Depth = 1,
+                    });
+            }
+
+        // Nota Mosaic's pack presets (installed sample packs, "Create multisample"): Packs → a pack.
+        if (_mosaic is not null && _instrTree.Find(d => d.Kind == BrowserItemKind.BuiltinInstrument && d.BuiltinKind == MosaicModel.Kind) is { } mosaicDev)
+        {
+            var list = _mosaic.Presets();
+            if (list.Count > 0)
+            {
+                var packs = new BrowserItem { Name = Loc.T("browser.packs"), Kind = BrowserItemKind.Folder, Path = $"category:{mosaicDev.LibraryKey}/Packs", Depth = 1 };
+                foreach (var g in list.GroupBy(p => p.Folder))
+                {
+                    var folder = new BrowserItem { Name = g.Key, Kind = BrowserItemKind.Folder, Path = $"category:{mosaicDev.LibraryKey}/Packs/{g.Key}", Depth = 2 };
+                    foreach (var p in g)
+                        folder.Children.Add(new BrowserItem { Name = p.Name, Kind = BrowserItemKind.Preset, Sub = p.Source == "sfz" ? "sfz" : "multi", Path = p.Path, Depth = 3 });
+                    packs.Children.Add(folder);
+                }
+                mosaicDev.Children.Add(packs);
+            }
+        }
+
+        // Preset groups start collapsed; the user expands a device to reveal its folders.
+        foreach (var tree in new[] { _instrTree, _fxTree, _midiTree })
+            foreach (var d in tree)
+            {
+                d.IsExpanded = false;
+                foreach (var c in d.Children) { c.IsExpanded = false; foreach (var cc in c.Children) cc.IsExpanded = false; }
+            }
+
+        int count = _catalog.Count;
+        for (int i = 0; i < count; i++)
+        {
+            var desc = _catalog.Description(i) ?? "";
+            // "Name | Format | inst|fx | Manufacturer"
+            var parts = desc.Split('|');
+            string name = parts.Length > 0 ? parts[0].Trim() : desc;
+            string fmt = parts.Length > 1 ? parts[1].Trim() : "";
+            string vendor = parts.Length > 3 ? parts[3].Trim() : "";
+            if (vendor == "?") vendor = "";
+            string category = parts.Length > 4 ? parts[4].Trim() : "";   // VST3 sub-categories / AU type
+            bool isInstrument = desc.Contains("| inst |");
+            var item = new BrowserItem
+            {
+                Name = name,
+                // The row's right-edge tag. Format first: the same plug-in is often installed
+                // in two formats, and those rows are otherwise identical. The vendor follows,
+                // and is what gets trimmed when the panel is narrow.
+                Sub = fmt.Length > 0 && vendor.Length > 0 ? $"{fmt} · {vendor}"
+                    : vendor.Length > 0 ? vendor : fmt,
+                Format = fmt,
+                Vendor = vendor,
+                Category = category,
+                DeviceCategory = DeviceCategories.ForPlugin(isInstrument, category),
+                Kind = isInstrument ? BrowserItemKind.PluginInstrument : BrowserItemKind.PluginEffect,
+                CatalogIndex = i,
+            };
+            (isInstrument ? _instrTree : _fxTree).Add(item);
+        }
+
+        // A rescan can take away the picked category's last device (an uninstalled plug-in
+        // under Other): drop a pick whose chip is gone, or the tab stays empty with nothing to clear it.
+        for (int t = 0; t < _categoryFilter.Length; t++)
+            if (_categoryFilter[t].Length > 0 && !CategoriesOn(t).Contains(_categoryFilter[t])) _categoryFilter[t] = "";
+
+        RebuildDeviceTabs();
+        RebuildSamples();
+        RebuildProjects();
+        RebuildPresets();
+        DevicesRebuilt?.Invoke();
+    }
+
+    // --- the command palette's view of the library -------------------------------------
+
+    /// <summary>Instruments / audio effects / MIDI effects: built-in devices (with their factory
+    /// presets and kits as children, in category folders) and scanned plug-ins.</summary>
+    public IReadOnlyList<BrowserItem> InstrumentTree => _instrTree;
+    public IReadOnlyList<BrowserItem> EffectTree => _fxTree;
+    public IReadOnlyList<BrowserItem> MidiTree => _midiTree;
+    /// <summary>The user's saved presets: category folder → device folder → preset.</summary>
+    public IReadOnlyList<BrowserItem> UserPresetTree => _presetTree;
+
+    /// <summary>After <see cref="Rebuild"/> (plug-in rescan, folder change) — the palette re-indexes devices.</summary>
+    public event Action? DevicesRebuilt;
+    /// <summary>After the user presets were re-listed (saved / deleted / folder change).</summary>
+    public event Action? PresetsRebuilt;
+
+    /// <summary>The titles of the user's tags on a device row.</summary>
+    public IReadOnlyList<string> TagTitlesFor(BrowserItem it) => TagsFor(it).Select(t => t.Title).ToList();
+
+    /// <summary>Expand/collapse a tree node (device or Files folder), then refresh its
+    /// tab's visible list.</summary>
+    public void ToggleExpand(BrowserItem item)
+    {
+        if (!item.HasChildren) return;
+        item.IsExpanded = !item.IsExpanded;
+        int deviceTab = DeviceTabOf(item);
+        if (deviceTab >= 0) { RebuildVisible(deviceTab); return; }
+        if (item.Kind == BrowserItemKind.Folder)
+        {
+            // Remember folder expansion across full rescans (settings change / refresh). Folders
+            // live in either the Files or Presets tree; refresh both (only the active tab shows).
+            if (item.IsExpanded) _expandedTreeKeys.Add(item.Path);
+            else _expandedTreeKeys.Remove(item.Path);
+            RebuildSampleVisible();
+            RebuildPresetVisible();
+            return;
+        }
+        RebuildVisible(item.Kind switch
+        {
+            BrowserItemKind.BuiltinEffect or BrowserItemKind.PluginEffect => 1,
+            BrowserItemKind.BuiltinMidiEffect => 2,
+            _ => 0,
+        });
+    }
+
+    // The device tab (0 Instr / 1 FX / 2 MIDI) a preset category folder belongs to, or -1.
+    // Folders nest (Nota Mosaic → Packs → a pack), so the whole subtree is searched.
+    private int DeviceTabOf(BrowserItem item)
+    {
+        if (item.Kind != BrowserItemKind.Folder) return -1;
+        if (_instrTree.Any(d => Holds(d, item))) return 0;
+        if (_fxTree.Any(d => Holds(d, item))) return 1;
+        if (_midiTree.Any(d => Holds(d, item))) return 2;
+        return -1;
+    }
+
+    private static bool Holds(BrowserItem node, BrowserItem item)
+        => node.Children.Any(c => c == item || Holds(c, item));
+
+    // BUILT-IN / PLUG-INS sections the user collapsed, keyed "tab:SECTION" (#230). Session-only.
+    private readonly HashSet<string> _collapsedSections = new();
+
+    /// <summary>Collapses or expands a BUILT-IN / PLUG-INS section header of a device tab.</summary>
+    public void ToggleSection(BrowserItem header)
+    {
+        if (!header.IsGroup || header.Path.Length == 0) return;
+        if (!_collapsedSections.Remove(header.Path)) _collapsedSections.Add(header.Path);
+        if (int.TryParse(header.Path.AsSpan(0, header.Path.IndexOf(':')), out int tab)) RebuildVisible(tab);
+    }
+
+    /// <summary>Sets the live search query for a tree tab (0 = Instruments, 1 = FX,
+    /// 2 = MIDI, 3 = Files, 4 = Presets) and refreshes its visible list.</summary>
+    public void FilterTree(int tab, string query)
+    {
+        if (tab >= 0 && tab < _treeQuery.Length) _treeQuery[tab] = query ?? "";
+        if (tab == 3) { RebuildSampleVisible(); RebuildBrowseVisible(); }
+        else if (tab == 4) RebuildPresetVisible();
+        else RebuildVisible(tab);
+    }
+
+    /// <summary>A tree tab comes into view: the search box is shared by every tab, but only the
+    /// tab on screen follows it as you type, so a tab shown again takes the box's query if it
+    /// changed meanwhile. Otherwise a search cleared on another tab kept this one filtered —
+    /// empty, under an empty box (#342).</summary>
+    public void ShowTab(int tab, string query)
+    {
+        if (tab < 0 || tab >= _treeQuery.Length) return;
+        if (_treeQuery[tab].Trim() != (query ?? "").Trim()) FilterTree(tab, query ?? "");
+    }
+
+    // Flatten a tree into its visible ObservableCollection, honouring expand state and
+    // the current query. With a query, matching is name/sub substring; a matching device
+    // shows its category folders, and a device with matching presets shows just those
+    // (inside their folders, which a query opens). With
+    // GroupBySource on, a BUILT-IN / PLUG-INS header carrying the section's device count
+    // is emitted ahead of each run — so it is clear where Nota's own devices end.
+    private void RebuildVisible(int tab)
+    {
+        var tree = tab == 2 ? _midiTree : tab == 1 ? _fxTree : _instrTree;
+        var dst = tab == 2 ? MidiEffects : tab == 1 ? Effects : Instruments;
+        string q = _treeQuery[tab].Trim();
+        dst.Clear();
+
+        // Favorited devices float to the top (stable sorts: alphabetical order survives
+        // inside each run, and the source sort keeps the favorites-first order within a section).
+        IEnumerable<BrowserItem> ordered = tree;
+        if (_favoritesFirst && _library is not null)
+            ordered = ordered.OrderByDescending(n => _library.IsFavorite(n.LibraryKey));
+        if (_groupBySource) ordered = ordered.OrderBy(n => n.IsPlugin ? 1 : 0);
+
+        // Visible devices first, so a section header can carry its real count.
+        var devices = new List<BrowserItem>();
+        foreach (var node in ordered)
+        {
+            if (!PassesLibraryFilter(node)) continue;   // header favorite/tag chip
+            if (!PassesCategoryFilter(tab, node)) continue;   // category chip
+            if (q.Length == 0 || Matches(node, q) || AnyMatch(node.Children, q))
+                devices.Add(node);
+        }
+
+        string section = "";
+        bool collapsed = false;
+        foreach (var node in devices)
+        {
+            if (_groupBySource)
+            {
+                string s = node.IsPlugin ? "PLUG-INS" : "BUILT-IN";
+                if (s != section)
+                {
+                    section = s;
+                    string key = $"{tab}:{s}";
+                    collapsed = _collapsedSections.Contains(key);
+                    dst.Add(new BrowserItem
+                    {
+                        Name = node.IsPlugin ? Loc.T("browser.plug_ins_caps") : Loc.T("browser.built_in_caps"),
+                        Kind = BrowserItemKind.Group,
+                        Path = key,
+                        IsExpanded = !collapsed,
+                        GroupCount = devices.Count(d => (d.IsPlugin ? "PLUG-INS" : "BUILT-IN") == s),
+                    });
+                }
+                if (collapsed) continue;   // a collapsed section keeps only its header
+            }
+            dst.Add(node);
+            // No query: presets follow only while the device is expanded. With a query, a
+            // device that matched shows its folders as if expanded; one that didn't shows the hits.
+            if (q.Length == 0) { if (node.IsExpanded) AddPresetRows(node.Children, "", dst); }
+            else AddPresetRows(node.Children, Matches(node, q) ? "" : q, dst);
+        }
+    }
+
+    // A device's preset rows: loose presets, then category folders with their presets. With
+    // no query, a folder shows its presets only while expanded; with one, a folder shows up
+    // open when its name or any of its presets match (a name hit reveals all of them).
+    private static void AddPresetRows(List<BrowserItem> children, string q, ObservableCollection<BrowserItem> dst)
+    {
+        foreach (var c in children)
+        {
+            if (!c.HasChildren)
+            {
+                if (q.Length == 0 || Matches(c, q)) dst.Add(c);
+                continue;
+            }
+            // Folders nest (Nota Mosaic → Packs → a pack): the same rule one level down.
+            if (q.Length == 0)
+            {
+                dst.Add(c);
+                if (c.IsExpanded) AddPresetRows(c.Children, "", dst);
+            }
+            else if (Matches(c, q))
+            {
+                dst.Add(c);
+                AddPresetRows(c.Children, "", dst);
+            }
+            else if (AnyMatch(c.Children, q))
+            {
+                dst.Add(c);
+                AddPresetRows(c.Children, q, dst);
+            }
+        }
+    }
+
+    private static bool AnyMatch(List<BrowserItem> nodes, string q)
+        => nodes.Any(n => Matches(n, q) || AnyMatch(n.Children, q));
+
+    /// <summary>Device rows on a tab, split by source — for the browser's status line.
+    /// Counts what is actually visible (search + favorite/tag filter applied).</summary>
+    public (int builtin, int plugins) VisibleDeviceCounts(int tab)
+    {
+        var src = tab == 2 ? MidiEffects : tab == 1 ? Effects : Instruments;
+        int bi = 0, pl = 0;
+        foreach (var it in src)
+        {
+            if (it.IsGroup || it.Depth > 0) continue;
+            if (it.IsPlugin) pl++; else bi++;
+        }
+        return (bi, pl);
+    }
+
+    private static bool Matches(BrowserItem it, string q)
+        => it.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+           || it.Sub.Contains(q, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Scans the configured samples folder into a navigable folder tree (M7-4a).
+    /// Folders become expandable parent nodes; audio and MIDI files are leaves. Only folders
+    /// on a path to such a file appear.</summary>
+    // A newer rebuild cancels the one still walking the disk.
+    private CancellationTokenSource? _samplesCts;
+
+    /// <summary>Rebuilds the Files tree from every sample folder (spec 092). On the UI thread
+    /// the folders are walked in the background and the tree swapped in when done; without a
+    /// synchronisation context (tests) it runs inline.</summary>
+    public void RebuildSamples()
+    {
+        if (SynchronizationContext.Current is null) { RebuildSamplesAsync().GetAwaiter().GetResult(); return; }
+        _ = RebuildSamplesAsync();
+    }
+
+    /// <summary>The background form of <see cref="RebuildSamples"/>; completes once the new tree is shown.</summary>
+    public async Task RebuildSamplesAsync()
+    {
+        _samplesCts?.Cancel();
+        if (_settings is null)
+        {
+            ApplySampleTree(new List<BrowserItem>(), new List<BrowserItem>());
+            return;
+        }
+        var cts = _samplesCts = new CancellationTokenSource();
+        SamplesBuilding = true;
+        var all = _settings.ResolvedSampleFolders();
+        // Every root, unplugged ones too: the index keeps an offline folder's analyses for
+        // when its drive comes back, and only knows it's offline if it's in the list.
+        _index?.Watch(all.Select(f => f.Path).ToList());   // analyses whatever it doesn't know yet, in the background
+        _sampleAvailability = Availability(all);
+        // The default folder leads the Files tab (FR-004); each keeps its own PlaceIndex.
+        var folders = all.OrderByDescending(f => f.IsDefault).ToList();
+        var expanded = new HashSet<string>(_expandedTreeKeys, StringComparer.OrdinalIgnoreCase);
+        var ctx = SynchronizationContext.Current;
+
+        (List<BrowserItem> Tree, List<BrowserItem> Leaves) built;
+        if (ctx is null) built = BuildSampleTree(folders, expanded, cts.Token);
+        else
+        {
+            // A first build over a big library: show the folders' first level at once, the
+            // files follow when the walk ends (SC-005).
+            if (_sampleTree.Count == 0)
+            {
+                try
+                {
+                    var skeleton = await Task.Run(() => BuildSampleSkeleton(folders, expanded), cts.Token);
+                    if (cts.IsCancellationRequested) return;
+                    if (_sampleTree.Count == 0) ApplySampleTree(skeleton, new List<BrowserItem>());
+                }
+                catch (OperationCanceledException) { return; }
+            }
+            try { built = await Task.Run(() => BuildSampleTree(folders, expanded, cts.Token), cts.Token); }
+            catch (OperationCanceledException) { return; }
+        }
+        if (cts.IsCancellationRequested) return;
+        SamplesBuilding = false;   // before the swap: SamplesRebuilt handlers see a whole tree
+        ApplySampleTree(built.Tree, built.Leaves);
+    }
+
+    private void ApplySampleTree(List<BrowserItem> tree, List<BrowserItem> leaves)
+    {
+        // The walk used the folders open when it began; keep what was opened or closed since.
+        void Reopen(List<BrowserItem> nodes)
+        {
+            foreach (var n in nodes)
+                if (n.Kind == BrowserItemKind.Folder)
+                {
+                    n.IsExpanded = _expandedTreeKeys.Contains(n.Path);
+                    Reopen(n.Children);
+                }
+        }
+        Reopen(tree);
+        _sampleTree.Clear();
+        _sampleTree.AddRange(tree);
+        _sampleLeaves.Clear();
+        _sampleLeaves.AddRange(leaves);
+        foreach (var leaf in _sampleLeaves) leaf.Sample = _index?.Get(leaf.Path);
+        AppendKitFolders();
+        _similarAnchor = null;   // the anchor row is gone; its list would point at stale rows
+        _similarRows.Clear();
+        ApplyLocated();
+        RebuildSampleVisible();
+        SamplesRebuilt?.Invoke();
+    }
+
+    /// <summary>Raised after the Files tree was rebuilt (folders changed, rescan).</summary>
+    public event Action? SamplesRebuilt;
+
+    /// <summary>True while a Files tree rebuild is walking the disk; the tree on show may not
+    /// hold every file yet.</summary>
+    public bool SamplesBuilding { get; private set; }
+
+    // Which folders were reachable at the last rebuild ("1" / "0" per folder, in list order).
+    private string _sampleAvailability = "";
+
+    private static string Availability(IReadOnlyList<ResolvedSampleFolder> folders)
+        => string.Concat(folders.Select(f => f.Available ? '1' : '0'));
+
+    /// <summary>The Files tab came into view: rebuilds the tree when a folder's drive was
+    /// plugged in or pulled out since the last rebuild.</summary>
+    public void RefreshSampleAvailability()
+    {
+        if (_settings is null || SamplesBuilding) return;
+        if (Availability(_settings.ResolvedSampleFolders()) != _sampleAvailability) RebuildSamples();
+    }
+
+    // Walks every folder (worker thread; touches no shared state). One folder keeps today's
+    // flat tree; with several, each becomes a top-level node holding its files.
+    private static (List<BrowserItem> Tree, List<BrowserItem> Leaves) BuildSampleTree(
+        IReadOnlyList<ResolvedSampleFolder> folders, HashSet<string> expanded, CancellationToken ct)
+    {
+        var tree = new List<BrowserItem>();
+        var leaves = new List<BrowserItem>();
+        bool places = folders.Count > 1;
+        foreach (var f in folders)
+        {
+            ct.ThrowIfCancellationRequested();
+            List<BrowserItem> top = tree;
+            int baseDepth = 0;
+            if (places)
+            {
+                var place = new BrowserItem
+                {
+                    Name = f.Label,
+                    Kind = BrowserItemKind.Folder,
+                    Sub = "",
+                    Tip = f.Available ? f.Path : Loc.F("browser.unavailable_tip", f.Path),
+                    Path = f.Path,
+                    Depth = 0,
+                    PlaceIndex = f.Index,
+                    Unavailable = !f.Available,
+                    IsExpanded = expanded.Contains(f.Path),
+                };
+                tree.Add(place);
+                top = place.Children;
+                baseDepth = 1;
+            }
+            if (!f.Available) continue;
+
+            // Folder nodes keyed by absolute directory path (reused while placing files).
+            var nodes = new Dictionary<string, BrowserItem>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in EnumerateFilesSafe(f.Path)
+                         .Where(IsSampleOrMidi)
+                         .Take(MaxSamples)
+                         .OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                ct.ThrowIfCancellationRequested();
+                var dir = Path.GetDirectoryName(path) ?? f.Path;
+                var parentChildren = GetOrCreateFolder(f.Path, dir, nodes, top, baseDepth, expanded, out int depth);
+                var leaf = new BrowserItem
+                {
+                    Name = Path.GetFileName(path),
+                    Kind = Nota.Application.Midi.MidiFileReader.IsMidiFile(path) ? BrowserItemKind.MidiFile : BrowserItemKind.Sample,
+                    Sub = "",
+                    Path = path,
+                    Depth = depth,
+                };
+                if (leaf.Kind == BrowserItemKind.Sample) leaves.Add(leaf);
+                parentChildren.Add(leaf);
+            }
+        }
+        foreach (var n in tree)
+            if (places) SortSampleTree(n.Children);
+        if (!places) SortSampleTree(tree);
+        return (tree, leaves);
+    }
+
+    // The first level only: each folder's subfolders (and, with several folders, the folder
+    // nodes themselves) — what a big library shows while its files are still being found.
+    private static List<BrowserItem> BuildSampleSkeleton(IReadOnlyList<ResolvedSampleFolder> folders, HashSet<string> expanded)
+    {
+        var tree = new List<BrowserItem>();
+        bool places = folders.Count > 1;
+        var opts = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.Hidden | FileAttributes.System };
+        foreach (var f in folders)
+        {
+            List<BrowserItem> top = tree;
+            if (places)
+            {
+                var place = new BrowserItem
+                {
+                    Name = f.Label, Kind = BrowserItemKind.Folder, Sub = "", Path = f.Path, Depth = 0,
+                    Tip = f.Available ? f.Path : Loc.F("browser.unavailable_tip", f.Path),
+                    PlaceIndex = f.Index, Unavailable = !f.Available, IsExpanded = expanded.Contains(f.Path),
+                };
+                tree.Add(place);
+                top = place.Children;
+            }
+            if (!f.Available) continue;
+            try
+            {
+                foreach (var d in Directory.EnumerateDirectories(f.Path, "*", opts).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+                {
+                    var name = Path.GetFileName(d);
+                    top.Add(new BrowserItem
+                    {
+                        Name = name, Kind = BrowserItemKind.Folder, Sub = "", Path = d, Depth = places ? 1 : 0,
+                        IsDownloads = string.Equals(name, SamplePacks.FolderName, StringComparison.OrdinalIgnoreCase),
+                    });
+                }
+            }
+            catch { /* unreadable: the full walk says what it can */ }
+        }
+        foreach (var n in tree) if (places) SortSampleTree(n.Children);
+        if (!places) SortSampleTree(tree);
+        return tree;
+    }
+
+    private static bool IsSampleOrMidi(string p)
+        => SampleExts.Contains(Path.GetExtension(p).ToLowerInvariant()) || Nota.Application.Midi.MidiFileReader.IsMidiFile(p);
+
+    // --- smart samples: tags, filter, similar ------------------------------------------
+
+    /// <summary>The Files tab's sample filter ("loops · 120–128 · A minor").</summary>
+    public SampleFilter SampleFilter
+    {
+        get => _sampleFilter;
+        set { _sampleFilter = value ?? SampleFilter.Empty; RebuildSampleVisible(); }
+    }
+
+    /// <summary>The sample "similar sounds" is showing neighbours of, or null for the tree.</summary>
+    public BrowserItem? SimilarAnchor => _similarAnchor;
+
+    /// <summary>Files analysed / found by the running library scan; Total 0 when idle.</summary>
+    public (int Done, int Total) IndexProgress => _index?.Progress ?? (0, 0);
+
+    public bool HasSampleIndex => _index is not null;
+
+    /// <summary>Raised after <see cref="OnSampleIndexChanged"/> so the view can refresh its status line.</summary>
+    public event Action? SampleIndexChanged;
+
+    /// <summary>Call on the UI thread when the index reports progress: Files rows pick up their
+    /// tags in place (no list reset — the selection and scroll stay), and a filtered or
+    /// "similar" list is recomputed only if its rows actually changed.</summary>
+    public void OnSampleIndexChanged()
+    {
+        if (_index is null) return;
+        foreach (var leaf in _sampleLeaves) leaf.Sample = _index.Get(leaf.Path);
+        if (!_sampleFilter.IsEmpty) RebuildSampleVisible(onlyIfChanged: true);
+        SampleIndexChanged?.Invoke();
+    }
+
+    /// <summary>Replaces the Files tree with the samples that sound most like
+    /// <paramref name="item"/>, closest first. Analyses the anchor first if it must (off the
+    /// UI thread). Returns how many were found.</summary>
+    public async Task<int> ShowSimilarAsync(BrowserItem item, int count = 50)
+    {
+        if (_index is null || item.Kind != BrowserItemKind.Sample) return 0;
+        var index = _index;
+        string path = item.Path;
+        var hits = await Task.Run(() => index.Similar(path, count));
+        var roots = _settings?.ResolvedSampleFolders().Select(f => f.Path).ToList() ?? new List<string>();
+        _similarRows = hits.Select(h => new BrowserItem
+        {
+            Name = Path.GetFileName(h.Info.Path),
+            Kind = BrowserItemKind.Sample,
+            Sub = "",
+            Tip = FolderOf(h.Info.Path, roots.FirstOrDefault(r => Nota.Application.Browser.SampleFolderRules.IsSameOrInside(h.Info.Path, r))),
+            Path = h.Info.Path,
+            Depth = 0,
+        }).ToList();
+        foreach (var r in _similarRows) r.Sample = index.Get(r.Path);
+        _similarAnchor = item;
+        item.Sample ??= index.Get(path);
+        RebuildSampleVisible();
+        return _similarRows.Count;
+    }
+
+    /// <summary>Back from "similar sounds" to the folder tree.</summary>
+    public void ClearSimilar()
+    {
+        if (_similarAnchor is null) return;
+        _similarAnchor = null;
+        _similarRows.Clear();
+        RebuildSampleVisible();
+    }
+
+    private static string FolderOf(string path, string? root)
+    {
+        var dir = Path.GetDirectoryName(path) ?? "";
+        if (root is null) return dir;
+        var rel = Path.GetRelativePath(root, dir);
+        return rel == "." ? "" : rel.StartsWith("..", StringComparison.Ordinal) ? dir : rel;
+    }
+
+    // --- Files: browse mode (spec 092, #580) -------------------------------------------------
+
+    private List<BrowserItem> _browseAll = new();
+    private CancellationTokenSource? _browseCts;
+
+    /// <summary>The browse view's rows: the current folder's subfolders, then its audio and
+    /// MIDI files (or, at the Computer level, the drives), filtered by the Files search.</summary>
+    public BulkObservableCollection<BrowserItem> BrowseItems { get; } = new();
+
+    /// <summary>Where the browse view is; created on first use at the remembered folder.</summary>
+    public Nota.Application.Browser.FileBrowseState Browse
+        => _browse ??= CreateBrowseState();
+    private Nota.Application.Browser.FileBrowseState? _browse;
+
+    /// <summary>Why the browse list is empty: <see cref="BrowseListState.Ok"/>, an empty folder
+    /// or one Nota can't read.</summary>
+    public BrowseListState BrowseState { get; private set; }
+
+    /// <summary>The file a navigation asked to select (a pasted file path, Locate), or null.</summary>
+    public string? BrowseSelect { get; private set; }
+
+    /// <summary>Raised on the UI thread after <see cref="BrowseItems"/> was refilled.</summary>
+    public event Action? BrowseRefreshed;
+
+    /// <summary>The Files tab shows the browse view instead of the tree (remembered).</summary>
+    public bool BrowseMode
+    {
+        get => _settings?.Current.FilesBrowseMode ?? _browseModeNoSettings;
+        set
+        {
+            if (BrowseMode == value) return;
+            if (_settings is not null) { _settings.Current.FilesBrowseMode = value; _settings.Save(); }
+            else _browseModeNoSettings = value;
+            if (value) _ = RefreshBrowseAsync();
+        }
+    }
+    private bool _browseModeNoSettings;
+
+    private Nota.Application.Browser.FileBrowseState CreateBrowseState()
+    {
+        string start = _settings?.Current.FilesBrowseFolder ?? "";
+        try { if (start.Length == 0 || !Directory.Exists(start)) start = _settings?.ResolvedSamplesFolder() ?? Nota.Application.Browser.FileBrowseState.Computer; }
+        catch { start = Nota.Application.Browser.FileBrowseState.Computer; }
+        var b = new Nota.Application.Browser.FileBrowseState(start);
+        b.Changed += () =>
+        {
+            if (!b.IsComputer && _settings is not null && _settings.Current.FilesBrowseFolder != b.Location)
+            {
+                _settings.Current.FilesBrowseFolder = b.Location;
+                _settings.Save();
+            }
+            _ = RefreshBrowseAsync();
+        };
+        return b;
+    }
+
+    /// <summary>Home: back to the default sample folder, where browsing starts (one Back step returns).</summary>
+    public void BrowseHome()
+    {
+        if (_settings is null) return;
+        Browse.Go(_settings.ResolvedSamplesFolder());
+    }
+
+    /// <summary>The browse view already shows the default sample folder.</summary>
+    public bool BrowseAtHome => _settings is not null
+        && Nota.Application.Browser.SampleFolderRules.PathComparer.Equals(Browse.Location,
+            Nota.Application.Browser.SampleFolderRules.Normalize(_settings.ResolvedSamplesFolder()));
+
+    /// <summary>Opens <paramref name="folder"/> in the browse view, selecting
+    /// <paramref name="selectFile"/> once listed.</summary>
+    public void BrowseTo(string folder, string? selectFile = null)
+    {
+        BrowseSelect = selectFile;
+        if (Nota.Application.Browser.SampleFolderRules.PathComparer.Equals(
+                Nota.Application.Browser.SampleFolderRules.Normalize(folder), Browse.Location))
+            _ = RefreshBrowseAsync();
+        else Browse.Go(folder);
+    }
+
+    /// <summary>Re-lists the current browse location (worker thread when on the UI thread).</summary>
+    public async Task RefreshBrowseAsync()
+    {
+        _browseCts?.Cancel();
+        var cts = _browseCts = new CancellationTokenSource();
+        string loc = Browse.Location;
+        (List<BrowserItem> Rows, BrowseListState State) listed;
+        if (SynchronizationContext.Current is null) listed = ListBrowse(loc);
+        else
+        {
+            try { listed = await Task.Run(() => ListBrowse(loc), cts.Token); }
+            catch (OperationCanceledException) { return; }
+        }
+        if (cts.IsCancellationRequested) return;
+        _browseAll = listed.Rows;
+        foreach (var r in _browseAll) if (r.Kind == BrowserItemKind.Sample) r.Sample = _index?.Get(r.Path);
+        BrowseState = listed.State;
+        RebuildBrowseVisible();
+        ApplyLocated();
+        BrowseRefreshed?.Invoke();
+        BrowseSelect = null;
+    }
+
+    // One folder's usable entries (worker thread): subfolders, then audio + MIDI files,
+    // each by name; hidden entries skipped. The Computer level lists the volumes.
+    public static (List<BrowserItem> Rows, BrowseListState State) ListBrowse(string location)
+    {
+        var rows = new List<BrowserItem>();
+        if (location.Length == 0)
+        {
+            foreach (var (label, path) in Nota.Application.Browser.FileBrowseState.Volumes())
+                rows.Add(new BrowserItem { Name = label, Kind = BrowserItemKind.Folder, Sub = "", Tip = path, Path = path, Depth = 0, IsVolume = true });
+            return (rows, BrowseListState.Ok);
+        }
+        var opts = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.Hidden | FileAttributes.System };
+        try
+        {
+            if (!Directory.Exists(location)) return (rows, BrowseListState.Unreadable);
+            foreach (var d in Directory.EnumerateDirectories(location, "*", opts).OrderBy(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase))
+                rows.Add(new BrowserItem { Name = Path.GetFileName(d), Kind = BrowserItemKind.Folder, Sub = "", Path = d, Depth = 0 });
+            // Every file is listed; what Nota can't add is marked so the view fades it (spec 092).
+            foreach (var f in Directory.EnumerateFiles(location, "*", opts).OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase))
+            {
+                long size;
+                try { size = new FileInfo(f).Length; } catch { size = 0; }
+                rows.Add(new BrowserItem
+                {
+                    Name = Path.GetFileName(f),
+                    Kind = !IsSampleOrMidi(f) ? BrowserItemKind.OtherFile
+                         : Nota.Application.Midi.MidiFileReader.IsMidiFile(f) ? BrowserItemKind.MidiFile : BrowserItemKind.Sample,
+                    Sub = "",
+                    Path = f,
+                    Depth = 0,
+                    Size = size,
+                });
+            }
+        }
+        catch (UnauthorizedAccessException) { return (new List<BrowserItem>(), BrowseListState.Unreadable); }
+        catch (IOException) { return (new List<BrowserItem>(), BrowseListState.Unreadable); }
+        return (rows, rows.Count == 0 ? BrowseListState.Empty : BrowseListState.Ok);
+    }
+
+    // The Files search filters the current folder only (no recursive walk).
+    private void RebuildBrowseVisible()
+    {
+        string q = _treeQuery[3].Trim();
+        BrowseItems.ReplaceAll(q.Length == 0 ? _browseAll : _browseAll.Where(r => Matches(r, q)).ToList());
+    }
+
+    // --- Locate (spec 092, #581) -----------------------------------------------------------
+
+    private string? _locatedPath;
+
+    /// <summary>The source file of the clip selected in the arrangement / Session, or null.
+    /// Marks the matching Files row (tree or browse list) — never expands, scrolls or
+    /// switches tabs: a row the user can't see stays unmarked until they open its folder.</summary>
+    public void SetLocatedPath(string? path)
+    {
+        _locatedPath = string.IsNullOrEmpty(path) ? null : path;
+        ApplyLocated();
+    }
+
+    public string? LocatedPath => _locatedPath;
+
+    private void ApplyLocated()
+    {
+        var cmp = Nota.Application.Browser.SampleFolderRules.PathComparer;
+        foreach (var leaf in _sampleLeaves) leaf.Located = _locatedPath is not null && cmp.Equals(leaf.Path, _locatedPath);
+        foreach (var row in BrowseItems) row.Located = _locatedPath is not null && cmp.Equals(row.Path, _locatedPath);
+    }
+
+    // Files rows the sample filter lets through: audio the index has analysed and that
+    // matches; a MIDI file has no tempo or key, so any filter hides it.
+    private bool PassesSampleFilter(BrowserItem leaf)
+        => leaf.Kind == BrowserItemKind.Sample ? _sampleFilter.Matches(leaf.Sample) : _sampleFilter.IsEmpty;
+
+    // The rendered factory kits, as a browsable folder alongside the user's own samples.
+    // They live in Nota's data folder rather than the user's samples folder (they are
+    // regenerable, and they should not appear in a folder the user curates), so the tree
+    // gets them from the kit service instead of the folder scan above.
+    private void AppendKitFolders()
+    {
+        if (_kits is null) return;
+        var root = _kits.Root;
+        if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return;
+
+        var rootNode = new BrowserItem
+        {
+            Name = Loc.T("browser.nota_kits"),
+            Kind = BrowserItemKind.Folder,
+            Sub = "factory",
+            Path = root,
+            Depth = 0,
+            IsExpanded = _expandedTreeKeys.Contains(root),
+        };
+        foreach (var kit in _kits.All())
+        {
+            var dir = _kits.FolderOf(kit.Id);
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+            var kitNode = new BrowserItem
+            {
+                Name = kit.Name,
+                Kind = BrowserItemKind.Folder,
+                Sub = "",
+                Tip = kit.Blurb,
+                Path = dir,
+                Depth = 1,
+                IsExpanded = _expandedTreeKeys.Contains(dir),
+            };
+            foreach (var f in Directory.EnumerateFiles(dir, "*.wav").OrderBy(f => f, StringComparer.Ordinal))
+                kitNode.Children.Add(new BrowserItem
+                {
+                    Name = Path.GetFileName(f),
+                    Kind = BrowserItemKind.Sample,
+                    Sub = "",
+                    Path = f,
+                    Depth = 2,
+                });
+            if (kitNode.Children.Count > 0) rootNode.Children.Add(kitNode);
+        }
+        if (rootNode.Children.Count > 0) _sampleTree.Add(rootNode);
+    }
+
+    // Ensures the folder chain from root down to `dir` exists under `top` (the tree, or a
+    // sample folder's node), returning the child list the file should join and the file's
+    // tree depth. Files right in the root land directly in `top`.
+    private static List<BrowserItem> GetOrCreateFolder(string root, string dir, Dictionary<string, BrowserItem> folders,
+                                                       List<BrowserItem> top, int baseDepth, HashSet<string> expanded, out int fileDepth)
+    {
+        var rel = Path.GetRelativePath(root, dir);
+        if (rel == "." || rel.StartsWith("..", StringComparison.Ordinal)) { fileDepth = baseDepth; return top; }
+
+        var segments = rel.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        List<BrowserItem> children = top;
+        string abs = root;
+        for (int i = 0; i < segments.Length; i++)
+        {
+            abs = Path.Combine(abs, segments[i]);
+            if (!folders.TryGetValue(abs, out var node))
+            {
+                bool downloads = i == 0 && string.Equals(segments[0], SamplePacks.FolderName, StringComparison.OrdinalIgnoreCase);
+                node = new BrowserItem
+                {
+                    Name = segments[i],
+                    Kind = BrowserItemKind.Folder,
+                    Sub = "",
+                    Tip = downloads ? Loc.T("browser.sample_packs_installed_from_settings") : "",
+                    Path = abs,
+                    Depth = baseDepth + i,
+                    IsExpanded = expanded.Contains(abs),
+                    IsDownloads = downloads,
+                };
+                folders[abs] = node;
+                children.Add(node);
+            }
+            children = node.Children;
+        }
+        fileDepth = baseDepth + segments.Length;
+        return children;
+    }
+
+    // Downloaded first, then folders before files, each group alphabetical; recurses into subfolders.
+    private static void SortSampleTree(List<BrowserItem> nodes)
+    {
+        nodes.Sort((a, b) =>
+        {
+            if (a.IsDownloads != b.IsDownloads) return a.IsDownloads ? -1 : 1;
+            bool af = a.Kind == BrowserItemKind.Folder, bf = b.Kind == BrowserItemKind.Folder;
+            if (af != bf) return af ? -1 : 1;
+            return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        });
+        foreach (var n in nodes) if (n.Kind == BrowserItemKind.Folder) SortSampleTree(n.Children);
+    }
+
+    /// <summary>Flattens the sample folder tree into the visible <see cref="Samples"/>
+    /// collection, honouring expand state and the Files search query.</summary>
+    private void RebuildSampleVisible(bool onlyIfChanged = false)
+    {
+        string q = _treeQuery[3].Trim();
+        List<BrowserItem> rows;
+        if (_similarAnchor is not null)
+            rows = _similarRows.Where(r => (q.Length == 0 || Matches(r, q)) && PassesSampleFilter(r)).ToList();
+        else
+        {
+            rows = new List<BrowserItem>();
+            Func<BrowserItem, bool>? leafOk = _sampleFilter.IsEmpty ? null : PassesSampleFilter;
+            foreach (var node in _sampleTree) FlattenTree(node, q, ancestorMatched: false, rows, leafOk);
+        }
+        if (onlyIfChanged && rows.SequenceEqual(Samples)) return;
+        Samples.ReplaceAll(rows);
+    }
+
+    /// <summary>Flattens the preset tree (category → device → preset) into <see cref="Presets"/>.</summary>
+    private void RebuildPresetVisible() => RebuildTreeVisible(_presetTree, Presets, _treeQuery[4].Trim());
+
+    // Shared folder-tree flatten (Files + Presets): both are Folder parents with non-folder
+    // leaves, so the same expand/query logic applies.
+    private void RebuildTreeVisible(List<BrowserItem> roots, BulkObservableCollection<BrowserItem> dst, string q)
+    {
+        var rows = new List<BrowserItem>();
+        foreach (var node in roots) FlattenTree(node, q, ancestorMatched: false, rows, leafOk: null);
+        dst.ReplaceAll(rows);
+    }
+
+    // Adds `node` (and, for folders, its visible descendants) to `dst`. Returns whether the
+    // node ended up visible. With a query, folders auto-expand and survive only if the folder
+    // name or some descendant matches; a folder-name hit reveals its whole subtree. A leaf
+    // filter (the Files tab's sample filter) works like a query: folders open to show what
+    // passes and drop out when nothing under them does — a folder's name alone never does.
+    private bool FlattenTree(BrowserItem node, string q, bool ancestorMatched, List<BrowserItem> dst,
+                             Func<BrowserItem, bool>? leafOk)
+    {
+        if (node.Kind != BrowserItemKind.Folder)
+        {
+            bool show = (q.Length == 0 || ancestorMatched || Matches(node, q)) && (leafOk?.Invoke(node) ?? true);
+            if (show) dst.Add(node);
+            return show;
+        }
+        bool folderMatched = ancestorMatched || (q.Length > 0 && Matches(node, q));
+        if (q.Length == 0 && leafOk is null)
+        {
+            dst.Add(node);
+            if (node.IsExpanded)
+                foreach (var c in node.Children) FlattenTree(c, q, ancestorMatched: false, dst, leafOk);
+            return true;
+        }
+        int mark = dst.Count;
+        dst.Add(node);                  // tentative — removed below if nothing under it matches
+        bool any = folderMatched && leafOk is null;
+        foreach (var c in node.Children)
+            any |= FlattenTree(c, q, folderMatched, dst, leafOk);
+        if (!any) { while (dst.Count > mark) dst.RemoveAt(dst.Count - 1); return false; }
+        return true;
+    }
+
+    // --- Projects tab (M7-4b; spec 092, #582) --------------------------------------------------
+
+    private readonly Nota.Application.Browser.IProjectSummaries? _projectSummaries;
+    private CancellationTokenSource? _projectsCts;
+    private string? _openProjectPath;
+
+    /// <summary>The project open in Nota (its bundle path), marked in the Projects tab.</summary>
+    public string? OpenProjectPath
+    {
+        get => _openProjectPath;
+        set
+        {
+            _openProjectPath = value;
+            foreach (var p in Projects) p.IsOpen = IsOpenProject(p.Path);
+        }
+    }
+
+    private bool IsOpenProject(string path)
+        => _openProjectPath is { Length: > 0 } open
+           && Nota.Application.Browser.SampleFolderRules.PathComparer.Equals(
+               Nota.Application.Browser.SampleFolderRules.Normalize(open), Nota.Application.Browser.SampleFolderRules.Normalize(path));
+
+    /// <summary>The Projects tab's order (remembered in settings).</summary>
+    public ProjectsSortOrder ProjectsSort
+    {
+        get => _settings?.Current.ProjectsSort ?? _projectsSortNoSettings;
+        set
+        {
+            if (ProjectsSort == value) return;
+            if (_settings is not null) { _settings.Current.ProjectsSort = value; _settings.Save(); }
+            else _projectsSortNoSettings = value;
+            RebuildProjects();
+        }
+    }
+    private ProjectsSortOrder _projectsSortNoSettings;
+
+    /// <summary>Scans the configured projects folder for .nota bundles: newest first (or by
+    /// name), each with its save date; tempo, key, length and tracks follow from a background
+    /// read (cached), filling the rows in place.</summary>
+    public void RebuildProjects()
+    {
+        _projectsCts?.Cancel();
+        Projects.Clear();
+        if (_settings is null) return;
+        var root = _settings.ResolvedProjectsFolder();
+        var rows = new List<BrowserItem>();
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(root)
+                         .Where(d => d.EndsWith(".nota", StringComparison.OrdinalIgnoreCase)))
+            {
+                var modified = Nota.Application.Browser.ProjectDates.Modified(dir);
+                rows.Add(new BrowserItem
+                {
+                    Name = Path.GetFileNameWithoutExtension(dir),
+                    Kind = BrowserItemKind.Project,
+                    Sub = modified is { } m ? Nota.Application.Browser.ProjectDates.Format(m) : "",
+                    Path = dir,
+                    Modified = modified,
+                    IsOpen = IsOpenProject(dir),
+                });
+            }
+        }
+        catch { /* folder missing/unreadable — empty list */ }
+
+        IEnumerable<BrowserItem> ordered = ProjectsSort == ProjectsSortOrder.Name
+            ? rows.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            : rows.OrderByDescending(r => r.Modified.HasValue).ThenByDescending(r => r.Modified).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var r in ordered) Projects.Add(r);
+        FillProjectSummaries();
+    }
+
+    /// <summary>Completes once every visible project's details were read (tests).</summary>
+    public Task ProjectSummariesTask { get; private set; } = Task.CompletedTask;
+
+    private void FillProjectSummaries()
+    {
+        if (_projectSummaries is null || Projects.Count == 0) return;
+        var reader = _projectSummaries;
+        var rows = Projects.ToList();
+        var cts = _projectsCts = new CancellationTokenSource();
+        var ctx = SynchronizationContext.Current;
+        ProjectSummariesTask = Task.Run(() =>
+        {
+            foreach (var row in rows)
+            {
+                if (cts.IsCancellationRequested) return;
+                Nota.Application.Browser.ProjectSummary? sum;
+                try { sum = reader.Get(row.Path); } catch { sum = null; }
+                if (sum is null) continue;
+                if (ctx is null) row.Summary = sum;
+                else ctx.Post(_ => row.Summary = sum, null);
+            }
+        });
+    }
+
+    // --- Locate in the tree ------------------------------------------------------------------
+
+    /// <summary>Opens the Files tree down to <paramref name="path"/> (search, filters and
+    /// "similar" cleared) and returns its row in <see cref="Samples"/>, or null when the tree
+    /// doesn't hold it.</summary>
+    public BrowserItem? RevealSample(string path)
+    {
+        var cmp = Nota.Application.Browser.SampleFolderRules.PathComparer;
+        var chain = new List<BrowserItem>();
+        bool Find(List<BrowserItem> nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (n.Kind != BrowserItemKind.Folder)
+                {
+                    if (cmp.Equals(n.Path, path)) { chain.Add(n); return true; }
+                    continue;
+                }
+                chain.Add(n);
+                if (Find(n.Children)) return true;
+                chain.RemoveAt(chain.Count - 1);
+            }
+            return false;
+        }
+        if (!Find(_sampleTree)) return null;
+        foreach (var folder in chain.Take(chain.Count - 1))
+        {
+            folder.IsExpanded = true;
+            _expandedTreeKeys.Add(folder.Path);
+        }
+        _treeQuery[3] = "";
+        _sampleFilter = SampleFilter.Empty;
+        _similarAnchor = null;
+        _similarRows.Clear();
+        RebuildSampleVisible();
+        return chain[^1];
+    }
+
+
+    /// <summary>Lists saved presets from the app presets folder, grouped into a tree:
+    /// category (Instruments / Audio Effects / MIDI Effects) → device → preset (M7-4c).</summary>
+    public void RebuildPresets()
+    {
+        _presetTree.Clear();
+        Presets.Clear();
+        if (_settings is null) return;
+        var root = _settings.PresetsFolder();
+
+        var cats = new Dictionary<string, BrowserItem>(StringComparer.OrdinalIgnoreCase);
+        var devs = new Dictionary<string, BrowserItem>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in _presets.List(root))
+        {
+            string cat = CategoryOf(p.Type);
+            bool noDevice = string.IsNullOrWhiteSpace(p.DeviceName);
+            string dev = noDevice ? Loc.T("common.other") : p.DeviceName;
+            // The ids (the keys and Paths) stay English so a remembered open folder survives a language change;
+            // only the shown name is translated.
+            var catNode = GetOrAddPresetFolder(cats, cat, CategoryName(cat), $"presetcat:{cat}", depth: 0, parent: _presetTree);
+            var devNode = GetOrAddPresetFolder(devs, $"{cat}/{dev}", noDevice ? Loc.T("common.other") : dev, $"presetdev:{cat}/{dev}", depth: 1, parent: catNode.Children);
+            devNode.Children.Add(new BrowserItem
+            {
+                Name = p.DisplayName,
+                Kind = BrowserItemKind.Preset,
+                Sub = "",
+                Path = p.Path,
+                Depth = 2,
+            });
+        }
+        SortSampleTree(_presetTree);   // folders-first alphabetical, recursive
+        RebuildPresetVisible();
+        PresetsRebuilt?.Invoke();
+    }
+
+    private static string CategoryOf(string type)
+        => type.Contains("midi", StringComparison.OrdinalIgnoreCase) ? "MIDI Effects"
+         : type.Contains("instrument", StringComparison.OrdinalIgnoreCase) ? "Instruments"
+         : "Audio Effects";
+
+    // The shown name of a category id from CategoryOf.
+    private static string CategoryName(string category) => category switch
+    {
+        "MIDI Effects" => Loc.T("browser.midi_effects"),
+        "Instruments" => Loc.T("common.instruments"),
+        _ => Loc.T("browser.audio_effects"),
+    };
+
+    // Fetches or creates a preset-tree folder node (category or device), keyed for expansion
+    // persistence and linked under `parent`.
+    private BrowserItem GetOrAddPresetFolder(Dictionary<string, BrowserItem> index, string key,
+                                             string name, string expandKey, int depth, List<BrowserItem> parent)
+    {
+        if (index.TryGetValue(key, out var node)) return node;
+        node = new BrowserItem
+        {
+            Name = name,
+            Kind = BrowserItemKind.Folder,
+            Sub = "",
+            Path = expandKey,
+            Depth = depth,
+            IsExpanded = _expandedTreeKeys.Contains(expandKey),
+        };
+        index[key] = node;
+        parent.Add(node);
+        return node;
+    }
+
+    // Unreadable subfolders (permissions, a drive going away mid-walk) are skipped, not fatal;
+    // hidden and system entries stay out of the tree.
+    private static readonly EnumerationOptions WalkOptions = new()
+    {
+        RecurseSubdirectories = true,
+        IgnoreInaccessible = true,
+        AttributesToSkip = FileAttributes.Hidden | FileAttributes.System,
+    };
+
+    private static IEnumerable<string> EnumerateFilesSafe(string root)
+    {
+        try { return Directory.EnumerateFiles(root, "*", WalkOptions); }
+        catch { return Enumerable.Empty<string>(); }
+    }
+}

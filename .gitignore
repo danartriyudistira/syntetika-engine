@@ -1,0 +1,13 @@
+.DS_Store
+*.log
+*.tmp
+.env
+
+# Build output
+src/nota/build/
+src/nota/build-*/
+src/nota/dist/
+src/nota/src/managed/**/bin/
+src/nota/src/managed/**/obj/
+src/nota/src/native/nota.engine/build/
+src/openvj/target/

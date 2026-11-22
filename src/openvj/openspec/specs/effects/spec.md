@@ -1,0 +1,158 @@
+# effects Specification
+
+## Purpose
+
+GPU effects stack in chains on layers, groups and the composition, like Resolume's effect chains.
+
+## Requirements
+
+### Requirement: Effect chains
+Every clip, layer, group and the composition SHALL have an effect chain. Each effect SHALL have Bypass, reorder, remove and a dry/wet mix. A clip's chain SHALL run before the clip reaches its layer, and travel with the clip when it is copied or moved.
+
+#### Scenario: Reorder
+- **WHEN** the VJ moves Blur above Edges in a layer's chain
+- **THEN** the layer is blurred before edge detection
+
+#### Scenario: Clip effect
+- **GIVEN** a layer whose clip A has Mirror and clip B has no effects
+- **WHEN** the VJ launches A and then B
+- **THEN** A plays mirrored and B plays unprocessed, and during the transition each is processed on its own before the crossfade
+
+### Requirement: Built-in effects
+openVJ SHALL ship Color, Invert, Transform, Mirror, Kaleido, Pixelate, RGB Split, Wave, Posterize, Blur, Edges and Acuarela, added from the browser's Effects tab.
+
+#### Scenario: Add an effect
+- **WHEN** the VJ picks Mirror in the Effects tab and clicks a layer
+- **THEN** Mirror is appended to that layer's chain
+
+#### Scenario: Acuarela
+- **WHEN** Acuarela is added after Edges on a layer
+- **THEN** the edges smear and dissipate like watercolour over the following frames
+
+### Requirement: Mappable parameters
+Every effect parameter and the mix SHALL be mappable like any other parameter (see parameter-modulation).
+
+#### Scenario: Audio-mapped mix
+- **WHEN** an effect's mix is mapped to Bass
+- **THEN** the effect fades in with the bass level
+
+### Requirement: Effects are ISF files
+Each effect SHALL be an ISF shader file (a JSON header and GLSL), with openVJ's own header keys for a stable id, display name, the Resolume effect types it replaces, and per-parameter units and wrapping.
+
+#### Scenario: Varda shader
+- **WHEN** an ISF file written for Varda, with its own `#version 450` and bindings, is loaded
+- **THEN** it compiles and its parameters appear in the effect card
+
+### Requirement: Multi-pass and feedback
+Effects SHALL support several passes, sized render targets and persistent buffers that keep the previous frame's result.
+
+#### Scenario: Feedback buffer
+- **GIVEN** an effect with a persistent pass
+- **WHEN** a frame renders
+- **THEN** the pass can read what it wrote on the previous frame
+
+### Requirement: 16-bit mixing
+Mixing and effects SHALL run in 16-bit float, while output, preview and thumbnails are 8-bit.
+
+#### Scenario: Smooth feedback
+- **WHEN** a feedback effect fades a trail over many frames
+- **THEN** it fades smoothly without 8-bit banding
+
+### Requirement: Parameters in real units
+Effect parameters SHALL show and save in their real units (degrees, %, px, named choices), saved by name so effect updates don't scramble saved compositions.
+
+#### Scenario: Rotation in degrees
+- **WHEN** the VJ sets a Transform rotation
+- **THEN** the card shows degrees, and an angle mapped to a tempo shape wraps around instead of jumping
+
+### Requirement: Effect folders
+openVJ SHALL load ISF effects from `~/Documents/openVJ/Effects` (created on first launch), from the standard ISF folders `~/Library/Graphics/ISF` and `/Library/Graphics/ISF` on macOS, and from `OPENVJ_EFFECTS_DIR` when set, including subfolders, like Resolume's Extra Effects folder. ISF files without an `inputImage` input are generators and SHALL NOT be listed as effects.
+
+#### Scenario: Drop in a shader
+- **WHEN** the VJ copies `Glitch.fs` into `~/Documents/openVJ/Effects` and starts openVJ
+- **THEN** Glitch is listed in the Effects tab after the built-in effects and can be added to any chain
+
+#### Scenario: VDMX shaders
+- **WHEN** ISF shaders are installed in `~/Library/Graphics/ISF`
+- **THEN** the filters among them appear in the Effects tab without any setup
+
+### Requirement: Hot reload
+openVJ SHALL notice new, changed and deleted effect files while running, within about a second, and update the Effects tab and every chain that uses them without a restart. Parameter values SHALL survive a reload.
+
+#### Scenario: Edit a shader live
+- **GIVEN** a folder effect is in a layer's chain
+- **WHEN** the VJ saves a change to its `.fs` file
+- **THEN** the layer shows the new shader on the next frames and the effect's parameter values are kept
+
+### Requirement: Effect errors
+An effect file that fails to parse or compile SHALL be listed in the Effects tab, dimmed, with the error, and SHALL NOT be addable. A chain that already holds it SHALL pass video through until the file is fixed.
+
+#### Scenario: Broken shader
+- **WHEN** a file in the effects folder has a GLSL error
+- **THEN** the Effects tab shows it dimmed with the compiler message, and the rest of the effects work
+
+### Requirement: Effect ids from folders
+A folder effect's id SHALL be its `OPENVJ.ID` header key, or else its file name without `.fs`. A folder file SHALL NOT replace a built-in effect, and when two folder files share an id the one from the earlier folder wins; the other is listed as an error.
+
+#### Scenario: Missing on another machine
+- **WHEN** a composition that uses a folder effect opens on a machine without that file
+- **THEN** the effect keeps its saved settings and passes video through, and starts working once the file is added
+
+### Requirement: Ghost Arcade ISF names
+openVJ SHALL accept ISF files written for Ghost Arcade: its audio values (`audioLevel`, `audioBass`, `audioMid`, `audioHigh`, `audioBeat`, `audioBeatPhase`, `audioBPM`, `audioSpectralCentroid`), its `sampleFFT` and `sampleWaveform` functions, `renderSize`, and files that redeclare built-in uniforms or set a precision.
+
+#### Scenario: Ghost Arcade effect
+- **WHEN** an ISF filter that reads `audioBass` is added to a layer
+- **THEN** it compiles and follows the bass band of the audio input
+
+### Requirement: Clip and layer Transform
+Every clip and layer SHALL have a fixed Transform at the top of its card with Position X/Y in pixels, Scale and Scale W/H in %, Rotation X/Y/Z in degrees and Anchor X/Y, applied before that clip's or layer's effects. A Transform left at its defaults SHALL cost no render pass.
+
+#### Scenario: Zoomed clip
+- **WHEN** the VJ sets a clip's Scale to 150%
+- **THEN** that clip plays zoomed in while other clips on the layer stay full-frame
+
+#### Scenario: Tilt
+- **WHEN** the VJ sets a layer's Rotation X to 30°
+- **THEN** the layer tilts back in perspective
+
+### Requirement: Synesthesia audio names
+openVJ SHALL accept Synesthesia's audio, beat and coordinate uniform names in ISF files (`syn_BassLevel`, `syn_BassHits`, `syn_BassTime`, `syn_OnBeat`, `syn_BPMSin4`, `syn_Spectrum`, `_uvc` and the rest of the family), with Synesthesia's Mid, MidHigh and High bands mapped onto openVJ's Low mid, High mid and Treble. The full list is in the README.
+
+#### Scenario: Shader written for Synesthesia
+- **WHEN** an ISF generator scales its rings by `syn_BassHits` and spins with `syn_BassTime`
+- **THEN** it compiles in openVJ and the rings jump on kicks and spin faster while the bass is loud
+
+### Requirement: Real spectrum for Ghost Arcade
+Ghost Arcade's `sampleFFT` and `sampleWaveform` SHALL read the real spectrum and waveform.
+
+#### Scenario: Waveform shader
+- **WHEN** a Ghost Arcade generator that draws `sampleWaveform` plays with AUDIO on
+- **THEN** it draws the incoming waveform instead of a flat line
+
+### Requirement: Shadertoy names
+openVJ SHALL accept Shadertoy code in ISF files: a `mainImage` function instead of `main`, and Shadertoy's `iTime`, `iTimeDelta`, `iFrame`, `iResolution`, `iDate`, `iMouse`, `iChannelTime`, `iChannelResolution` and `iSampleRate` uniforms. A sound channel SHALL read openVJ's audio as Shadertoy's 512×2 spectrum and waveform texture. Shadertoy buffers SHALL run as persistent passes in Shadertoy's order.
+
+#### Scenario: Hand-copied shader
+- **WHEN** the VJ saves a Shadertoy Image tab's code as `Clouds.glsl` in the Effects folder
+- **THEN** it is listed as a generator and plays
+
+#### Scenario: Feedback buffer
+- **GIVEN** an imported shader whose Buffer A reads itself
+- **WHEN** it plays
+- **THEN** Buffer A sees its previous frame, as on Shadertoy
+
+### Requirement: Shadertoy shaders as effects
+A Shadertoy shader whose first channel is a video or webcam input SHALL import as an effect, with that channel fed by the clip, layer or group it is applied to.
+
+#### Scenario: Shadertoy filter
+- **WHEN** the VJ imports a shader that distorts its webcam channel
+- **THEN** it is listed in the Effects tab and distorts the layer it is added to
+
+### Requirement: Imported images
+ISF files SHALL be able to read images listed under `IMPORTED`, PNG or JPEG, with paths relative to the file. An image that can't be read SHALL read transparent and be reported once.
+
+#### Scenario: Noise texture
+- **GIVEN** an ISF file whose header imports `textures/noise.png`
+- **WHEN** it plays
+- **THEN** it samples that image, and starts using it as soon as the file appears if it was missing

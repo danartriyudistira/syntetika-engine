@@ -1,0 +1,197 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// M7-9: project-format migration pipeline (NFR-8). Format v1 is frozen. When
+// the schema next changes, bump ProjectService.CurrentFormatVersion and append
+// ONE Migration(fromVersion, upgrade) to Registered — the runner chains them so
+// any old file is transparently upgraded on Load. Migrations operate on the raw
+// JSON tree (JsonObject), not the typed ProjectDocument, because a current DTO
+// can't necessarily represent an older shape.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json.Nodes;
+
+namespace Nota.Infrastructure;
+
+/// <summary>One format upgrade: reshape a document that is AT <see cref="FromVersion"/>
+/// into version <c>FromVersion + 1</c>. The runner stamps the new formatVersion;
+/// <see cref="Upgrade"/> only rewrites fields.</summary>
+public sealed record Migration(int FromVersion, Action<JsonObject> Upgrade);
+
+public static class ProjectMigrations
+{
+    /// <summary>Ordered upgrade steps. Append a Migration here (and bump
+    /// CurrentFormatVersion) when the format changes.</summary>
+    public static readonly IReadOnlyList<Migration> Registered = new[]
+    {
+        // v1 -> v2 (M9-A4): automation lanes added. A v1 document simply has no
+        // "automation" arrays; the DTO defaults them to empty, so the upgrade is a
+        // no-op over the tree — the runner just stamps formatVersion = 2.
+        new Migration(1, _ => { }),
+        // v2 -> v3 (M9-B4): plugin-param automation adds AutomationLane.pluginParamId.
+        // A v2 document has no such lanes (target is never 3); no-op, stamp version.
+        new Migration(2, _ => { }),
+        // v3 -> v4 (M9-D): automation points gain `curve`. Absent in v3 -> DTO
+        // defaults 0 (linear); no-op over the tree, stamp version.
+        new Migration(3, _ => { }),
+        // v4 -> v5: audio clips gain pitch + warp fields. Absent in v4 -> DTO
+        // defaults 0 (no pitch, warp off); no-op over the tree, stamp version.
+        new Migration(4, _ => { }),
+        // v5 -> v6: audio clips gain warp markers. Absent in v5 -> warp loads as a
+        // uniform stretch (two seeded end markers); no-op over the tree, stamp version.
+        new Migration(5, _ => { }),
+        // v6 -> v7: document gains master-volume automation. Absent in v6 -> DTO
+        // defaults to an empty lane (no master automation); no-op, stamp version.
+        new Migration(6, _ => { }),
+        // v7 -> v8: audio clips gain a volume envelope. Absent in v7 -> null (no
+        // envelope); no-op over the tree, stamp version.
+        new Migration(7, _ => { }),
+        // v8 -> v9: audio clips gain a pan envelope. Absent in v8 -> null; no-op.
+        new Migration(8, _ => { }),
+        // v9 -> v10: MIDI clips gain velocity + volume envelopes. Absent -> null; no-op.
+        new Migration(9, _ => { }),
+        // v10 -> v11: warped clips gain a trim window (WarpPlayStart/End). Absent -> 0/0
+        // = whole warp; no-op.
+        new Migration(10, _ => { }),
+        // v11 -> v12: Instrument Rack (instrument kind 3). A v11 document has no rack
+        // instruments; the rack's blob lives in the existing InstrumentDto.State, so
+        // there's nothing to rewrite — no-op, stamp version.
+        new Migration(11, _ => { }),
+        // v12 -> v13: Audio Effect Rack (device builtinKind 5). A v12 document has no
+        // rack devices; the rack's blob lives in the existing DeviceDto.State — no-op.
+        new Migration(12, _ => { }),
+        // v13 -> v14: Drum Rack (instrument kind 4) + rack blob v2 (per-chain trigger
+        // note). Old blobs load as v1 (triggerNote -1) inside the engine — no-op here.
+        new Migration(13, _ => { }),
+        // v14 -> v15: per-device sidechain source (DeviceDto.SidechainSource, a track
+        // index). Absent in v14 documents; default -1 (no sidechain) — no-op here.
+        new Migration(14, _ => { }),
+        // v15 -> v16: sidechain shaping (DeviceDto.SidechainGain/Mix/TapPre). Absent in
+        // v15 documents; defaults (0 dB, fully wet, post-FX) match old behaviour — no-op.
+        new Migration(15, _ => { }),
+        // v16 -> v17: clip deactivate (Audio/MidiClipDto.Active, key 0). Absent in v16
+        // documents; the default (true = plays) matches old behaviour — no-op.
+        new Migration(16, _ => { }),
+        // v17 -> v18: CV modulation (TrackDto.Modulators/CvLinks, Phase 3). Absent in v17
+        // documents; the defaults (empty lists = no modulation) match old behaviour — no-op.
+        new Migration(17, _ => { }),
+        // v18 -> v19: audio clips gain Reversed (non-destructive reverse). Absent in v18
+        // documents; the default (false = plays forwards) matches old behaviour — no-op.
+        new Migration(18, _ => { }),
+        // v19 -> v20: audio clips gain an ADSR amplitude shape (AudioClipDto.Adsr). Absent in
+        // v19 documents; null = identity (full length, full level) matches old behaviour — no-op.
+        new Migration(19, _ => { }),
+        // v20 -> v21: projects gain a pan law (specs/006). Every earlier project mixed with the
+        // balance law, so the step writes mixer = { panLaw: "balance", panLawLegacy: true } when
+        // `mixer` is absent (keeps an existing object untouched).
+        new Migration(20, root =>
+        {
+            if (root["mixer"] is null)
+                root["mixer"] = new JsonObject { ["panLaw"] = "balance", ["panLawLegacy"] = true };
+        }),
+        // v21 -> v22: MIDI clips and Session slot clips gain controller curves (Controllers,
+        // specs/020). Absent in v21 documents; null = none matches old behaviour — no-op.
+        new Migration(21, _ => { }),
+        // v22 -> v23: devices, MIDI effects and instruments gain Folded (drawn as a strip in
+        // the Devices panel, specs/022). Absent in v22 documents; false = unfolded — no-op.
+        new Migration(22, _ => { }),
+        // v23 -> v24: MIDI effects gain State (the MIDI Effect Rack's blob, specs/040). Absent in
+        // v23 documents, which hold no MIDI Effect Rack; null = params only — no-op.
+        new Migration(23, _ => { }),
+        // v24 -> v25: lanes, CV links and Arp CC targets may point into a rack chain, and racks'
+        // chain children keep sidechain keys and CC targets in the track (specs/044). All absent
+        // in v24 documents, where every reference is track level — no-op.
+        new Migration(24, _ => { }),
+        // v25 -> v26: instruments, devices and MIDI effects gain Preset (the preset they were
+        // loaded from, specs/048). Absent in v25 documents = no preset named — no-op.
+        new Migration(25, _ => { }),
+        // v26 -> v27: hosted plug-ins and instruments gain Preview, the picture of their window
+        // (specs/046). Absent in v26 documents; null = no preview, the card stays plain — no-op.
+        new Migration(26, _ => { }),
+        // v27 -> v28: sidechain keys may name one part of the source's instrument (a Drum Rack
+        // pad, an Instrument Rack chain, a Rhythm voice; specs/050): DeviceDto / InstrumentDto
+        // SidechainPart and NestedSidechainDto.Part. Absent in v27 documents = -1, the whole
+        // track — no-op.
+        new Migration(27, _ => { }),
+        // v28 -> v29: audio tracks gain Takes and audio clips TakeId (take lanes, specs/067).
+        // Absent in v28 documents = no takes, every clip a plain clip — no-op.
+        new Migration(28, _ => { }),
+
+        // v29 -> v30: tracks gain MidiOffsetMs (MIDI playback offset) and ArticulationMap, notes gain
+        // Articulation (an id in that map, specs/085). Absent in v29 documents = 0 / none — no-op.
+        new Migration(29, _ => { }),
+        // v30 -> v31: Nota Aurora instruments gain Wavetables, their imported tables
+        // (specs/053). Absent in v30 documents; null = the built-in tables — no-op.
+        new Migration(30, _ => { }),
+        // v31 -> v32 (specs/089): tracks gain Cue, the mixer CueVolume. Absent -> not in Cue,
+        // unity Cue level; no-op, stamp version.
+        new Migration(31, _ => { }),
+        // v32 -> v33 (specs/086): optional tempo map; absence preserves the global BPM.
+        new Migration(32, _ => { }),
+        // v33 -> v34 (specs/099): tempo is the master track's Tempo automation lane. The #568
+        // tempo points become that lane (same timing; values limited to 20–300 BPM, flagged
+        // so the app can say so once); `master.automation` and `master.pan` are new.
+        new Migration(33, MigrateTempoPoints),
+        // v34 -> v35 (specs/103): Session slots gain FollowBypass. Absent = follow active — no-op.
+        new Migration(34, _ => { }),
+    };
+
+    private static void MigrateTempoPoints(JsonObject root)
+    {
+        if (root["tempoPoints"] is not JsonArray arr) { root.Remove("tempoPoints"); return; }
+        root.Remove("tempoPoints");
+        var legacy = new List<TempoMigration.LegacyPoint>();
+        try
+        {
+            foreach (var n in arr)
+            {
+                if (n is not JsonObject o) return;
+                double D(string k, double d) => o[k] is JsonValue v && v.TryGetValue(out double x) ? x : d;
+                int shape = o["shape"] is JsonValue sv && sv.TryGetValue(out int si) ? si : 0;
+                legacy.Add(new TempoMigration.LegacyPoint(D("beat", double.NaN), D("bpm", double.NaN), shape,
+                    D("x1", 1.0 / 3), D("y1", 0), D("x2", 2.0 / 3), D("y2", 1), D("incomingBpm", 0)));
+            }
+        }
+        catch (Exception) { return; }   // malformed: the project keeps its single tempo
+        var lane = TempoMigration.Convert(legacy, out bool clamped);
+        if (lane.Count == 0) return;
+        var master = root["master"] as JsonObject ?? new JsonObject();
+        root["master"] = master;
+        var lanes = master["automation"] as JsonArray ?? new JsonArray();
+        master["automation"] = lanes;
+        var points = new JsonArray();
+        foreach (var p in lane)
+            points.Add(new JsonObject { ["beat"] = p.Beat, ["value"] = p.Value, ["curve"] = p.Curve });
+        lanes.Add(new JsonObject
+        {
+            ["target"] = 6, ["deviceIndex"] = -1, ["paramIndex"] = -1, ["points"] = points,
+        });
+        if (root["transport"] is JsonObject transport) transport["bpm"] = (double)lane[0].Value;
+        if (clamped) root["tempoClamped"] = true;
+    }
+
+    /// <summary>Migrates <paramref name="root"/> up to <see cref="ProjectService.CurrentFormatVersion"/>
+    /// using the registered steps.</summary>
+    public static JsonObject Migrate(JsonObject root)
+        => Migrate(root, ProjectService.CurrentFormatVersion, Registered);
+
+    /// <summary>Migrates <paramref name="root"/> to <paramref name="targetVersion"/> by chaining
+    /// <paramref name="steps"/> (a missing formatVersion is treated as the baseline, v1). Throws
+    /// <see cref="NotSupportedException"/> if a version in the chain has no step. Pure — takes the
+    /// step list as a parameter so the runner is testable with synthetic migrations.</summary>
+    public static JsonObject Migrate(JsonObject root, int targetVersion, IReadOnlyList<Migration> steps)
+    {
+        int cur = root["formatVersion"]?.GetValue<int>() ?? 1;
+        while (cur < targetVersion)
+        {
+            var step = steps.FirstOrDefault(m => m.FromVersion == cur)
+                ?? throw new NotSupportedException($"Cannot migrate project from format v{cur} to v{cur + 1}.");
+            step.Upgrade(root);
+            cur++;
+            root["formatVersion"] = cur;
+        }
+        return root;
+    }
+}

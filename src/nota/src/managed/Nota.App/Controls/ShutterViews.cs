@@ -1,0 +1,595 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Nota Shutter (device kind 19) card windows, all read from the engine's telemetry
+// (Shutter.h scopeRead) so the picture is what the gate does:
+//  · ShSignalView — the Signal tab: the input over the window as darker grey columns, the gated
+//    output in neutral ink, the threshold and the close level (dashed) where
+//    they act. Drag a line up or down to set the threshold / the return.
+//  · ShEnvelopeView — the Envelope tab: one opening drawn from the attack / hold / release /
+//    shape / floor (inverted for Duck). Drag the nodes sideways for the times, the floor up
+//    or down.
+//  · ShKeyView — the Sidechain tab: the detector band-pass (a darker grey, 12 dB/oct) with its HP /
+//    LP nodes to drag, under the reduction over the window (neutral ink).
+//  · ShPatternView — the Pattern tab: the step grid (a column per step, quantised to the
+//    levels) with the gain it makes on top — smooth and swing bend the curve — the current
+//    step lit (accent) and the playhead. Draw / Line / Erase / Flip edit the steps with the mouse.
+// Shared drag contract (ShDragView): left button only, a gesture per drag, double-click
+// resets the handle, ⌥-click types its value (the card supplies the fields, specs/035),
+// right-click opens the parameter menu on a handle and bubbles to MIDI learn elsewhere.
+
+using System;
+using System.Collections.Generic;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Media;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+/// <summary>A window with draggable handles: subclasses say which handle is under the pointer
+/// and what value a drag gives it.</summary>
+internal abstract class ShDragView : Control, IValueHandles
+{
+    private int _drag = -1;
+    private Point _start;
+    private double _v0;
+
+    public event Action<int>? GestureBegin;
+    public event Action<int>? GestureEnd;
+    public event Action<int, double>? Changed;
+    public event Action<int>? ResetRequested;
+    /// <summary>The handle's current value (0..1), read when a drag starts.</summary>
+    public Func<int, double>? Value { get; set; }
+    public bool Dragging => _drag >= 0;
+    protected int Active => _drag;
+
+    protected ShDragView() { ClipToBounds = true; MinHeight = 36; }
+
+    /// <summary>The handle under <paramref name="p"/>, or −1.</summary>
+    protected abstract int Hit(Point p);
+    /// <summary>The handle's new value for a drag from <paramref name="start"/> (value v0) to <paramref name="p"/>.</summary>
+    protected abstract double DragTo(int handle, Point start, Point p, double v0);
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        int hdl = Hit(e.GetPosition(this));
+        if (hdl < 0) return;
+        if ((e.ClickCount == 2 || (e.KeyModifiers & KeyModifiers.Alt) != 0)) { ResetRequested?.Invoke(hdl); InvalidateVisual(); e.Handled = true; return; }
+        _drag = hdl; _start = e.GetPosition(this); _v0 = Value?.Invoke(hdl) ?? 0;
+        GestureBegin?.Invoke(hdl); e.Pointer.Capture(this); e.Handled = true;
+        Move(e.GetPosition(this));
+    }
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        var p = e.GetPosition(this);
+        if (_drag >= 0) { Move(p); return; }
+        Cursor = Hit(p) is var h && h >= 0 ? new Cursor(CursorFor(h)) : Cursor.Default;
+    }
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        if (_drag < 0) return;
+        int h = _drag; _drag = -1; e.Pointer.Capture(null); GestureEnd?.Invoke(h); InvalidateVisual();
+    }
+
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        // Capture taken away mid-drag (the window deactivates): end the gesture and drop the accent.
+        if (_drag >= 0) { int h = _drag; _drag = -1; GestureEnd?.Invoke(h); InvalidateVisual(); }
+        base.OnPointerCaptureLost(e);
+    }
+    protected virtual StandardCursorType CursorFor(int handle) => StandardCursorType.SizeNorthSouth;
+
+    // Typed entry: the handles are the drag handles; the box opens by the one last pointed at.
+    private Point _asked;
+    public int HandleAt(Point p) { _asked = p; return Hit(p); }
+    public Rect HandleRect(int handle) => ValueEntry.Near(_asked, Bounds.Size);
+
+    private void Move(Point p)
+    {
+        double v = Math.Clamp(DragTo(_drag, _start, p, _v0), 0, 1);
+        Changed?.Invoke(_drag, v);
+        InvalidateVisual();
+    }
+
+    protected static void Text(DrawingContext ctx, string s, double x, double y, IBrush? ink = null)
+        => ctx.DrawText(NotaGraph.AxisText(s, ink), new Point(x, y));
+    protected static void TextR(DrawingContext ctx, string s, double right, double y, IBrush? ink = null)
+    {
+        var ft = NotaGraph.AxisText(s, ink);
+        ctx.DrawText(ft, new Point(right - ft.Width, y));
+    }
+    protected static void Grid(DrawingContext ctx, double w, double h, int cols)
+    {
+        for (int i = 1; i < 4; i++) ctx.DrawLine(NotaGraph.GridPen, new Point(0, h * i / 4), new Point(w, h * i / 4));
+        for (int i = 1; i < cols; i++) ctx.DrawLine(NotaGraph.GridPen, new Point(w * i / cols, 0), new Point(w * i / cols, h));
+    }
+}
+
+internal sealed class ShSignalView : ShDragView
+{
+    public const int HThreshold = 0, HReturn = 1;
+    private const double DbTop = 0, DbBot = -72;
+    private float[] _in = Array.Empty<float>(), _gate = Array.Empty<float>();
+    private int _n;
+    private double _thr = -38, _ret = -41;
+    private string _window = "";
+    private int _closing = -1;
+    private bool _duck;
+
+    public void Set(float[] src, int inAt, int gateAt, int n, double thrDb, double retDb, bool duck, string window)
+    {
+        if (_in.Length != n) { _in = new float[n]; _gate = new float[n]; }
+        if (n > 0 && inAt + n <= src.Length && gateAt + n <= src.Length) { Array.Copy(src, inAt, _in, 0, n); Array.Copy(src, gateAt, _gate, 0, n); }
+        _n = n; _thr = thrDb; _ret = retDb; _duck = duck; _window = window;
+        // Where the gate last closed: the newest column that went from open to shut.
+        _closing = -1;
+        for (int i = n - 1; i > 0; i--)
+            if (_gate[i] < 0.5f && _gate[i - 1] >= 0.5f) { _closing = i; break; }
+        InvalidateVisual();
+    }
+
+    private (double top, double bot) Band() => (NotaGraph.PlotTop, Bounds.Height - NotaGraph.PlotFloor);
+    private double Y(double db) { var (t, b) = Band(); return t + Math.Clamp((DbTop - db) / (DbTop - DbBot), 0, 1) * (b - t); }
+    private double DbAt(double y) { var (t, b) = Band(); return DbTop - Math.Clamp((y - t) / Math.Max(1, b - t), 0, 1) * (DbTop - DbBot); }
+
+    protected override int Hit(Point p)
+    {
+        double dt = Math.Abs(p.Y - Y(_thr)), dr = Math.Abs(p.Y - Y(_ret));
+        if (dt <= 6 && dt <= dr + 1) return HThreshold;
+        if (dr <= 6) return HReturn;
+        return HThreshold;   // anywhere else: the threshold, the graph's main handle
+    }
+    protected override double DragTo(int handle, Point start, Point p, double v0)
+    {
+        double db = DbAt(p.Y);
+        return handle == HThreshold ? (db + 70) / 70 : (_thr - db) / 24;
+    }
+
+    public override void Render(DrawingContext ctx)
+    {
+        double w = Bounds.Width, h = Bounds.Height;
+        if (w <= 0 || h <= 0) return;
+        var frame = new Rect(0, 0, w, h);
+        NotaGraph.Window(ctx, frame);
+        Grid(ctx, w, h, 6);
+        double gx = 4, gw = w - 8;
+        double X(int i) => gx + (i + 0.5) / Math.Max(1, _n) * gw;
+
+        if (_n > 1)
+        {
+            // Input: a darker grey column per slice.
+            var inPen = new Pen(NotaPalette.Wash(NotaPalette.TextTertiary, 0x99), Math.Max(1, Math.Min(2.4, gw / _n * 0.55)));
+            double floorY = Y(DbBot);
+            for (int i = 0; i < _n; i++)
+                if (_in[i] > DbBot + 0.5) ctx.DrawLine(inPen, new Point(X(i), floorY), new Point(X(i), Y(_in[i])));
+
+            // Output: the input times the gate, in neutral ink.
+            var g = new StreamGeometry();
+            using (var c = g.Open())
+                for (int i = 0; i < _n; i++)
+                {
+                    double gain = Math.Max(1e-6, _gate[i]);
+                    double db = _in[i] + 20 * Math.Log10(gain);
+                    var pt = new Point(X(i), Y(Math.Max(DbBot, db)));
+                    if (i == 0) c.BeginFigure(pt, false); else c.LineTo(pt);
+                }
+            ctx.DrawGeometry(null, NotaGraph.PrimaryPen, g);
+        }
+
+        bool hotT = Active == HThreshold, hotR = Active == HReturn;
+        ctx.DrawLine(new Pen(hotT ? NotaPalette.Accent : NotaPalette.VizInk, hotT ? 1.4 : 1, new DashStyle(new double[] { 4, 4 }, 0)), new Point(0, Y(_thr)), new Point(w, Y(_thr)));
+        ctx.DrawLine(new Pen(hotR ? NotaPalette.Accent : NotaPalette.BorderStrong, 1, new DashStyle(new double[] { 2, 4 }, 0)), new Point(0, Y(_ret)), new Point(w, Y(_ret)));
+
+        NotaGraph.Title(ctx, frame, _duck ? Loc.T("device.shutter.signal_and_duck") : Loc.T("device.shutter.signal_and_gate"));
+        NotaGraph.Legend(ctx, w - 6, 3, ("input", NotaPalette.TextTertiary, NotaGraph.Mark.Area), ("output", NotaPalette.VizInk, NotaGraph.Mark.Line));
+        // The Thresh knob shows the level, so the line is named only while it is grabbed.
+        if (hotT)
+        {
+            var thrTxt = NotaNum.F($"threshold {_thr:0.0}");
+            double ty = Y(_thr) - 13;
+            if (ty < 18) ty = Y(_thr) + 3;   // under the line when above it would reach the title row
+            // On a plate: under the line it would otherwise sit on the signal's own trace.
+            NotaGraph.PlateText(ctx, NotaGraph.AxisText(thrTxt, NotaPalette.AccentBright), new Point(6, ty));
+        }
+        Text(ctx, "−" + _window, 6, h - 11);
+        TextR(ctx, "now", w - 6, h - 11);
+        if (_closing > _n * 0.12 && _closing < _n * 0.85)
+            Text(ctx, _duck ? "released" : "closed", X(_closing) + 3, h - 11);
+    }
+}
+
+internal sealed class ShEnvelopeView : ShDragView
+{
+    public const int HAttack = 0, HHold = 1, HRelease = 2, HFloor = 3;
+    private double _atk = 1, _hold = 15, _rel = 120, _floor, _span = 250;
+    private int _shape = 1;
+    private bool _duck, _retrig;
+    private string _floorText = "", _atkText = "", _holdText = "", _relText = "";
+    private static readonly double[] Spans = { 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000 };
+
+    /// <summary>Times in ms, the floor as linear gain (0 = −∞), the shape 0 linear / 1 log /
+    /// 2 snap, duck = inverted, trigger mode, and the captions.</summary>
+    public void Set(double atkMs, double holdMs, double relMs, double floorLin, int shape, bool duck, bool retrig,
+        string floorText, string atkText, string holdText, string relText)
+    {
+        _atk = atkMs; _hold = holdMs; _rel = relMs; _floor = floorLin; _shape = shape; _duck = duck; _retrig = retrig;
+        _floorText = floorText; _atkText = atkText; _holdText = holdText; _relText = relText;
+        if (!Dragging)
+        {
+            double need = shape == 1 ? (atkMs * 3 + holdMs + relMs * 3) * 1.2 : (atkMs + holdMs + relMs) * 1.45;   // Log keeps approaching
+            _span = Spans[^1];
+            foreach (double s in Spans) if (s >= need) { _span = s; break; }
+        }
+        InvalidateVisual();
+    }
+
+    private double Top => 20;   // the open level sits just under the title; the window is short
+    private double Bot => Bounds.Height - 14;
+    private double X0 => Bounds.Width * 0.12;
+    private double Xt(double ms) => X0 + ms / _span * Bounds.Width;
+    private double Yg(double g) => Top + (1 - Math.Clamp(g, 0, 1)) * (Bot - Top);
+    private double Gain(double engaged) => _duck ? 1 - (1 - _floor) * engaged : _floor + (1 - _floor) * engaged;
+    private double Shape(double e) => _shape == 2 ? 1 - Math.Pow(1 - e, 3) : e;
+
+    // Engaged fraction t ms after the opening: Linear / Snap ramp over exactly the times; Log is
+    // the one-pole the engine runs (the times are its time constants), so it keeps approaching.
+    private double E(double t)
+    {
+        if (t <= 0) return 0;
+        double ah = _atk + _hold;
+        if (_shape == 1)
+        {
+            double eh = 1 - Math.Exp(-ah / Math.Max(1e-3, _atk));
+            return t < ah ? 1 - Math.Exp(-t / Math.Max(1e-3, _atk)) : eh * Math.Exp(-(t - ah) / Math.Max(1e-3, _rel));
+        }
+        if (t < _atk) return t / Math.Max(1e-3, _atk);
+        if (t < ah) return 1;
+        return Math.Max(0, 1 - (t - ah) / Math.Max(1e-3, _rel));
+    }
+    private double Yt(double t) => Yg(Gain(Shape(E(t))));
+
+    private Point Node(int hdl) => hdl switch
+    {
+        HAttack => new Point(Xt(_atk), Yt(_atk)),
+        HHold => new Point(Xt(_atk + _hold), Yt(_atk + _hold)),
+        HRelease => new Point(Xt(_atk + _hold + _rel), Yt(_atk + _hold + _rel)),
+        _ => new Point(Bounds.Width - 14, Yg(_floor)),
+    };
+
+    protected override int Hit(Point p)
+    {
+        int best = -1; double bd = 14;
+        for (int k = 0; k < 4; k++)
+        {
+            var n = Node(k);
+            double d = Math.Abs(p.X - n.X) + Math.Abs(p.Y - n.Y) * 0.5;
+            if (d < bd) { bd = d; best = k; }
+        }
+        if (best >= 0) return best;
+        return Math.Abs(p.Y - Yg(_floor)) < 6 ? HFloor : -1;
+    }
+    protected override StandardCursorType CursorFor(int handle) => handle == HFloor ? StandardCursorType.SizeNorthSouth : StandardCursorType.SizeWestEast;
+    protected override double DragTo(int handle, Point start, Point p, double v0)
+    {
+        if (handle == HFloor)
+        {
+            double dy = (start.Y - p.Y) / Math.Max(40, Bot - Top);
+            return v0 + (_duck ? -dy : dy) * 0.9;
+        }
+        return v0 + (p.X - start.X) / Math.Max(60, Bounds.Width) * 0.8;
+    }
+
+    public override void Render(DrawingContext ctx)
+    {
+        double w = Bounds.Width, h = Bounds.Height;
+        if (w <= 0 || h <= 0) return;
+        var frame = new Rect(0, 0, w, h);
+        NotaGraph.Window(ctx, frame);
+        for (int i = 1; i < 4; i++) ctx.DrawLine(NotaGraph.GridPen, new Point(0, h * i / 4), new Point(w, h * i / 4));
+
+        double xa = Xt(_atk), xh = Xt(_atk + _hold), xr = Xt(_atk + _hold + _rel);
+        var mark = new Pen(NotaPalette.GraphBorder, 1, new DashStyle(new double[] { 3, 4 }, 0));
+        foreach (double x in new[] { X0, xa, xh, xr }) if (x < w) ctx.DrawLine(mark, new Point(x, 0), new Point(x, h));
+
+        // Floor (or the duck depth): dashed in a darker grey.
+        double yf = Yg(_floor);
+        ctx.DrawLine(new Pen(NotaPalette.TextTertiary, 1, new DashStyle(new double[] { 4, 4 }, 0)), new Point(0, yf), new Point(w, yf));
+
+        // One opening: rest → attack → hold → release → rest, sampled with the breakpoints kept exact.
+        var ts = new List<double>();
+        int px = Math.Max(40, (int)(w / 1.5));
+        for (int k = 0; k <= px; k++) ts.Add(((double)k / px * w - X0) / w * _span);
+        ts.Add(0); ts.Add(_atk); ts.Add(_atk + _hold); ts.Add(_atk + _hold + _rel);
+        ts.Sort();
+        var g = new StreamGeometry();
+        using (var c = g.Open())
+        {
+            bool first = true;
+            foreach (double t in ts)
+            {
+                var pt = new Point(Xt(Math.Max(t, -X0 / w * _span)), Yt(t));
+                if (first) { c.BeginFigure(pt, false); first = false; } else c.LineTo(pt);
+            }
+            c.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, NotaGraph.PrimaryPen, g);
+        for (int k = 0; k < 3; k++) { var n = Node(k); if (n.X < w - 2) NotaGraph.Node(ctx, n, Active == k); }
+        NotaGraph.Node(ctx, Node(HFloor), Active == HFloor, Active == HFloor ? null : NotaPalette.TextTertiary);
+
+        NotaGraph.Title(ctx, frame, _duck ? "Duck envelope" : _retrig ? Loc.T("device.shutter.gate_envelope_trigger") : "Gate envelope");
+        TextR(ctx, "open 0\u2009dB", w - 6, 3, NotaPalette.TextSecondary);
+        double fy = _duck ? yf + 2 : yf - 11;
+        if (fy > h - 24) fy = yf - 11;
+        TextR(ctx, (_duck ? "duck " : "floor ") + _floorText, w - 22, fy, NotaPalette.TextSecondary);
+        double lx = Math.Max(4, X0 + (xa - X0) / 2 - 10);
+        Text(ctx, "atk " + _atkText, Math.Min(lx, w * 0.2), h - 11);
+        Text(ctx, "hold " + _holdText, Math.Clamp((xa + xh) / 2 - 12, w * 0.24, w * 0.5), h - 11);
+        Text(ctx, "rel " + _relText, Math.Clamp((xh + xr) / 2 - 12, w * 0.52, w - 70), h - 11);
+    }
+}
+
+internal sealed class ShKeyView : ShDragView
+{
+    public const int HHp = 0, HLp = 1;
+    private const double FMin = 20, FMax = 20000, DbRange = 36;
+    private double _hpHz = 80, _lpHz = 2500;
+    private bool _on = true;
+    private float[] _gate = Array.Empty<float>();
+    private int _n;
+    private string _legend = "";
+
+    public void Set(double hpHz, double lpHz, bool filterOn, float[] src, int gateAt, int n, string legend)
+    {
+        _hpHz = hpHz; _lpHz = lpHz; _on = filterOn; _legend = legend;
+        if (_gate.Length != n) _gate = new float[n];
+        if (n > 0 && gateAt + n <= src.Length) Array.Copy(src, gateAt, _gate, 0, n);
+        _n = n;
+        InvalidateVisual();
+    }
+
+    private double X(double f) => Math.Log(f / FMin) / Math.Log(FMax / FMin) * Bounds.Width;
+    private double FAt(double x) => FMin * Math.Pow(FMax / FMin, Math.Clamp(x / Math.Max(1, Bounds.Width), 0, 1));
+    private double Top => 16;
+    private double Bot => Bounds.Height - 14;
+    private double Yd(double db) => Top + Math.Clamp(-db / DbRange, 0, 1) * (Bot - Top);
+    private double Mag(double f)
+    {
+        if (!_on) return 0;
+        double a = Math.Pow(f / _hpHz, 2), b = Math.Pow(f / _lpHz, 2);
+        double hp = a / Math.Sqrt(1 + a * a), lp = 1 / Math.Sqrt(1 + b * b);
+        return 20 * Math.Log10(Math.Max(1e-6, hp * lp));
+    }
+
+    protected override int Hit(Point p)
+    {
+        if (!_on) return -1;
+        double dh = Math.Abs(p.X - X(_hpHz)), dl = Math.Abs(p.X - X(_lpHz));
+        return dh <= dl ? HHp : HLp;
+    }
+    protected override StandardCursorType CursorFor(int handle) => StandardCursorType.SizeWestEast;
+    protected override double DragTo(int handle, Point start, Point p, double v0)
+    {
+        double f = FAt(p.X);
+        return handle == HHp ? Math.Log(f / 20) / Math.Log(100) : Math.Log(f / 200) / Math.Log(100);
+    }
+
+    public override void Render(DrawingContext ctx)
+    {
+        double w = Bounds.Width, h = Bounds.Height;
+        if (w <= 0 || h <= 0) return;
+        var frame = new Rect(0, 0, w, h);
+        NotaGraph.Window(ctx, frame);
+        Grid(ctx, w, h, 5);
+
+        // The reduction over the window (time runs left → right), under the filter.
+        if (_n > 1)
+        {
+            var g = new StreamGeometry();
+            using (var c = g.Open())
+                for (int i = 0; i < _n; i++)
+                {
+                    double red = 1 - Math.Clamp(_gate[i], 0, 1);
+                    var pt = new Point((i + 0.5) / _n * w, Bot - red * (Bot - Top) * 0.85);
+                    if (i == 0) c.BeginFigure(pt, false); else c.LineTo(pt);
+                }
+            ctx.DrawGeometry(null, new Pen(NotaPalette.TextTertiary, 1.3, lineJoin: PenLineJoin.Round), g);
+        }
+
+        // The key band-pass.
+        var curve = new StreamGeometry();
+        int px = Math.Max(24, (int)(w / 2));
+        using (var c = curve.Open())
+            for (int i = 0; i <= px; i++)
+            {
+                double x = (double)i / px * w;
+                var pt = new Point(x, Yd(Mag(FAt(x))));
+                if (i == 0) c.BeginFigure(pt, false); else c.LineTo(pt);
+            }
+        ctx.DrawGeometry(null, NotaGraph.SecondaryPen(_on ? NotaPalette.TextSecondary : NotaPalette.TextDisabled, 1.8), curve);
+        if (_on)
+        {
+            NotaGraph.Node(ctx, new Point(X(_hpHz), Yd(Mag(_hpHz))), Active == HHp);
+            NotaGraph.Node(ctx, new Point(X(_lpHz), Yd(Mag(_lpHz))), Active == HLp);
+        }
+
+        NotaGraph.Title(ctx, frame, _on ? "Detector filter" : Loc.T("device.shutter.detector_full_band"));
+        NotaGraph.Legend(ctx, w - 6, 3, ("key", NotaPalette.TextSecondary, NotaGraph.Mark.Line), (_legend, NotaPalette.TextTertiary, NotaGraph.Mark.Line));
+        static string Hz(double f) => f >= 1000 ? NotaNum.F($"{f / 1000:0.0}\u2009k") : NotaNum.F($"{f:0}");
+        Text(ctx, "20", 4, h - 11);
+        TextR(ctx, "20\u2009k", w - 4, h - 11);
+        if (_on)
+        {
+            double hx = Math.Clamp(X(_hpHz) - 8, 22, w - 90);
+            double lx = Math.Clamp(X(_lpHz) - 8, hx + 30, w - 50);
+            Text(ctx, Hz(_hpHz), hx, h - 11, NotaPalette.TextSecondary);
+            Text(ctx, Hz(_lpHz), lx, h - 11, NotaPalette.TextSecondary);
+        }
+    }
+}
+
+internal sealed class ShPatternView : Control
+{
+    public const int ToolDraw = 0, ToolLine = 1, ToolErase = 2, ToolFlip = 3;
+    private float[] _steps = new float[16];
+    private int _levels = 8, _cur = -1;
+    private double _phase = -1, _smooth, _swing, _depth = 1;
+    private bool _map, _active = true;
+    private string _label = "gain";
+
+    // Drag state.
+    private bool _drag;
+    private float[] _base = Array.Empty<float>();
+    private int _c0;
+    private float _v0, _flipTo;
+
+    public int Tool { get; set; }
+    public event Action? GestureBegin;
+    public event Action? GestureEnd;
+    /// <summary>The edited steps (a copy, already quantised) after every move of a drag.</summary>
+    public event Action<float[]>? StepsChanged;
+    public bool Dragging => _drag;
+
+    public ShPatternView() { ClipToBounds = true; MinHeight = 40; Cursor = new Cursor(StandardCursorType.Cross); }
+
+    /// <summary>Steps 0..1, levels, the step / phase playing now (−1 = none), smooth 0..1 (½ step at 1),
+    /// swing in steps, depth, Map (the second grey), active (pattern on), the curve's label.</summary>
+    public void Set(float[] steps, int n, int levels, int cur, double phase, double smooth, double swing, double depth, bool map, bool active, string label)
+    {
+        if (_drag) { _cur = cur; _phase = phase; InvalidateVisual(); return; }   // the hand owns the steps
+        if (_steps.Length != n) _steps = new float[n];
+        Array.Copy(steps, _steps, Math.Min(n, steps.Length));
+        _levels = Math.Max(1, levels); _cur = cur; _phase = phase; _smooth = smooth; _swing = swing; _depth = depth;
+        _map = map; _active = active; _label = label;
+        InvalidateVisual();
+    }
+
+    private float Q(double v) => (float)(Math.Round(Math.Clamp(v, 0, 1) * _levels) / _levels);
+    private (int c, float v) At(Point p)
+    {
+        int n = _steps.Length;
+        double w = Math.Max(1, Bounds.Width), h = Math.Max(1, Bounds.Height);
+        return (Math.Clamp((int)(p.X / w * n), 0, n - 1), Q(1 - p.Y / h));
+    }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _base = (float[])_steps.Clone();
+        (_c0, _v0) = At(e.GetPosition(this));
+        _flipTo = _base[_c0] > 0 ? 0f : 1f;
+        _drag = true;
+        GestureBegin?.Invoke();
+        e.Pointer.Capture(this); e.Handled = true;
+        Apply(e.GetPosition(this));
+    }
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        if (_drag) Apply(e.GetPosition(this));
+    }
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        if (!_drag) return;
+        _drag = false; e.Pointer.Capture(null); GestureEnd?.Invoke(); InvalidateVisual();
+    }
+
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        if (_drag) { _drag = false; GestureEnd?.Invoke(); InvalidateVisual(); }
+        base.OnPointerCaptureLost(e);
+    }
+
+    private void Apply(Point p)
+    {
+        var (c, v) = At(p);
+        var s = Tool == ToolLine ? (float[])_base.Clone() : _steps;
+        switch (Tool)
+        {
+            case ToolErase: s[c] = 0; break;
+            case ToolFlip: s[c] = _flipTo; break;
+            case ToolLine:
+            {
+                int a = Math.Min(_c0, c), b = Math.Max(_c0, c);
+                for (int i = a; i <= b; i++) { double k = b == a ? 0 : (double)(i - _c0) / (c - _c0); s[i] = Q(_v0 + (v - _v0) * k); }
+                break;
+            }
+            default: s[c] = v; break;
+        }
+        _steps = s;
+        StepsChanged?.Invoke((float[])s.Clone());
+        InvalidateVisual();
+    }
+
+    public override void Render(DrawingContext ctx)
+    {
+        double w = Bounds.Width, h = Bounds.Height;
+        if (w <= 0 || h <= 0) return;
+        var frame = new Rect(0, 0, w, h);
+        NotaGraph.Window(ctx, frame);
+        int n = _steps.Length;
+        double cw = w / n;
+        // Map draws in the second grey; a pattern that is off is drawn in ink 4, never faded.
+        var ink = !_active ? NotaPalette.TextDisabled : _map ? NotaPalette.TextSecondary : NotaPalette.VizInk;
+
+        // Level lines, then the step columns: the playing one lit, a stronger line every 4.
+        for (int i = 1; i < _levels; i++)
+        {
+            double y = Math.Round(h * i / _levels) + 0.5;
+            ctx.DrawLine(NotaGraph.GridPen, new Point(0, y), new Point(w, y));
+        }
+        if (_cur >= 0 && _cur < n && _active)
+            ctx.FillRectangle(NotaPalette.Wash(NotaPalette.AccentBright, 0x18), new Rect(_cur * cw, 0, cw, h));
+        var strong = new Pen(NotaPalette.BorderStrong, 1);
+        for (int i = 1; i < n; i++)
+        {
+            double x = Math.Round(i * cw) + 0.5;
+            ctx.DrawLine(i % 4 == 0 ? strong : NotaGraph.GridPen, new Point(x, 0), new Point(x, h));
+        }
+        var fill = NotaPalette.Wash(ink, 0x34);
+        for (int i = 0; i < n; i++)
+        {
+            double v = Q(_steps[i]);
+            if (v <= 0) continue;
+            double x0 = i * cw + 1, x1 = (i + 1) * cw - 1, y = h - v * h;
+            ctx.FillRectangle(fill, new Rect(x0, y, Math.Max(1, x1 - x0), h - y));
+            ctx.FillRectangle(ink, new Rect(x0, y, Math.Max(1, x1 - x0), 2));
+        }
+
+        // The gain curve: swing pushes the off-steps, smooth ramps into each step.
+        double Gain(double v) => 1 - _depth * (1 - Q(v));
+        double Y(double v) => 4 + (1 - Gain(v)) * (h - 8);
+        double r = _smooth * cw * 0.5;
+        var g = new StreamGeometry();
+        using (var c = g.Open())
+        {
+            c.BeginFigure(new Point(0, Y(_steps[0])), false);
+            for (int i = 0; i < n; i++)
+            {
+                double x = i * cw + (i % 2 == 1 ? _swing * cw : 0);
+                double yp = Y(_steps[(i + n - 1) % n]);
+                if (i > 0) c.LineTo(new Point(x, yp));
+                c.LineTo(new Point(x + r, Y(_steps[i])));
+            }
+            c.LineTo(new Point(w, Y(_steps[n - 1])));
+        }
+        ctx.DrawGeometry(null, new Pen(ink, 1.6, lineJoin: PenLineJoin.Round), g);
+
+        if (_phase >= 0 && _active)
+        {
+            double px = Math.Round(_phase * w) + 0.5;
+            ctx.DrawLine(new Pen(NotaPalette.Accent, 1), new Point(px, 0), new Point(px, h));
+        }
+        var ft = NotaGraph.AxisText(_label, _active ? NotaPalette.TextSecondary : NotaPalette.TextDisabled);
+        var chip = new Rect(w - ft.Width - 12, 5, ft.Width + 8, ft.Height + 2);
+        ctx.FillRectangle(NotaPalette.BgSunken, chip, (float)NotaRadius.SwitchValue);
+        ctx.DrawText(ft, new Point(chip.X + 4, chip.Y + 1));
+    }
+}

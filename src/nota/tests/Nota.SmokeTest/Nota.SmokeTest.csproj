@@ -1,0 +1,64 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Copy the right native engine for the build host: nota_engine.dll on Windows,
+       libnota_engine.dylib on macOS, libnota_engine.so on Linux. -->
+  <PropertyGroup>
+    <NotaNativeDir Condition="'$(NotaNativeDir)' == ''">$(MSBuildProjectDirectory)/../../src/native/nota.engine/build</NotaNativeDir>
+    <NotaEngineLib Condition="'$(NotaEngineLib)' == '' and '$(NotaEngineDylib)' != ''">$(NotaEngineDylib)</NotaEngineLib>
+    <NotaEngineLib Condition="'$(NotaEngineLib)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">$(NotaNativeDir)/nota_engine.dll</NotaEngineLib>
+    <NotaEngineLib Condition="'$(NotaEngineLib)' == '' and $([MSBuild]::IsOSPlatform('Linux'))">$(NotaNativeDir)/libnota_engine.so</NotaEngineLib>
+    <NotaEngineLib Condition="'$(NotaEngineLib)' == ''">$(NotaNativeDir)/libnota_engine.dylib</NotaEngineLib>
+    <NotaEngineLibName Condition="$([MSBuild]::IsOSPlatform('Windows'))">nota_engine.dll</NotaEngineLibName>
+    <NotaEngineLibName Condition="'$(NotaEngineLibName)' == '' and $([MSBuild]::IsOSPlatform('Linux'))">libnota_engine.so</NotaEngineLibName>
+    <NotaEngineLibName Condition="'$(NotaEngineLibName)' == ''">libnota_engine.dylib</NotaEngineLibName>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(NotaEngineLib)')">
+    <None Include="$(NotaEngineLib)">
+      <Link>$(NotaEngineLibName)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\managed\Nota.Infrastructure\Nota.Infrastructure.csproj" />
+    <!-- Referenced only so the arch-boundary check can reflect on the Presentation
+         assembly (Phase 0.7); Presentation is not in Infrastructure's closure. -->
+    <ProjectReference Include="..\..\src\managed\Nota.Presentation\Nota.Presentation.csproj" />
+    <ProjectReference Include="..\..\src\managed\Nota.Mcp\Nota.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\managed\Nota.Remote\Nota.Remote.csproj" />
+  </ItemGroup>
+
+  <!-- Engine contract types + ports live in the Application namespace. -->
+  <ItemGroup>
+    <Using Include="Nota.Application" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Markdig" Version="1.6.0" />
+    <Compile Include="..\..\src\managed\Nota.App\Input\ShortcutAvaloniaExtensions.cs" Link="ShortcutAvaloniaExtensions.cs" />
+    <Compile Include="..\..\src\managed\Nota.App\Input\KeyTokens.cs" Link="KeyTokens.cs" />
+    <!-- The Menu key's copy of the application menu (specs/093; Avalonia base only). -->
+    <Compile Include="..\..\src\managed\Nota.App\MenuMirror.cs" Link="MenuMirror.cs" />
+    <!-- What's New's changelog / release-notes parsers (no Avalonia inside). -->
+    <Compile Include="..\..\src\managed\Nota.App\Changelog.cs" Link="Changelog.cs" />
+    <Compile Include="..\..\src\managed\Nota.App\Assistant\MarkdownPipeline.cs" Link="MarkdownPipeline.cs" />
+    <!-- Which language of the manual the app opens (nota#539; no Avalonia inside). -->
+    <Compile Include="..\..\src\managed\Nota.App\ManualLanguage.cs" Link="ManualLanguage.cs" />
+    <!-- Typed value entry's parser / read-out search (no Avalonia inside). -->
+    <Compile Include="..\..\src\managed\Nota.App\Controls\ValueText.cs" Link="ValueText.cs" />
+    <!-- Clip editor position / tempo / ruler math (specs/036; no Avalonia inside). -->
+    <Compile Include="..\..\src\managed\Nota.App\ClipEditor\*.cs" LinkBase="ClipEditor" />
+    <!-- The splash's per-release art: scene + composer (specs/074; no Avalonia inside). -->
+    <Compile Include="..\..\src\managed\Nota.App\Theme\SplashArt\SplashScene.cs" Link="SplashArt/SplashScene.cs" />
+    <Compile Include="..\..\src\managed\Nota.App\Theme\SplashArt\SplashArtComposer.cs" Link="SplashArt/SplashArtComposer.cs" />
+  </ItemGroup>
+
+</Project>

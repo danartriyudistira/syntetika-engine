@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System;
+using Nota.Application;
+
+namespace Nota.Infrastructure;
+
+/// <summary>Drives an offline track freeze (M7): stops the audio backend for exclusive
+/// engine access, bounces the track's pre-fader chain into its freeze buffer, then
+/// restarts the backend. Mirrors <see cref="AudioExporter"/>'s stop/render/restore
+/// shape; the caller suspends the UI clock first.</summary>
+public sealed class TrackFreezer
+{
+    private const int Chunk = 8192; // must stay <= engine kMaxBlock
+
+    /// <summary>Freezes <paramref name="trackId"/> over [0, <paramref name="lengthBeats"/>].
+    /// Returns false when the engine can't freeze the track (empty/unsupported).</summary>
+    public bool Freeze(IAudioEngine engine, int trackId, double lengthBeats,
+                       bool restoreLoop, bool restoreMetronome, IProgress<double>? progress = null)
+    {
+        double restoreBeat = engine.PositionBeats;
+        double loopStart = engine.LoopStart, loopEnd = engine.LoopEnd; // preserve the loop region
+
+        bool wasRunning = engine.IsRunning; // restart afterwards only what was running
+        engine.Stop();               // halt the audio backend: no audio thread during capture
+        engine.SetLoop(false, 0, 0); // capture the whole range once, no wrap
+        engine.SetMetronome(false);  // keep clicks out of the freeze
+        engine.StopTransport();
+
+        long total = engine.BeginFreeze(trackId, lengthBeats);
+        if (total <= 0) { Restore(engine, restoreLoop, restoreMetronome, loopStart, loopEnd, restoreBeat, wasRunning); return false; }
+
+        try
+        {
+            engine.StopTransport();
+            engine.Seek(0);
+            engine.Play();            // audio/instrument content only renders while playing
+
+            var buf = new float[Chunk * 2]; // discarded: we only want the per-track capture
+            long remaining = total, done = 0;
+            int lastPct = -1;
+            while (remaining > 0)
+            {
+                int m = (int)Math.Min(Chunk, remaining);
+                engine.RenderOffline(buf, m); // capture happens inside mixGraph at the device rate
+                remaining -= m; done += m;
+                if (progress is not null && total > 0)
+                {
+                    int pct = (int)(100.0 * done / total);
+                    if (pct != lastPct) { lastPct = pct; progress.Report((double)done / total); }
+                }
+            }
+            engine.StopTransport();
+            engine.EndFreeze(trackId);
+        }
+        catch
+        {
+            engine.CancelFreeze();
+            Restore(engine, restoreLoop, restoreMetronome, loopStart, loopEnd, restoreBeat, wasRunning);
+            throw;
+        }
+
+        Restore(engine, restoreLoop, restoreMetronome, loopStart, loopEnd, restoreBeat, wasRunning);
+        progress?.Report(1.0);
+        return true;
+    }
+
+    /// <summary>Paste Bounced Audio (⌘⇧V): renders <paramref name="trackId"/>'s post-device,
+    /// pre-fader sound over [<paramref name="startBeat"/>, <paramref name="endBeat"/>) and returns
+    /// it as interleaved stereo at the device rate (exactly the range, no tail), without freezing
+    /// the track. Null when the engine can't capture the track (unsupported type).</summary>
+    public float[]? BounceRange(IAudioEngine engine, int trackId, double startBeat, double endBeat,
+                                bool restoreLoop, bool restoreMetronome, IProgress<double>? progress = null)
+    {
+        if (endBeat <= startBeat) return null;
+        double restoreBeat = engine.PositionBeats;
+        double loopStart = engine.LoopStart, loopEnd = engine.LoopEnd;
+
+        bool wasRunning = engine.IsRunning;
+        engine.Stop();
+        engine.SetLoop(false, 0, 0);
+        engine.SetMetronome(false);
+        engine.StopTransport();
+
+        long total = engine.BeginBounceRange(trackId, startBeat, endBeat);
+        if (total <= 0) { Restore(engine, restoreLoop, restoreMetronome, loopStart, loopEnd, restoreBeat, wasRunning); return null; }
+
+        float[] pcm;
+        try
+        {
+            engine.Seek(startBeat);   // capture starts at the range start; held notes are chased
+            engine.Play();
+
+            var buf = new float[Chunk * 2];
+            long remaining = total, done = 0;
+            int lastPct = -1;
+            while (remaining > 0)
+            {
+                int m = (int)Math.Min(Chunk, remaining);
+                engine.RenderOffline(buf, m);
+                remaining -= m; done += m;
+                int pct = (int)(100.0 * done / total);
+                if (progress is not null && pct != lastPct) { lastPct = pct; progress.Report((double)done / total); }
+            }
+            engine.StopTransport();
+            pcm = new float[total * 2];
+            engine.TakeFreezeCapture(pcm);   // disarms without freezing the track (short = zero-padded)
+        }
+        catch
+        {
+            engine.CancelFreeze();
+            Restore(engine, restoreLoop, restoreMetronome, loopStart, loopEnd, restoreBeat, wasRunning);
+            throw;
+        }
+
+        Restore(engine, restoreLoop, restoreMetronome, loopStart, loopEnd, restoreBeat, wasRunning);
+        progress?.Report(1.0);
+        return pcm;
+    }
+
+    private static void Restore(IAudioEngine engine, bool loop, bool metronome,
+                                double loopStart, double loopEnd, double beat, bool wasRunning)
+    {
+        engine.StopTransport();
+        engine.Seek(beat);
+        engine.SetLoop(loop, loopStart, loopEnd);
+        engine.SetMetronome(metronome);
+        if (wasRunning) engine.Start(); // resume live audio — only if it was live before
+    }
+}

@@ -1,0 +1,264 @@
+name: Release
+
+# Builds and publishes Nota for every x64 + arm64 target across macOS, Windows and
+# Linux. Runs ONLY on a semver release tag (vX.Y.Z), and only when that tag points at a
+# commit contained in `main`. The GitHub release is created as a DRAFT whose body is the
+# curated release notes (release-notes/X.Y.Z.{en,ru}.md, rendered by
+# scripts/release-notes.sh); you review the artifacts and publish manually.
+#
+# Manual run (Actions -> Release -> Run workflow): builds the chosen platforms from
+# any branch, without a tag, and only uploads the build artifacts — no release is
+# created. Use it to check a platform build before tagging.
+#
+# Artifacts:
+#   macOS   -> Nota-<version>-arm64.dmg , Nota-<version>-x86_64.dmg
+#   Windows -> Nota-Setup-<version>-x64.exe , Nota-Setup-<version>-arm64.exe
+#   Linux   -> Nota-<version>-x86_64.AppImage , Nota-<version>-aarch64.AppImage
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to build (no release is created)
+        type: choice
+        default: macos
+        options: [macos, windows, linux, all]
+
+permissions:
+  contents: write   # create the release + upload assets
+
+jobs:
+  # --------------------------------------------------------------------------------
+  # Gate: the tag must be on main, must match the VERSION file, and must have a
+  # CHANGELOG section and curated release notes. Every build job depends on this, so a
+  # bad tag never builds.
+  # --------------------------------------------------------------------------------
+  guard:
+    name: ${{ github.event_name == 'push' && 'Validate release tag' || 'Read version' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # full history so we can test ancestry against main
+
+      - name: Verify tag is on main, matches VERSION, and has a changelog entry
+        id: meta
+        run: |
+          set -euo pipefail
+          # Manual run: no tag to validate — just take the version from the branch.
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$(tr -d '[:space:]' < VERSION)"
+            echo "Manual build of $GITHUB_REF_NAME (version $version)"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          echo "Release tag: $GITHUB_REF_NAME  (version $version)"
+
+          # 1) The tagged commit must be reachable from main.
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME ($GITHUB_SHA) is not contained in main — releases build only from main."
+            exit 1
+          fi
+
+          # 2) The tag must match the VERSION file (the release single source of truth).
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          if [ "$version" != "$file_version" ]; then
+            echo "::error::Tag version ($version) does not match VERSION file ($file_version)."
+            exit 1
+          fi
+
+          # 3) There must be a CHANGELOG section to use as the release body.
+          if ! grep -qE "^## \[${version}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${version}]' section."
+            exit 1
+          fi
+
+          # 4) There must be curated release notes in both languages for the release body.
+          for lang in en ru; do
+            if [ ! -s "release-notes/${version}.${lang}.md" ]; then
+              echo "::error::release-notes/${version}.${lang}.md is missing or empty."
+              exit 1
+            fi
+          done
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # --------------------------------------------------------------------------------
+  # macOS — one .dmg per arch (Apple Silicon + Intel). Both build on the arm64
+  # runner: clang cross-compiles the x86_64 engine, dotnet cross-publishes osx-x64.
+  # macos-26 for the same Xcode 26 toolchain the engine is developed with; the
+  # minimum macOS the app runs on is set by the deployment target (13.0), not here.
+  # --------------------------------------------------------------------------------
+  macos:
+    name: Build macOS (${{ matrix.arch }})
+    needs: guard
+    if: github.event_name == 'push' || contains(fromJSON('["macos","all"]'), inputs.platforms)
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache   # fetched deps, cached across runs
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache CPM dependency sources   # JUCE, flac, … (cmake/dependencies.cmake)
+        uses: actions/cache@v6
+        with:
+          path: .cpm-cache
+          key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/native/nota.engine/cmake/dependencies.cmake', 'src/native/nota.engine/CMakeLists.txt') }}
+          restore-keys: cpm-${{ runner.os }}-${{ runner.arch }}-
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v5   # builds the Nota Remote phone page (Vite: Node 20.19+ / 22.12+)
+        with:
+          node-version: '22'
+      - name: Install build tools
+        run: brew install cmake ninja
+      - name: Package ${{ matrix.arch }} .dmg
+        run: bash scripts/package-dmg.sh ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/Nota-*-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------------
+  # Windows — x64 + arm64 installers, both cross-built from the x64 runner via the
+  # Visual Studio generator (its -A flag targets ARM64 from an x64 host). Pinned to
+  # windows-2022 for a known VS 2022 toolchain with the ARM64 build tools: as of June
+  # 2026 windows-latest/windows-2025 ship Visual Studio 2026, which the script also
+  # supports (it auto-selects the newest installed VS), but the 2022 image is the
+  # verified combination for the ARM64 cross-build.
+  # --------------------------------------------------------------------------------
+  windows:
+    name: Build Windows (x64 + arm64)
+    needs: guard
+    if: github.event_name == 'push' || contains(fromJSON('["windows","all"]'), inputs.platforms)
+    runs-on: windows-2022
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache   # fetched deps, cached across runs
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache CPM dependency sources   # JUCE, flac, … (cmake/dependencies.cmake)
+        uses: actions/cache@v6
+        with:
+          path: .cpm-cache
+          key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/native/nota.engine/cmake/dependencies.cmake', 'src/native/nota.engine/CMakeLists.txt') }}
+          restore-keys: cpm-${{ runner.os }}-${{ runner.arch }}-
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v5   # builds the Nota Remote phone page (Vite: Node 20.19+ / 22.12+)
+        with:
+          node-version: '22'
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Package x64 installer
+        run: pwsh scripts/package-win.ps1 x64
+      - name: Package arm64 installer
+        run: pwsh scripts/package-win.ps1 arm64
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows
+          path: dist/Nota-Setup-*.exe
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------------
+  # Linux — one AppImage per arch. The native .so can't be cross-compiled, so each
+  # arch builds on its own native runner — inside a manylinux_2_28 container
+  # (AlmaLinux 8: glibc 2.28, gcc-toolset-14 pre-enabled on PATH) so the shipped
+  # binaries also run on RHEL/Alma/Rocky 8 & 9 and every distro with glibc >= 2.28.
+  # Building on the runner image itself (glibc 2.39) would tie them to it. The
+  # check-glibc-floor.sh step below fails the build on any regression above it.
+  # --------------------------------------------------------------------------------
+  linux:
+    name: Build Linux (${{ matrix.arch }})
+    needs: guard
+    if: github.event_name == 'push' || contains(fromJSON('["linux","all"]'), inputs.platforms)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+            image: quay.io/pypa/manylinux_2_28_x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Point CPM at the cache   # $GITHUB_WORKSPACE is the container path (github.workspace isn't)
+        run: echo "CPM_SOURCE_CACHE=$GITHUB_WORKSPACE/.cpm-cache" >> "$GITHUB_ENV"
+      - name: Cache CPM dependency sources   # JUCE, flac, … (cmake/dependencies.cmake)
+        uses: actions/cache@v6
+        with:
+          path: .cpm-cache
+          key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/native/nota.engine/cmake/dependencies.cmake', 'src/native/nota.engine/CMakeLists.txt') }}
+          restore-keys: cpm-${{ runner.os }}-${{ runner.arch }}-
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v5   # builds the Nota Remote phone page (Vite: Node 20.19+ / 22.12+)
+        with:
+          node-version: '22'
+      # dnf names (EL8); cmake and gcc-toolset-14 (C++20) ship with the image, so
+      # only the engine's library headers, ninja, mksquashfs and the .NET SDK's
+      # libicu come from here. No sudo: the container already runs as root.
+      - name: Install build + packaging deps
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            alsa-lib-devel libX11-devel libXext-devel libXrandr-devel \
+            libXinerama-devel libXcursor-devel freetype-devel fontconfig-devel \
+            ninja-build squashfs-tools file libicu
+      - name: Package AppImage
+        run: bash scripts/package-linux.sh ${{ matrix.arch }}
+      - name: Guard the glibc floor (the AppImage must run on glibc >= 2.28)
+        run: bash scripts/check-glibc-floor.sh dist/Nota.AppDir/usr/bin
+      - uses: actions/upload-artifact@v6
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/Nota-*.AppImage
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------------
+  # Draft release — collect every artifact and attach the curated release notes as the body.
+  # --------------------------------------------------------------------------------
+  release:
+    name: Create draft release
+    needs: [guard, macos, windows, linux]
+    if: github.event_name == 'push'   # manual runs only build, never release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Render release notes for this version
+        run: |
+          set -euo pipefail
+          bash scripts/release-notes.sh "${{ needs.guard.outputs.version }}" github > RELEASE_NOTES.md
+          echo "----- release notes -----"; cat RELEASE_NOTES.md
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Nota ${{ needs.guard.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          files: artifacts/**/*
+          fail_on_unmatched_files: true

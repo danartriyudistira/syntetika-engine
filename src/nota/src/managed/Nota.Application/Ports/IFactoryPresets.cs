@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+namespace Nota.Application;
+
+/// <summary>A shipped factory preset for a built-in instrument or effect, described
+/// for the browser. Grouped under its parent device (BuiltinKind + IsInstrument), then
+/// into a <see cref="Category"/> folder (Pads, Bass, Vocals, Mastering …) when it has one.</summary>
+public readonly record struct FactoryPresetInfo(
+    string Id,            // stable synthetic id; the browser row's Path is "factory:" + Id
+    string DisplayName,
+    bool IsInstrument,    // groups under the Instruments tree
+    int BuiltinKind,      // parent built-in device kind
+    bool IsMidiEffect = false,  // groups under the MIDI tree (else FX when not an instrument)
+    string Category = "");      // folder inside the device; "" = loose at the device's top (Init)
+
+/// <summary>The built-in (read-only) preset library shipped with the app.</summary>
+public interface IFactoryPresets
+{
+    /// <summary>All factory presets, in catalog order.</summary>
+    IReadOnlyList<FactoryPresetInfo> All();
+
+    /// <summary>Applies a factory preset by id. Instrument presets create a new track;
+    /// effect presets add to <paramref name="targetTrackId"/>. Returns "" on success or a
+    /// user-facing warning.</summary>
+    string Apply(IAudioEngine engine, string id, int targetTrackId);
+
+    /// <summary>Applies a factory preset by id to an EXISTING instrument/device in place
+    /// (deviceIndex -1 = the track's instrument), for the in-header preset picker.</summary>
+    string ApplyInPlace(IAudioEngine engine, string id, int trackId, int deviceIndex);
+
+    /// <summary>Returns an existing built-in instrument / effect / MIDI effect to Init — every
+    /// parameter at its default (deviceIndex -1 = the track's instrument). The card size and a
+    /// loaded sample stay as they are. Returns "" on success or a user-facing warning.</summary>
+    string ResetInPlace(IAudioEngine engine, int trackId, int deviceIndex, bool midiEffect);
+
+    /// <summary>A built-in instrument preset's params by id (null when the id is unknown or the
+    /// preset names none) — for loading part of a preset, e.g. one Nota Twin part (specs/055).</summary>
+    IReadOnlyDictionary<string, float>? InstrumentParams(string id) => null;
+}

@@ -1,0 +1,868 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices — the Nota Rhythm editor (instrument kind 12): an eight-voice drum
+// machine in the 700 × 260 card the almanac draws for it. Reading order, left to right:
+//
+//   KIT 104       the voices — a hue dot, the name (a kit voice takes its sample's name), an
+//                 "fx" mark when it has effects, SYN / SMP. Click selects and plays the voice;
+//                 drop a file on one to load it as a sample; right-click for more. The kit
+//                 itself is the header's preset picker (the factory drum kits).
+//   VOICE         the selected voice, on two tabs. Sound — Synth: the HIT contour (drag it —
+//                 across is Decay, up / down Tune) and Tune · Decay · Punch · Tone · Drive ·
+//                 Level; Sample: the file with its Start / End region (drag the lines),
+//                 Reverse, and Start · Length · Tune (st) · Decay · Drive · Level. FX — the
+//                 voice's insert chain, the Drum Rack's device slots over RhythmVoiceAccess:
+//                 click a slot for the effect's own card, add from the menu or drop one.
+//                 MACRO (the header's VOICE / MACRO) swaps the whole panel for the kit's eight
+//                 macros (MacroPanel): a knob each, its name and where it goes. They map onto
+//                 voice params and onto the voices' effects; a kit loads with its own
+//                 (KitMacros). Map adds a receiver to the selected macro; right-click a macro
+//                 for its receivers and ranges, rename or clear.
+//   PERFORM 186   Swing · Human · Accent (teal — they shape the playing, not the sound),
+//                 Volume and Glue (the bus compressor).
+//   STEP          a full-width strip: the selected voice's sixteen steps in bank A–D, a
+//                 velocity lane under them. An on step is accent (a toggle that is on), a
+//                 brighter one the accent step, an outline a quiet step; teal is the playhead
+//                 and the velocity.
+//
+// Every knob is a plugin param → automation / persist / clone, followed live. The steps are
+// structural state, edited via engine.InstrumentAction and read from the state blob; the
+// engine bumps an edit revision in its scope, so an edit made elsewhere (MCP) shows up here.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Platform.Storage;
+using Nota.Application;
+using static Nota.App.DeviceCardKit;
+using RM = Nota.Application.RhythmModel;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+internal sealed class RhythmInstrumentCard : IInstrumentCard
+{
+    public bool BodyOnly => true;
+    public string Subtitle => "Drum machine";
+    public double CardWidth => 700;
+
+    public string? VoiceLabel(IAudioEngine engine, int trackId, int active) => $"{Math.Max(0, active)}/{RM.Voices}";
+
+    private const double KitW = 104, RailW = 186, StepH = 46, HeadH = 18, GraphW = 112;
+
+    private static int _voiceTab;   // 0 Sound, 1 FX — kept across rebuilds (a voice click, a kit load)
+    private static bool _macroMode; // the centre shows the macros instead of the voice
+    private static int _macro;      // the selected macro, 0..7
+
+    // A kit voice is named after its one-shot ("04 Clap" → "Clap"); a synth voice by its slot.
+    private static string VoiceLabel(IAudioEngine engine, int track, int v, bool sample)
+    {
+        if (sample && engine.TryGetRhythmVoiceInfo(track, v, out var vi) && vi.SampleId != 0)
+        {
+            string n = System.Text.RegularExpressions.Regex.Replace(engine.SampleName(vi.SampleId), @"^\d+\s+", "");
+            if (n.Length > 0) return n;
+        }
+        return RM.VoiceNames[v];
+    }
+
+    // A bank chosen but not yet playing (Bank Switch: Pattern): a tint of the playing bank's teal.
+    private static readonly IBrush QueuedBank = Teal is SolidColorBrush t ? NotaPalette.Wash(t, 0x59) : Teal;
+
+    // Kit-voice identity hues — one per voice, painted only through NotaPalette.Ink.
+    private static readonly string[] Dots = { "#C77F55", "#D8A03D", "#3E8E8E", "#7A6FB0", "#9AA64A", "#58B368", "#5AA0B8", "#B57286" };
+
+    public Control Build(DeviceCardContext ctx)
+    {
+        var engine = ctx.Engine;
+        int track = ctx.TrackId;
+        int pc = engine.PluginParamCount(track, -1);
+        var idx = new Dictionary<string, int>();
+        for (int i = 0; i < pc; i++) idx[engine.PluginParamId(track, -1, i)] = i;
+        int I(string id) => idx.TryGetValue(id, out var i) ? i : -1;
+        float G(string id) => I(id) is var i and >= 0 ? engine.PluginParamGet(track, -1, i) : 0f;
+        void SetP(string id, float v) { if (I(id) is var i and >= 0) engine.PluginParamSet(track, -1, i, Math.Clamp(v, 0f, 1f)); }
+        void Begin(string id) { if (I(id) >= 0) engine.BeginAutomationWrite(track, AutomationTarget.PluginParam, -1, -1, id); }
+        void End(string id) { if (I(id) >= 0) engine.EndAutomationWrite(track, AutomationTarget.PluginParam, -1, -1, id); }
+        void Write(string id, float v) { Begin(id); SetP(id, v); End(id); }
+        void Act(int id, int iarg, float farg = 0f) => engine.InstrumentAction(track, id, iarg, farg);
+
+        // ---- state ----------------------------------------------------------------------
+        var pat = RM.Parse(engine.GetPluginState(track, -1), pc);
+        int sel = pat.SelectedVoice;
+        // The Bank param (specs/100) is the bank the strip edits and the one that plays next; the
+        // playing bank (scope) trails it while a Pattern-mode switch waits for the pattern start.
+        int bank = RM.BankOf(G(RM.BankId));
+        int playing = bank;
+        var isSample = new bool[RM.Voices];
+        for (int v = 0; v < RM.Voices; v++) isSample[v] = engine.RhythmVoiceSource(track, v) == 1;
+        long sid = engine.TryGetRhythmVoiceInfo(track, sel, out var vinfo) ? vinfo.SampleId : 0;
+        bool sampleMode = isSample[sel] && sid != 0;
+        string sampleName = sid != 0 ? VoiceLabel(engine, track, sel, true) : "";
+        if (sampleName.Length == 0 && sid != 0) sampleName = "sample";
+        double sampleSecs = sid != 0 && engine.TryGetSampleInfo(sid, out var sinfo) && sinfo.SampleRate > 0 ? sinfo.Frames / sinfo.SampleRate : 0;
+        string P(string p) => RM.Id(sel, p);
+        IBrush Hue(int v) => NotaPalette.Ink(Dots[v]);
+
+        var readouts = new List<Action>();
+        var scope = new float[RM.ScopeLength];
+        int lastRev = -1;
+        float flashSel = 0, posSel = -1;
+        var strip = new RhythmStepStrip();
+        var bankCells = new Border[RM.Banks];
+        var bankTexts = new TextBlock[RM.Banks];
+
+        static TextBlock Cap(string t, IBrush? c = null) => new()
+        {
+            Text = NotaText.Label(t), FontSize = NotaType.KnobLabel, FontWeight = FontWeight.Medium,
+            Foreground = c ?? TextTertiary,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        static TextBlock Mono(string t, IBrush? c = null, double fs = 7) => new()
+        {
+            Text = t, FontSize = fs, Foreground = c ?? TextSecondary,
+            VerticalAlignment = VerticalAlignment.Center, FontFamily = NotaFonts.ValuesFamily,
+        };
+
+
+        void Refresh() { foreach (var r in readouts) r(); }
+
+        // ---- shared builders ---------------------------------------------------------------
+        Control PKnob(string id, string label, Func<float, string> fmt, double size = 30, double cellW = 42, string? tip = null)
+        {
+            if (!idx.TryGetValue(id, out var pi)) return new Panel();
+            var value = new TextBlock { Text = fmt(G(id)), Foreground = TextPrimary };
+            var knob = new Knob(G(id), 1.0)
+            {
+                Accent = true, Default = engine.InstrumentParamDefault(track, pi), Width = size, Height = size,
+            };
+            knob.Format = v => fmt((float)v);
+            knob.ValueChanged += v => { engine.PluginParamSet(track, -1, pi, (float)v); value.Text = fmt((float)v); Refresh(); };
+            knob.GestureBegin += () => Begin(id);
+            knob.GestureEnd += () => End(id);
+            ctx.AddInstFader(pi, knob, value, fmt);
+            MidiLearn.Bind(knob, MidiTarget.PluginParam(track, -1, pi), engine.PluginParamName(track, -1, pi));
+            var cell = KnobCell(label, knob, value, cellW);
+            cell.VerticalAlignment = VerticalAlignment.Center;
+            if (tip is not null) ToolTip.SetTip(cell, tip);
+            return cell;
+        }
+
+        Grid Slider(string label, string id, string tip)
+        {
+            int pi = I(id);
+            var row = SliderRow(label, () => G(id), v => { SetP(id, (float)v); Refresh(); }, () => RM.Pct(G(id)), out var sync,
+                begin: pi >= 0 ? () => Begin(id) : null,
+                end: pi >= 0 ? () => End(id) : null,
+                reset: pi >= 0 ? () => { Write(id, engine.InstrumentParamDefault(track, pi)); Refresh(); } : null,
+                labelWidth: 38, valueWidth: 28, modulation: true);
+            row.ColumnSpacing = 6;
+            readouts.Add(sync);
+            ToolTip.SetTip(row, tip);
+            if (pi >= 0) MidiLearn.Bind(row, MidiTarget.PluginParam(track, -1, pi), engine.PluginParamName(track, -1, pi));
+            return row;
+        }
+
+        // A small raised button; a latching one turns accent-washed while on.
+        Border SmallButton(Control content, TextBlock label, Action click, Func<bool>? on = null)
+        {
+            var b = new Border
+            {
+                Height = 14, CornerRadius = NotaRadius.Cell, BorderThickness = new Thickness(1), Padding = new Thickness(6, 0),
+                Cursor = new Cursor(StandardCursorType.Hand), Child = content, VerticalAlignment = VerticalAlignment.Center,
+            };
+            void Paint()
+            {
+                bool lit = on?.Invoke() ?? false;
+                b.Background = lit ? NotaPalette.AccentSubtle : NotaPalette.SurfaceRaised;
+                b.BorderBrush = lit ? NotaPalette.BorderBrass : BorderDef;
+                label.Foreground = lit ? AccentBright : NotaPalette.TextStrong;
+            }
+            b.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(b).Properties.IsLeftButtonPressed) return;
+                click(); Paint(); e.Handled = true;
+            };
+            readouts.Add(Paint);
+            Paint();
+            return b;
+        }
+
+        // A freshly loaded one-shot plays at its own pitch and in full (the synth's tune
+        // default would transpose it); select its voice so the card shows it.
+        void Loaded(int voice)
+        {
+            Write(RM.Id(voice, "tune"), 0.5f);
+            Write(RM.Id(voice, "tone"), 1f);   // sample mode has no Tone knob: play the file open
+            Write(RM.Id(voice, "start"), 0f);
+            Write(RM.Id(voice, "length"), 1f);
+            Act(RM.A_SelectVoice, voice);
+        }
+
+        async void LoadSample(Control anchor, int voice)
+        {
+            var topLevel = TopLevel.GetTopLevel(anchor);
+            if (topLevel is null) return;
+            var files = await topLevel.PickFilesAsync(new FilePickerOpenOptions
+            {
+                Title = Loc.F("device.rhythm.load_a_sample_into", RM.VoiceNames[voice]), AllowMultiple = false,
+                FileTypeFilter = new[] { new FilePickerFileType("Audio") { Patterns = new[] { "*.wav", "*.flac", "*.mp3", "*.aif", "*.aiff", "*.ogg" } } },
+            });
+            if (files.Count > 0 && files[0].TryGetLocalPath() is { } p && engine.SetRhythmVoiceSample(track, voice, p))
+            {
+                Loaded(voice);
+                ctx.NotifyChanged(); ctx.RequestRebuild();
+            }
+        }
+
+        void AcceptDrops(Control target, int voice, Action<bool> hover)
+        {
+            DragDrop.SetAllowDrop(target, true);
+            DragDrop.AddDragOverHandler(target, (_, e) => { if (BrowserView.IsAcceptableDrag(e)) { e.DragEffects = DragDropEffects.Copy; hover(true); ctx.HideDropGlow(); e.Handled = true; } });
+            DragDrop.AddDragLeaveHandler(target, (_, _) => hover(false));
+            DragDrop.AddDropHandler(target, (_, e) =>
+            {
+                hover(false);
+                foreach (var it in BrowserView.DroppedItems(e))
+                    if (it.Kind != Nota.Presentation.BrowserItemKind.MidiFile && it.Path is { Length: > 0 } p && engine.SetRhythmVoiceSample(track, voice, p))
+                    {
+                        Loaded(voice);
+                        ctx.NotifyChanged(); ctx.RequestRebuild();
+                        break;
+                    }
+                e.Handled = true;
+            });
+        }
+
+        // ---- KIT ------------------------------------------------------------------------------
+        var kitRows = new Grid { Margin = new Thickness(2) };
+        var kitDots = new Ellipse[RM.Voices];
+        for (int v = 0; v < RM.Voices; v++)
+        {
+            kitRows.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+            int vv = v; bool on = v == sel;
+            var dot = new Ellipse { Width = 5, Height = 5, Fill = Hue(v), VerticalAlignment = VerticalAlignment.Center };
+            kitDots[v] = dot;
+            var nm = new TextBlock
+            {
+                Text = VoiceLabel(engine, track, v, isSample[v]), FontSize = 8, FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal,
+                Foreground = on ? AccentBright : TextPrimary, VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(5, 0, 4, 0),
+            };
+            var tag = Mono(isSample[v] ? "smp" : "syn", on ? AccentBright : TextTertiary);
+            var fxTag = Mono(engine.RhythmVoiceDeviceCount(track, v) > 0 ? "fx" : "", on ? AccentBright : TextTertiary);
+            fxTag.Margin = new Thickness(0, 0, 3, 0);
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(5, 0) };
+            row.Children.Add(dot);
+            Grid.SetColumn(nm, 1); row.Children.Add(nm);
+            Grid.SetColumn(fxTag, 2); row.Children.Add(fxTag);
+            Grid.SetColumn(tag, 3); row.Children.Add(tag);
+            IBrush restBorder = on ? NotaPalette.BorderBrass : Brushes.Transparent;
+            var box = new Border
+            {
+                CornerRadius = NotaRadius.Cell, BorderThickness = new Thickness(1), Cursor = new Cursor(StandardCursorType.Hand),
+                Background = on ? NotaPalette.AccentSubtle : Brushes.Transparent, BorderBrush = restBorder, Child = row,
+            };
+            ToolTip.SetTip(box, Loc.F("device.rhythm.midi_click_select_and_play", RM.VoiceNames[v], DeviceCardKit.NoteName(RM.MidiNotes[v])));
+            AttachFxTip(fxTag, v);
+            box.PointerPressed += (_, e) =>
+            {
+                var pt = e.GetCurrentPoint(box);
+                e.Handled = true;
+                if (pt.Properties.IsRightButtonPressed) { KitMenu(vv, box); return; }
+                if (!pt.Properties.IsLeftButtonPressed) return;
+                Act(RM.A_Audition, vv, 0.8f);
+                if (vv != sel) { Act(RM.A_SelectVoice, vv); ctx.RequestRebuild(); }
+            };
+            AcceptDrops(box, vv, h => box.BorderBrush = h ? Teal : restBorder);
+            Grid.SetRow(box, v); kitRows.Children.Add(box);
+        }
+        void AttachFxTip(Control c, int v)
+        {
+            int n = engine.RhythmVoiceDeviceCount(track, v);
+            if (n == 0) return;
+            var names = new List<string>();
+            for (int d = 0; d < n; d++) names.Add(engine.RhythmVoiceDeviceName(track, v, d));
+            ToolTip.SetTip(c, "Effects: " + string.Join(" → ", names));
+        }
+        void KitMenu(int v, Control anchor)
+        {
+            var fly = new MenuFlyout();
+            var load = new MenuItem { Header = Loc.T("device.rhythm.load_sample") };
+            load.Click += (_, _) => LoadSample(anchor, v);
+            fly.Items.Add(load);
+            bool has = engine.TryGetRhythmVoiceInfo(track, v, out var vi) && vi.SampleId != 0;
+            var src = new MenuItem { Header = isSample[v] ? Loc.T("device.rhythm.play_the_synth_engine") : Loc.T("device.rhythm.play_the_loaded_sample"), IsEnabled = isSample[v] || has };
+            src.Click += (_, _) => { Act(RM.A_SetSource, v, isSample[v] ? 0f : 1f); ctx.NotifyChanged(); ctx.RequestRebuild(); };
+            fly.Items.Add(src);
+            fly.Items.Add(new Separator());
+            fly.Items.Add(MenuKit.Danger(Loc.F("device.rhythm.clear_its_steps_in_bank", RM.BankNames[bank]), GlyphKind.Trash,
+                () => { Act(RM.A_ClearVoice, v); ctx.NotifyChanged(); ReloadPattern(); }));
+            fly.ShowAt(anchor);
+        }
+        var kitHead = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Margin = new Thickness(7, 0) };
+        kitHead.Children.Add(Cap("KIT"));
+        var kitSub = Mono("syn/smp", NotaPalette.TextDisabled); kitSub.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(kitSub, 1); kitHead.Children.Add(kitSub);
+        var kit = Section(kitHead, kitRows);
+        kit.Width = KitW;
+
+        // ---- VOICE ----------------------------------------------------------------------------
+        var srcSeg = Segments(new[] { "Synth", "Sample" }, () => sampleMode ? 1 : 0, i =>
+        {
+            if (i == 1)
+            {
+                if (sid != 0) { Act(RM.A_SetSource, sel, 1f); ctx.NotifyChanged(); ctx.RequestRebuild(); }
+                else LoadSample(kit, sel);
+            }
+            else if (sampleMode) { Act(RM.A_SetSource, sel, 0f); ctx.NotifyChanged(); ctx.RequestRebuild(); }
+        }, out _, padX: 6, fontSize: 7);
+        ToolTip.SetTip(srcSeg, Loc.T("device.rhythm.synth_the_voices_own_engine"));
+
+        var folder = new Glyph(GlyphKind.Folder, 8) { Foreground = NotaPalette.TextStrong };
+        var fileText = new TextBlock
+        {
+            Text = sampleMode ? sampleName : "Load file…", FontSize = 7, FontWeight = FontWeight.SemiBold, MaxWidth = 90,
+            TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (sampleMode) fileText.FontFamily = NotaFonts.ValuesFamily;
+        var fileBtn = SmallButton(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { folder, fileText } }, fileText,
+            () => LoadSample(kit, sel), () => sampleMode);
+        readouts.Add(() => folder.Foreground = sampleMode ? NotaPalette.TextPrimary : NotaPalette.TextStrong);
+        ToolTip.SetTip(fileBtn, sampleMode ? Loc.F("device.rhythm.click_to_load_another_file", sampleName) : Loc.T("device.rhythm.load_a_one_shot_into"));
+
+        var voiceHead = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(7, 0), VerticalAlignment = VerticalAlignment.Center };
+        // VOICE / MACRO: which the centre shows. The lit one is the one on screen.
+        Control ModeCap(string text, bool macro)
+        {
+            bool on = macro == _macroMode;
+            var c = Cap(text, on ? (macro ? AccentBright : NotaPalette.TextStrong) : NotaPalette.TextDisabled);
+            var host = new Border { Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand), Child = c };
+            ToolTip.SetTip(host, macro ? Loc.T("device.rhythm.the_kits_eight_macros_knobs") : Loc.T("device.rhythm.the_selected_voices_sound_and"));
+            host.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(host).Properties.IsLeftButtonPressed) return;
+                e.Handled = true;
+                if (_macroMode != macro) { _macroMode = macro; ctx.RequestRebuild(); }
+            };
+            return host;
+        }
+        voiceHead.Children.Add(ModeCap("VOICE", false));
+        voiceHead.Children.Add(ModeCap("MACRO", true));
+        if (!_macroMode) voiceHead.Children.Add(new TextBlock { Text = VoiceLabel(engine, track, sel, sampleMode), FontSize = 9, FontWeight = FontWeight.SemiBold, Foreground = TextPrimary, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 84, TextTrimming = TextTrimming.CharacterEllipsis });
+        int fxCount = engine.RhythmVoiceDeviceCount(track, sel);
+        var tabSeg = Segments(new[] { "Sound", fxCount > 0 ? $"FX {fxCount}" : "FX" }, () => _voiceTab, i =>
+        {
+            if (i == _voiceTab) return;
+            _voiceTab = i; ctx.RequestRebuild();
+        }, out _, padX: 6, fontSize: 7);
+        ToolTip.SetTip(tabSeg, Loc.T("device.rhythm.sound_the_voices_source_and"));
+        if (!_macroMode) voiceHead.Children.Add(tabSeg);
+        var voiceTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+        var macros = new RhythmMacroSurface(engine, track, idx, isSample, Dots);
+        if (_macroMode)
+        {
+            voiceTools.Children.Add(Mono(Loc.F("device.rhythm.slots_assigned", MacroPanel.Count, MacroPanel.Assigned(macros))));
+            Border map = null!;
+            map = MacroPanel.Button("Map", teal: true, () => MacroPanel.ShowMapMenu(ctx, macros, map, _macro));
+            map.Height = 14;
+            ToolTip.SetTip(map, Loc.F("device.rhythm.add_a_receiver_to_a", macros.MacroName(_macro)));
+            voiceTools.Children.Add(map);
+        }
+        else if (_voiceTab == 0) { voiceTools.Children.Add(srcSeg); voiceTools.Children.Add(fileBtn); }
+        else if (_voiceTab == 1)
+        {
+            var hint = Mono("signal left → right", NotaPalette.TextDisabled);
+            voiceTools.Children.Add(hint);
+        }
+        if (sampleMode && _voiceTab == 0 && !_macroMode)
+        {
+            var revText = new TextBlock { Text = "Reverse", FontSize = 7, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+            var rev = SmallButton(revText, revText,
+                () => { Write(P("reverse"), G(P("reverse")) >= 0.5f ? 0f : 1f); Refresh(); }, () => G(P("reverse")) >= 0.5f);
+            ToolTip.SetTip(rev, Loc.T("device.rhythm.play_the_region_back_to"));
+            if (I(P("reverse")) is var ri and >= 0) MidiLearn.Bind(rev, MidiTarget.PluginParam(track, -1, ri), engine.PluginParamName(track, -1, ri));
+            voiceTools.Children.Add(rev);
+        }
+        var voiceHeadRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        voiceHeadRow.Children.Add(voiceHead);
+        Grid.SetColumn(voiceTools, 1); voiceHeadRow.Children.Add(voiceTools);
+
+        Control graph;
+        if (sampleMode)
+        {
+            var sv = new RhythmSampleView { Width = GraphW };
+            if (engine.TryGetSampleInfo(sid, out var si)) sv.SetSamples(engine.ReadSample(sid), si.Channels);
+            sv.LoadRequested = () => LoadSample(sv, sel);
+            sv.DragBegin = _ => { Begin(P("start")); Begin(P("length")); };
+            sv.DragEnd = _ => { End(P("start")); End(P("length")); };
+            sv.Dragged = (which, f) =>
+            {
+                float st = G(P("start")), en = (float)RM.RegionEnd(st, G(P("length")));
+                if (which == 0) { float ns = (float)Math.Clamp(f, 0, en - 0.01); SetP(P("start"), ns); SetP(P("length"), en - ns); }
+                else SetP(P("length"), (float)Math.Clamp(f - st, 0.01, 1.0));
+                Refresh();
+            };
+            readouts.Add(() =>
+            {
+                float st = G(P("start")), en = (float)RM.RegionEnd(st, G(P("length")));
+                string secs = sampleSecs > 0 ? " · " + NotaNum.Unit((en - st) * sampleSecs, "0.00", "s") : "";
+                sv.Set(sampleName, Hue(sel), st, en, G(P("reverse")) >= 0.5f, posSel, $"{RM.Pct(st)} → {RM.Pct(en)}{secs}");
+            });
+            ToolTip.SetTip(sv, MenuKit.Keys(Loc.T("device.rhythm.drag_the_start_and_end")));
+            {
+                // ⌥-click a line to type it (specs/035); double-click still loads a file, so no reset here.
+                string st = P("start"), ln = P("length");
+                ValueEntry.AttachHandles(sv,
+                    [new ValueField("Start", () => G(st), v => RM.Pct(v), v =>
+                    {
+                        float en = (float)RM.RegionEnd(G(st), G(ln)), ns = (float)Math.Clamp(v, 0, en - 0.01);
+                        SetP(st, ns); SetP(ln, en - ns);
+                    }, () => { Begin(st); Begin(ln); }, () => { End(st); End(ln); }) { After = Refresh }],
+                    [new ValueField("End", () => RM.RegionEnd(G(st), G(ln)), v => RM.Pct(v), v => SetP(ln, (float)Math.Clamp(v - G(st), 0.01, 1.0)),
+                        () => Begin(ln), () => End(ln)) { After = Refresh }]);
+            }
+            AcceptDrops(sv, sel, _ => { });
+            graph = sv;
+        }
+        else
+        {
+            var hv = new RhythmHitView { Width = GraphW };
+            hv.DragBegin = () => { Begin(P("decay")); Begin(P("tune")); };
+            hv.DragEnd = () => { End(P("decay")); End(P("tune")); };
+            hv.Dragged = (dx, dy) => { SetP(P("decay"), G(P("decay")) + (float)(dx * 1.2)); SetP(P("tune"), G(P("tune")) + (float)(dy * 1.2)); Refresh(); };
+            readouts.Add(() =>
+            {
+                float d = G(P("decay")), t = G(P("tune")), pu = G(P("punch"));
+                double dec = RM.DecaySeconds(sel, d, pu), pit = RM.PitchSeconds(sel, t);
+                string cap = pit > 0 ? $"{RM.Ms(pit)} · {RM.Ms(dec)}" : RM.Ms(dec);
+                hv.Set(RM.VoiceNames[sel], dec, pit, RM.DecaySeconds(sel, 1, 0) * 0.8, pu, flashSel, cap);
+            });
+            ToolTip.SetTip(hv, MenuKit.Keys(Loc.T("device.rhythm.the_hit_amp_contour_over")));
+            {
+                string dk = P("decay"), tn = P("tune");
+                ValueEntry.AttachAll(hv,
+                    new ValueField("Decay", () => G(dk), v => RM.Pct(v), v => SetP(dk, (float)v), () => Begin(dk), () => End(dk)) { After = Refresh },
+                    new ValueField("Tune", () => G(tn), v => RM.Pct(v), v => SetP(tn, (float)v), () => Begin(tn), () => End(tn)) { After = Refresh });
+            }
+            AcceptDrops(hv, sel, _ => { });
+            graph = hv;
+        }
+
+        var knobs = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*,*,*"), VerticalAlignment = VerticalAlignment.Center };
+        Control[] cells = sampleMode
+            ? new[]
+            {
+                PKnob(P("start"), "START", v => RM.Pct(v), tip: Loc.T("device.rhythm.where_in_the_file_the")),
+                PKnob(P("length"), "LENGTH", v => RM.Pct(v), tip: Loc.T("device.rhythm.how_much_of_the_file")),
+                PKnob(P("tune"), "TUNE", v => RM.Semis(RM.SampleSemis(v)), tip: Loc.T("device.rhythm.transpose_12_semitones")),
+                PKnob(P("decay"), "DECAY", v => RM.Pct(v), tip: Loc.T("device.rhythm.amp_decay_shortens_the_hit")),
+                PKnob(P("drive"), "DRIVE", v => RM.Pct(v), tip: "Saturation"),
+                PKnob(P("level"), "LEVEL", v => RM.Pct(v), tip: Loc.T("device.rhythm.the_voices_level_in_the")),
+            }
+            : new[]
+            {
+                PKnob(P("tune"), "TUNE", v => RM.Pct(v), tip: Loc.T("device.rhythm.pitch_kick_snare_tom_hats")),
+                PKnob(P("decay"), "DECAY", v => RM.Pct(v), tip: "Amp decay"),
+                PKnob(P("punch"), "PUNCH", v => RM.Pct(v), tip: Loc.T("device.rhythm.attack_click_snap")),
+                PKnob(P("tone"), "TONE", v => RM.Pct(v), tip: Loc.T("device.rhythm.snare_body_noise_hats_metal")),
+                PKnob(P("drive"), "DRIVE", v => RM.Pct(v), tip: "Saturation"),
+                PKnob(P("level"), "LEVEL", v => RM.Pct(v), tip: Loc.T("device.rhythm.the_voices_level_in_the")),
+            };
+        for (int i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); knobs.Children.Add(cells[i]); }
+
+        Control voiceBody;
+        if (_macroMode)
+            voiceBody = MacroPanel.Grid(ctx, macros, _macro, m => { _macro = m; ctx.RequestRebuild(); }, readouts, stacked: false, receiversInMenu: true);
+        else if (_voiceTab == 1)
+        {
+            var fxStrip = new RackCardView(ctx).BuildEffectStrip(new RhythmVoiceAccess(engine, track), sel);
+            voiceBody = new Border { Margin = new Thickness(6, 5), Child = fxStrip };
+        }
+        else
+        {
+            var g = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 6, Margin = new Thickness(6, 5) };
+            g.Children.Add(graph);
+            Grid.SetColumn(knobs, 1); g.Children.Add(knobs);
+            voiceBody = g;
+        }
+        var voice = Section(voiceHeadRow, voiceBody);
+
+        // ---- PERFORM --------------------------------------------------------------------------
+        var perfHead = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Margin = new Thickness(8, 0) };
+        perfHead.Children.Add(Cap("PERFORM"));
+        var perfSub = Mono(Loc.T("device.rhythm.shift_step_accent"), NotaPalette.TextDisabled); perfSub.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(perfSub, 1); perfHead.Children.Add(perfSub);
+
+        var sliders = new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                Slider("SWING", "swing", Loc.T("device.rhythm.swing_delays_every_second_16th")),
+                Slider("HUMAN", "humanize", Loc.T("device.rhythm.humanize_a_random_nudge_to")),
+                Slider("ACCENT", "accent", Loc.T("device.rhythm.how_much_louder_an_accented")),
+            },
+        };
+
+        // Volume · Glue centred — the track meter already shows the level.
+        var master = PKnob("volume", "VOLUME", v => RM.Pct(v), NotaSize.KnobMain, 50, Loc.T("device.rhythm.the_kits_output_level"));
+        var glue = PKnob("glue", "GLUE", v => RM.Pct(v), NotaSize.KnobRegular, 46, Loc.T("device.rhythm.glue_a_bus_compressor_on"));
+        var perfFoot = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 4,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            Children = { master, glue },
+        };
+        var perfFootHost = new Border { BorderBrush = NotaPalette.GraphBorder, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(0, 5, 0, 0), Child = perfFoot };
+
+        var perfBody = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 6, Margin = new Thickness(8, 6) };
+        perfBody.Children.Add(sliders);
+        Grid.SetRow(perfFootHost, 1); perfBody.Children.Add(perfFootHost);
+        var perform = Section(perfHead, perfBody);
+        perform.Width = RailW;
+
+        // ---- STEP -----------------------------------------------------------------------------
+        void LoadStrip()
+        {
+            for (int s = 0; s < RM.Steps; s++)
+            {
+                strip.On[s] = pat.On[bank, sel, s]; strip.Acc[s] = pat.Acc[bank, sel, s];
+                strip.Vel[s] = pat.Vel[bank, sel, s];
+            }
+            strip.Changed();
+        }
+        strip.Commit = s =>
+        {
+            int arg = sel * RM.Steps + s;
+            bool on = strip.On[s], acc = strip.Acc[s];
+            float vel = strip.Vel[s];
+            if (pat.On[bank, sel, s] != on) { Act(RM.A_ToggleStep, arg); pat.On[bank, sel, s] = on; }
+            if (on && Math.Abs(pat.Vel[bank, sel, s] - vel) > 0.5f / 255f) { Act(RM.A_SetVel, arg, vel); pat.Vel[bank, sel, s] = vel; }
+            if (pat.Acc[bank, sel, s] != acc) { Act(RM.A_ToggleAccent, arg); pat.Acc[bank, sel, s] = acc; }
+            ctx.NotifyChanged();
+            Refresh();
+        };
+        void SetSteps(Func<int, (bool On, float Vel, bool Acc)> f)
+        {
+            for (int s = 0; s < RM.Steps; s++)
+            {
+                var (on, vel, acc) = f(s);
+                strip.On[s] = on; strip.Vel[s] = on ? vel : strip.Vel[s]; strip.Acc[s] = on && acc;
+                strip.Commit!(s);
+            }
+            strip.Changed();
+        }
+        strip.StepMenu = s =>
+        {
+            var fly = new MenuFlyout();
+            MenuItem Item(string h, Action a, bool check = false)
+            {
+                var mi = new MenuItem { Header = h };
+                mi.ToggleType = MenuItemToggleType.Radio; mi.IsChecked = check;
+                mi.Click += (_, _) => a();
+                fly.Items.Add(mi);
+                return mi;
+            }
+            float cur = strip.Vel[s];
+            bool on = strip.On[s];
+            Item(Loc.F("device.rhythm.step_accent", s + 1), () => { strip.On[s] = true; strip.Acc[s] = !(on && strip.Acc[s]); strip.Vel[s] = Math.Max(cur, RM.NormalVel); strip.Commit!(s); strip.Changed(); }, on && strip.Acc[s]);
+            Item(Loc.F("device.rhythm.step_quiet", s + 1), () => { strip.On[s] = true; strip.Acc[s] = false; strip.Vel[s] = RM.QuietVel; strip.Commit!(s); strip.Changed(); }, on && !strip.Acc[s] && cur < RM.QuietBelow);
+            var velMenu = new MenuItem { Header = "Velocity" };
+            foreach (var pv in new[] { 1f, 0.75f, 0.5f, 0.25f })
+            {
+                var mi = new MenuItem { Header = RM.Pct(pv) };
+                mi.ToggleType = MenuItemToggleType.Radio; mi.IsChecked = on && Math.Abs(cur - pv) < 0.02f;
+                mi.Click += (_, _) => { strip.On[s] = true; strip.Vel[s] = pv; strip.Commit!(s); strip.Changed(); };
+                velMenu.Items.Add(mi);
+            }
+            fly.Items.Add(velMenu);
+            fly.Items.Add(new Separator());
+            Item(Loc.T("device.rhythm.fill_every_beat"), () => SetSteps(k => (k % 4 == 0, RM.NormalVel, false)));
+            Item(Loc.T("device.rhythm.fill_every_8th"), () => SetSteps(k => (k % 2 == 0, RM.NormalVel, false)));
+            Item(Loc.T("device.rhythm.fill_every_16th"), () => SetSteps(_ => (true, RM.NormalVel, false)));
+            Item(Loc.T("device.rhythm.off_beats"), () => SetSteps(k => (k % 4 == 2, RM.NormalVel, false)));
+            fly.Items.Add(new Separator());
+            (bool, float, bool)[] Snap() { var a = new (bool, float, bool)[RM.Steps]; for (int k = 0; k < RM.Steps; k++) a[k] = (strip.On[k], strip.Vel[k], strip.Acc[k]); return a; }
+            Item(Loc.T("device.rhythm.shift_left"), () => { var a = Snap(); SetSteps(k => a[(k + 1) % RM.Steps]); });
+            Item(Loc.T("device.rhythm.shift_right"), () => { var a = Snap(); SetSteps(k => a[(k + RM.Steps - 1) % RM.Steps]); });
+            Item(Loc.T("common.reverse"), () => { var a = Snap(); SetSteps(k => a[RM.Steps - 1 - k]); });
+            fly.Items.Add(new Separator());
+            fly.Items.Add(MenuKit.Danger(Loc.F("device.rhythm.clear", RM.VoiceNames[sel]), GlyphKind.Trash, () => SetSteps(k => (false, strip.Vel[k], false))));
+            fly.ShowAt(strip);
+        };
+
+        // Banks A–D: the playing bank filled teal, a chosen bank still waiting (Pattern switch) a
+        // teal tint. A click writes the Bank param like any discrete control, so it is undoable,
+        // records while automation write is armed and gives way to a Bank lane on playback.
+        var bankRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1 };
+        for (int b = 0; b < RM.Banks; b++)
+        {
+            int bb = b;
+            var tb = new TextBlock { Text = RM.BankNames[b], FontSize = 7, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+            var cell = new Border { CornerRadius = NotaRadius.Cell, Padding = new Thickness(5, 0), Cursor = new Cursor(StandardCursorType.Hand), Child = tb };
+            ToolTip.SetTip(cell, Loc.F("device.rhythm.bank_play_and_edit_this", RM.BankNames[b]));
+            cell.PointerPressed += (_, e) =>
+            {
+                var pt = e.GetCurrentPoint(cell);
+                e.Handled = true;
+                if (pt.Properties.IsRightButtonPressed) { BankMenu(bb, cell); return; }
+                if (!pt.Properties.IsLeftButtonPressed || bb == bank) return;
+                Write(RM.BankId, RM.BankNorm(bb)); ReloadPattern();
+            };
+            bankCells[b] = cell; bankTexts[b] = tb; bankRow.Children.Add(cell);
+        }
+        void PaintBanks()
+        {
+            for (int b = 0; b < RM.Banks; b++)
+            {
+                bool on = b == playing, queued = b == bank && bank != playing;
+                bankCells[b].Background = on ? Teal : queued ? QueuedBank : Brushes.Transparent;
+                bankTexts[b].Foreground = on ? OnAccent : queued ? TextPrimary : TextTertiary;
+                bankTexts[b].FontWeight = on || queued ? FontWeight.SemiBold : FontWeight.Normal;
+            }
+        }
+        void BankMenu(int b, Control anchor)
+        {
+            var fly = new MenuFlyout();
+            var copy = new MenuItem { Header = Loc.F("device.rhythm.copy_to", RM.BankNames[b]) };
+            for (int d = 0; d < RM.Banks; d++)
+            {
+                if (d == b) continue;
+                int dd = d;
+                var mi = new MenuItem { Header = Loc.F("device.rhythm.bank", RM.BankNames[d]) };
+                mi.Click += (_, _) => { Act(RM.A_CopyBank, b * RM.Banks + dd); ctx.NotifyChanged(); ReloadPattern(); };
+                copy.Items.Add(mi);
+            }
+            fly.Items.Add(copy);
+            fly.Items.Add(new Separator());
+            // When a new bank takes over (the Bank Switch param, specs/100).
+            bool atPattern = RM.SwitchesAtPattern(G(RM.BankSwitchId));
+            foreach (var (label, pattern) in new[] { (Loc.T("device.rhythm.switch_at_next_step"), false), (Loc.T("device.rhythm.switch_at_pattern_start"), true) })
+            {
+                var mi = new MenuItem { Header = label, ToggleType = MenuItemToggleType.Radio, IsChecked = atPattern == pattern };
+                mi.Click += (_, _) => { if (atPattern != pattern) { Write(RM.BankSwitchId, pattern ? 1f : 0f); PaintBanks(); } };
+                fly.Items.Add(mi);
+            }
+            fly.Items.Add(new Separator());
+            fly.Items.Add(MenuKit.Danger(Loc.F("device.rhythm.clear_bank", RM.BankNames[b]), GlyphKind.Trash,
+                () => { Act(RM.A_ClearBank, b); ctx.NotifyChanged(); ReloadPattern(); }));
+            fly.ShowAt(anchor);
+        }
+        var bankBox = new Border
+        {
+            Background = NotaPalette.BgSunken, BorderBrush = BorderDef, BorderThickness = new Thickness(1),
+            CornerRadius = NotaRadius.Field, Padding = new Thickness(1), VerticalAlignment = VerticalAlignment.Center, Child = bankRow,
+        };
+
+        var stepCount = Mono("", TextTertiary);
+        stepCount.HorizontalAlignment = HorizontalAlignment.Right;
+        readouts.Add(() => stepCount.Text = Loc.F("device.rhythm.of_1_16_bank", pat.Count(bank, sel), RM.Steps, RM.BankNames[bank]));
+        var stepHead = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,*"), ColumnSpacing = 6, Height = 12 };
+        stepHead.Children.Add(Cap("STEP"));
+        var stepName = new TextBlock { Text = RM.VoiceNames[sel], FontSize = 8, FontWeight = FontWeight.SemiBold, Foreground = TextPrimary, VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(stepName, 1); stepHead.Children.Add(stepName);
+        Grid.SetColumn(bankBox, 2); stepHead.Children.Add(bankBox);
+        Grid.SetColumn(stepCount, 3); stepHead.Children.Add(stepCount);
+        var stepGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 3, Margin = new Thickness(6, 4) };
+        stepGrid.Children.Add(stepHead);
+        Grid.SetRow(strip, 1); stepGrid.Children.Add(strip);
+        var steps = SectionBox(stepGrid);
+        steps.Height = StepH;
+
+        void ReloadPattern()
+        {
+            pat = RM.Parse(engine.GetPluginState(track, -1), pc);
+            if (pat.SelectedVoice != sel) { ctx.RequestRebuild(); return; }
+            bank = RM.BankOf(G(RM.BankId));
+            LoadStrip(); PaintBanks(); Refresh();
+        }
+
+        // ---- live ------------------------------------------------------------------------------
+        void Live()
+        {
+            int n = engine.InstrumentScope(track, scope);
+            if (n >= RM.ScopeLength)
+            {
+                int rev = (int)scope[RM.S_Rev];
+                // The Bank param moves on its own under a lane, a learned controller or a macro.
+                if ((lastRev >= 0 && rev != lastRev) || RM.BankOf(G(RM.BankId)) != bank) ReloadPattern();
+                lastRev = rev;
+                int pb = Math.Clamp((int)Math.Round(scope[RM.S_Bank]), 0, RM.Banks - 1);
+                if (pb != playing) { playing = pb; PaintBanks(); }
+                int head = (int)Math.Round(scope[RM.S_Step]);
+                strip.SetHead(head);
+                for (int v = 0; v < RM.Voices; v++)
+                    kitDots[v].Fill = scope[RM.S_Flash0 + v] > 0.1f ? Hue(v) : NotaPalette.Wash(NotaPalette.Ink(Dots[v]), 0x8C);
+                float f = scope[RM.S_Flash0 + sel], p = scope[RM.S_Pos0 + sel];
+                if (Math.Abs(f - flashSel) > 0.05f || Math.Abs(p - posSel) > 0.002f) { flashSel = f; posSel = p; Refresh(); }
+            }
+        }
+
+        // ---- assembly --------------------------------------------------------------------------
+        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = NotaSpace.DeviceGap };
+        top.Children.Add(kit);
+        Grid.SetColumn(voice, 1); top.Children.Add(voice);
+        Grid.SetColumn(perform, 2); top.Children.Add(perform);
+        var body = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = NotaSpace.DeviceGap, Margin = new Thickness(NotaSpace.DeviceGap) };
+        body.Children.Add(top);
+        Grid.SetRow(steps, 1); body.Children.Add(steps);
+
+        var root = new Border { Background = NotaPalette.SurfaceCard, Child = body };
+
+        LoadStrip(); PaintBanks();
+        ctx.AddDeviceRefresher(Live);
+        ctx.SetInstLiveViz(Refresh);
+        Refresh();
+        Live();
+        return root;
+    }
+
+    // ---- the kit macros (MacroPanel), over the Rhythm's own ------------------------------------
+
+    // The macros are the Rhythm's macro1..8 params. A voice is a slot (-1 = the kit itself, for
+    // Swing, Glue …); its targets are its own params and its effects' params.
+    private sealed class RhythmMacroSurface(IAudioEngine e, int track, Dictionary<string, int> idx, bool[] isSample, string[] dots) : IMacroSurface
+    {
+        private static readonly string[] VoiceTargets = { "tune", "decay", "punch", "tone", "drive", "level", "pan", "start", "length" };
+        private static readonly string[] KitTargets = { "swing", "humanize", "accent", "glue", "volume" };
+
+        public int TrackId => track;
+        public int AutomationDevice => -1;
+        public int MacroParamIndex(int m) => idx.TryGetValue(RM.MacroId(m), out int i) ? i : -1;
+        public string MacroName(int m) => e.RhythmMacroName(track, m);
+        public void SetMacroName(int m, string n) => e.RhythmSetMacroName(track, m, n);
+        public string SlotCount(int n) => Loc.Plural("device.rhythm.voices", n);
+        public IReadOnlyList<int> Slots() => new[] { 0, 1, 2, 3, 4, 5, 6, 7 };
+        public string SlotName(int v) => v < 0 ? "Kit" : VoiceLabel(e, track, v, isSample[v]);
+        public IBrush SlotHue(int v) => v < 0 ? TextTertiary : NotaPalette.Ink(dots[v]);
+        public int MappingCount() => e.RhythmMacroMappingCount(track);
+        public bool TryGetMapping(int i, out RackMacroMapping m) => e.RhythmTryGetMacroMapping(track, i, out m, out _);
+        public int AddMapping(int m, int v, int d, int p, float lo, float hi) => e.RhythmAddMacroMapping(track, m, v, d, p, lo, hi);
+        public bool RemoveMapping(int i) => e.RhythmRemoveMacroMapping(track, i);
+        public bool SetMappingRange(int i, float lo, float hi) => e.RhythmSetMacroMappingRange(track, i, lo, hi);
+
+        // "v3_decay" → "decay"; a global's id is its own name.
+        private string ParamKey(int p) { string id = e.PluginParamId(track, -1, p); int u = id.IndexOf('_'); return u >= 0 ? id[(u + 1)..] : id; }
+        private static string Title(string key) => key.Length == 0 ? key : char.ToUpperInvariant(key[0]) + key[1..];
+        private bool SampleTune(RackMacroMapping m) => m.DeviceIndex < 0 && m.Chain >= 0 && isSample[m.Chain] && ParamKey(m.ParamIndex) == "tune";
+
+        public (string Param, string Device) TargetLabel(RackMacroMapping m) => m.DeviceIndex < 0
+            ? (Title(ParamKey(m.ParamIndex)), "")
+            : (e.RhythmVoiceDeviceParamName(track, m.Chain, m.DeviceIndex, m.ParamIndex), e.RhythmVoiceDeviceName(track, m.Chain, m.DeviceIndex));
+        public (float Min, float Max) TargetRange(RackMacroMapping m) => m.DeviceIndex < 0
+            ? (0f, 1f)
+            : (e.RhythmVoiceDeviceParamMin(track, m.Chain, m.DeviceIndex, m.ParamIndex), e.RhythmVoiceDeviceParamMax(track, m.Chain, m.DeviceIndex, m.ParamIndex));
+        public float TargetValue(RackMacroMapping m) => m.DeviceIndex < 0
+            ? e.PluginParamGet(track, -1, m.ParamIndex)
+            : e.RhythmVoiceDeviceParamGet(track, m.Chain, m.DeviceIndex, m.ParamIndex);
+        public string FormatTarget(RackMacroMapping m, float x)
+        {
+            if (m.DeviceIndex >= 0) { var (lo, hi) = TargetRange(m); return MacroPanel.FormatDeviceParam(lo, hi, x); }
+            return SampleTune(m) ? Math.Round(RM.SampleSemis(x)).ToString("+0;−0;0", NotaNum.Culture) : $"{Math.Round(x * 100):0}";
+        }
+        public string TargetUnit(RackMacroMapping m)
+        {
+            if (m.DeviceIndex >= 0) { var (lo, hi) = TargetRange(m); return MacroPanel.DeviceParamUnit(lo, hi); }
+            return SampleTune(m) ? "st" : "%";
+        }
+
+        public void FillMapMenu(MenuFlyout menu, int macro, Action changed)
+        {
+            int P(string id) => idx.TryGetValue(id, out int i) ? i : -1;
+
+            // Every voice at once: the same param, or the same effect on each voice that has it.
+            var all = new MenuItem { Header = Loc.Plural("device.rhythm.all_voices", RM.Voices) };
+            foreach (var key in VoiceTargets)
+            {
+                var mi = new MenuItem { Header = Title(key) };
+                string k = key;
+                mi.Click += (_, _) =>
+                {
+                    for (int v = 0; v < RM.Voices; v++) if (P(RM.Id(v, k)) is var p and >= 0) MacroPanel.Map(this, macro, v, -1, p, 0f, 1f);
+                    changed();
+                };
+                all.Items.Add(mi);
+            }
+            var kinds = new List<(int Kind, string Name, int Voice, int Dev)>();
+            for (int v = 0; v < RM.Voices; v++)
+                for (int d = 0; d < e.RhythmVoiceDeviceCount(track, v); d++)
+                {
+                    int k = e.RhythmVoiceDeviceBuiltinKind(track, v, d);
+                    if (k >= 0 && kinds.All(x => x.Kind != k)) kinds.Add((k, e.RhythmVoiceDeviceName(track, v, d), v, d));
+                }
+            if (kinds.Count > 0) all.Items.Add(new Separator());
+            foreach (var (kind, dname, v0, d0) in kinds)
+            {
+                var holders = new List<(int V, int D)>();
+                for (int v = 0; v < RM.Voices; v++)
+                    for (int d = 0; d < e.RhythmVoiceDeviceCount(track, v); d++)
+                        if (e.RhythmVoiceDeviceBuiltinKind(track, v, d) == kind) { holders.Add((v, d)); break; }
+                var fx = new MenuItem { Header = Loc.F("device.rhythm.every", dname, Loc.Plural("device.rhythm.voices", holders.Count)) };
+                for (int p = 0; p < e.RhythmVoiceDeviceParamCount(track, v0, d0); p++)
+                {
+                    int pp = p;
+                    var mi = new MenuItem { Header = e.RhythmVoiceDeviceParamName(track, v0, d0, p) };
+                    mi.Click += (_, _) =>
+                    {
+                        foreach (var (v, d) in holders)
+                            MacroPanel.Map(this, macro, v, d, pp, e.RhythmVoiceDeviceParamMin(track, v, d, pp), e.RhythmVoiceDeviceParamMax(track, v, d, pp));
+                        changed();
+                    };
+                    fx.Items.Add(mi);
+                }
+                all.Items.Add(fx);
+            }
+            menu.Items.Add(all);
+
+            var kit = new MenuItem { Header = "Kit" };
+            foreach (var key in KitTargets)
+                if (P(key) is var p and >= 0)
+                    kit.Items.Add(MacroPanel.Target(this, Title(key), macro, -1, -1, p, 0f, 1f, changed, MacroPanel.IsMapped(this, macro, -1, -1, p)));
+            menu.Items.Add(kit);
+            menu.Items.Add(new Separator());
+
+            // One voice: its params, each of its effects.
+            for (int v = 0; v < RM.Voices; v++)
+            {
+                var voice = new MenuItem { Header = SlotName(v) };
+                var own = new MenuItem { Header = "Voice" };
+                foreach (var key in VoiceTargets)
+                    if (P(RM.Id(v, key)) is var p and >= 0)
+                        own.Items.Add(MacroPanel.Target(this, Title(key), macro, v, -1, p, 0f, 1f, changed, MacroPanel.IsMapped(this, macro, v, -1, p)));
+                voice.Items.Add(own);
+                for (int d = 0; d < e.RhythmVoiceDeviceCount(track, v); d++)
+                {
+                    int dpc = e.RhythmVoiceDeviceParamCount(track, v, d);
+                    if (dpc <= 0) continue;
+                    var dev = new MenuItem { Header = e.RhythmVoiceDeviceName(track, v, d) };
+                    for (int p = 0; p < dpc; p++)
+                        dev.Items.Add(MacroPanel.Target(this, e.RhythmVoiceDeviceParamName(track, v, d, p), macro, v, d, p,
+                            e.RhythmVoiceDeviceParamMin(track, v, d, p), e.RhythmVoiceDeviceParamMax(track, v, d, p), changed,
+                            MacroPanel.IsMapped(this, macro, v, d, p)));
+                    voice.Items.Add(dev);
+                }
+                menu.Items.Add(voice);
+            }
+        }
+    }
+
+    // A section: a rule-divided area of the card, with an 18px header strip.
+    private static Decorator Section(Control head, Control body)
+    {
+        var headHost = new Border { Height = HeadH, BorderBrush = BorderDef, BorderThickness = new Thickness(0, 0, 0, 1), Child = head };
+        var g = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        g.Children.Add(headHost);
+        Grid.SetRow(body, 1); g.Children.Add(body);
+        return SectionBox(g);
+    }
+
+    private static Decorator SectionBox(Control child) => DeviceCardKit.Section(child);
+
+}

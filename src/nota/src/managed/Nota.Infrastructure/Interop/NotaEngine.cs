@@ -1,0 +1,446 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System.Runtime.InteropServices;
+
+namespace Nota.Infrastructure;
+
+/// <summary>
+/// Idiomatic C# wrapper over the native nota.engine handle. This is the only
+/// type the app layer should use — it owns the native handle lifetime and
+/// translates result codes into exceptions at the boundary. The wrapper surface
+/// is split by domain across the NotaEngine.*.cs partials; this file holds the
+/// handle lifetime, engine-global controls, and the shared guards.
+/// </summary>
+public sealed partial class NotaEngine : IAudioEngine
+{
+    private IntPtr _handle;
+
+    public NotaEngine()
+    {
+        _handle = NativeMethods.Create();
+        if (_handle == IntPtr.Zero)
+            throw new InvalidOperationException("Failed to create native engine.");
+    }
+
+    /// <summary>Engine library version, e.g. "0.2.5" (src/native/nota.engine/VERSION).</summary>
+    public static string Version => Marshal.PtrToStringUTF8(NativeMethods.Version()) ?? "?";
+
+    /// <summary>
+    /// Tells the native engine where its per-user data lives (audio.json, midi.json,
+    /// plugin catalog). Call once at startup with <c>NotaPaths.DataDir</c>, before
+    /// creating the engine handle; <c>null</c>/empty resets to auto-detect.
+    /// </summary>
+    public static void SetDataDir(string? path) => Check(NativeMethods.SetDataDir(path ?? ""));
+
+    /// <summary>Effective native data dir (the override, or what auto-detect resolved).</summary>
+    public static string DataDir => Marshal.PtrToStringUTF8(NativeMethods.GetDataDir()) ?? "";
+
+    /// <summary>Negotiated output sample rate, or 0 if not started.</summary>
+    public double SampleRate
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return NativeMethods.SampleRate(_handle);
+        }
+    }
+
+    /// <summary>True while the output device is open and the audio thread runs.</summary>
+    public bool IsRunning
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return NativeMethods.IsRunning(_handle) != 0;
+        }
+    }
+
+    /// <summary>Open the default output device and start the audio thread.</summary>
+    public void Start()
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.Start(_handle));
+    }
+
+    /// <summary>Stop the audio thread and close the device.</summary>
+    public void Stop()
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.Stop(_handle));
+    }
+
+    /// <summary>Enable/disable the diagnostic test tone (M0).</summary>
+    public void SetTestTone(bool enabled)
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.SetTestTone(_handle, enabled ? 1 : 0));
+    }
+
+    /// <summary>Set the test tone frequency in Hz (0 &lt; hz ≤ 20000).</summary>
+    public void SetFrequency(float hz)
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.SetFrequency(_handle, hz));
+    }
+
+    // --- Transport ---------------------------------------------------------
+
+    public void Play()  { ThrowIfDisposed(); Check(NativeMethods.TransportPlay(_handle)); }
+    public void PlayWithCountIn() { ThrowIfDisposed(); Check(NativeMethods.TransportPlayCountIn(_handle)); }
+    public void SetCountIn(int bars) { ThrowIfDisposed(); Check(NativeMethods.SetCountIn(_handle, Math.Max(0, bars))); }
+    public double CountInBeats { get { ThrowIfDisposed(); return NativeMethods.CountInBeats(_handle); } }
+    public void SetLoopRecordMode(bool replace) { ThrowIfDisposed(); Check(NativeMethods.SetLoopRecordMode(_handle, replace ? 1 : 0)); }
+    public bool LoopRecordReplace { get { ThrowIfDisposed(); return NativeMethods.LoopRecordMode(_handle) == 1; } }
+    public void StopTransport() { ThrowIfDisposed(); Check(NativeMethods.TransportStop(_handle)); }
+    // While the master Tempo lane drives the tempo (specs/099) the engine refuses a transport
+    // tempo: a no-op here, so a scene launch or a stale field echo never throws.
+    public void SetBpm(double bpm) { ThrowIfDisposed(); if (IsTempoAutomated) return; Check(NativeMethods.SetBpm(_handle, bpm)); }
+    public double Bpm { get { ThrowIfDisposed(); return NativeMethods.TransportBpm(_handle); } }
+    public void SetTimeSignature(int num, int denom) { ThrowIfDisposed(); Check(NativeMethods.SetTimeSignature(_handle, num, denom)); }
+    public void SetLoop(bool enabled, double startBeat, double endBeat) { ThrowIfDisposed(); Check(NativeMethods.SetLoop(_handle, enabled ? 1 : 0, startBeat, endBeat)); }
+    public void SetMetronome(bool enabled) { ThrowIfDisposed(); Check(NativeMethods.SetMetronome(_handle, enabled ? 1 : 0)); }
+    public void Seek(double beat) { ThrowIfDisposed(); Check(NativeMethods.Seek(_handle, beat)); }
+
+    /// <summary>Current playhead position in beats (lock-free UI read).</summary>
+    public double PositionBeats { get { ThrowIfDisposed(); return NativeMethods.PositionBeats(_handle); } }
+    public bool TryGetTransportSnapshot(out NotaTransportSnapshot snapshot)
+    {
+        ThrowIfDisposed();
+        return NativeMethods.TransportSnapshot(_handle, out snapshot) != 0;
+    }
+    public bool IsPlaying { get { ThrowIfDisposed(); return NativeMethods.IsPlaying(_handle) != 0; } }
+
+    /// <summary>Loop region mirror (for UI display + toggling).</summary>
+    public bool LoopEnabled { get { ThrowIfDisposed(); return NativeMethods.LoopEnabled(_handle) != 0; } }
+    public double LoopStart { get { ThrowIfDisposed(); return NativeMethods.LoopStart(_handle); } }
+    public double LoopEnd { get { ThrowIfDisposed(); return NativeMethods.LoopEnd(_handle); } }
+
+    // --- Mixer -------------------------------------------------------------
+
+    public void SetMasterVolume(float volume) { ThrowIfDisposed(); Check(NativeMethods.SetMasterVolume(_handle, volume)); }
+
+    // --- Level meters (M6-2) -----------------------------------------------
+
+    /// <summary>Post-fader peak/RMS for a track over the last block. False if unknown id.</summary>
+    public bool TryGetTrackMeter(int trackId, out NotaMeter meter)
+    {
+        ThrowIfDisposed();
+        return NativeMethods.TrackMeter(_handle, trackId, out meter) != 0;
+    }
+
+    /// <summary>Post-fader peak/RMS of the master bus over the last block.</summary>
+    public NotaMeter MasterMeter()
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.MasterMeter(_handle, out var m));
+        return m;
+    }
+
+    /// <summary>Peak/RMS of the Cue bus after the Cue level (specs/089).</summary>
+    public NotaMeter CueMeter()
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.CueMeter(_handle, out var m));
+        return m;
+    }
+
+    public float CueVolume
+    {
+        get { ThrowIfDisposed(); return NativeMethods.CueVolume(_handle); }
+        set { ThrowIfDisposed(); Check(NativeMethods.SetCueVolume(_handle, value)); }
+    }
+
+    public ClickDestination ClickDestination
+    {
+        get { ThrowIfDisposed(); return (ClickDestination)NativeMethods.ClickDestination(_handle); }
+        set { ThrowIfDisposed(); Check(NativeMethods.SetClickDestination(_handle, (int)value)); }
+    }
+
+    public void SetClickVolume(float gain) { ThrowIfDisposed(); Check(NativeMethods.SetClickVolume(_handle, gain)); }
+
+    // --- Live MIDI, arming & recording -------------------------------------
+
+    public void SetTrackArmed(int trackId, bool armed) { ThrowIfDisposed(); Check(NativeMethods.SetTrackArmed(_handle, trackId, armed ? 1 : 0)); }
+    public void NoteOn(int pitch, float velocity) { ThrowIfDisposed(); Check(NativeMethods.NoteOn(_handle, pitch, velocity)); }
+    public void NoteOff(int pitch) { ThrowIfDisposed(); Check(NativeMethods.NoteOff(_handle, pitch)); }
+    /// <summary>A live note-off with its release velocity (0..1), as a MIDI note-off carries it.</summary>
+    public void NoteOffVelocity(int pitch, float releaseVelocity) { ThrowIfDisposed(); Check(NativeMethods.NoteOffVelocity(_handle, pitch, releaseVelocity)); }
+    /// <summary>A note-off on one track with its release velocity (0..1).</summary>
+    public void TrackNoteOffVelocity(int trackId, int pitch, float releaseVelocity)
+    { ThrowIfDisposed(); Check(NativeMethods.TrackNoteOffVelocity(_handle, trackId, pitch, releaseVelocity)); }
+    public void TrackNoteOn(int trackId, int pitch, float velocity) { ThrowIfDisposed(); Check(NativeMethods.TrackNoteOn(_handle, trackId, pitch, velocity)); }
+    public void TrackNoteOff(int trackId, int pitch) { ThrowIfDisposed(); Check(NativeMethods.TrackNoteOff(_handle, trackId, pitch)); }
+    public void NoteExpression(int pitch, NoteExpressionDim dim, float value) { ThrowIfDisposed(); Check(NativeMethods.NoteExpression(_handle, pitch, (int)dim, value)); }
+    public void TrackNoteExpression(int trackId, int pitch, NoteExpressionDim dim, float value) { ThrowIfDisposed(); Check(NativeMethods.TrackNoteExpression(_handle, trackId, pitch, (int)dim, value)); }
+    public void SendController(int ctl, float value) { ThrowIfDisposed(); Check(NativeMethods.Controller(_handle, ctl, value)); }
+    public void SendTrackController(int trackId, int ctl, float value) { ThrowIfDisposed(); Check(NativeMethods.TrackController(_handle, trackId, ctl, value)); }
+    public float DeliveredController(int trackId, int ctl) { ThrowIfDisposed(); return NativeMethods.TrackDeliveredController(_handle, trackId, ctl); }
+    /// <summary>Device-free self-test of the clip controller curves (specs/020); 0 = pass.</summary>
+    public int MidiCtlSelfTest() { ThrowIfDisposed(); return NativeMethods.MidiCtlSelfTest(_handle); }
+    public void SetAuditionTrack(int trackId) { ThrowIfDisposed(); NativeMethods.SetAuditionTrack(_handle, trackId); }
+    public void SetRecording(bool enabled) { ThrowIfDisposed(); Check(NativeMethods.SetRecording(_handle, enabled ? 1 : 0)); }
+    public bool IsRecording { get { ThrowIfDisposed(); return NativeMethods.IsRecording(_handle) != 0; } }
+    public RetryTakeResult RetryTake() { ThrowIfDisposed(); return (RetryTakeResult)NativeMethods.RetryTake(_handle); }
+    /// <summary>Why the last SetRecording(true) did (not) start: 0 ok, 1 no armed track, 2 audio input failed,
+    /// 3 ok — a performance-only pass (nothing armed, the Session performance alone, #971).</summary>
+    public int RecordStartStatus { get { ThrowIfDisposed(); return NativeMethods.RecordStartStatus(_handle); } }
+    /// <summary>Device-free self-test of Session-performance recording (#971): spans and MIDI unroll; 0 = pass.</summary>
+    public int SessionPassSelfTest() { ThrowIfDisposed(); return NativeMethods.SessionPassSelfTest(_handle); }
+    public int SessionPassSpans(NotaPassSpan[] buf) { ThrowIfDisposed(); return NativeMethods.SessionPassSpans(_handle, buf, buf.Length); }
+    /// <summary>Track id of the in-progress audio take (0 when not capturing), for drawing a growing clip.</summary>
+    public int AudioRecordTrackId { get { ThrowIfDisposed(); return NativeMethods.AudioRecordTrack(_handle); } }
+    /// <summary>Beat where the in-progress audio take began.</summary>
+    public double AudioRecordStartBeat { get { ThrowIfDisposed(); return NativeMethods.AudioRecordStartBeat(_handle); } }
+    /// <summary>Length (beats) captured so far in the in-progress take.</summary>
+    public double AudioRecordLengthBeats { get { ThrowIfDisposed(); return NativeMethods.AudioRecordLengthBeats(_handle); } }
+    /// <summary>Reserved track id for the master effect chain.</summary>
+    public int MasterTrackId { get { ThrowIfDisposed(); return NativeMethods.MasterTrackId(_handle); } }
+    /// <summary>Live min/max peaks over the in-progress capture buffer (growing-take waveform). Returns buckets written.</summary>
+    public int AudioRecordPeaks(float[] outMinMax, int maxPoints) { ThrowIfDisposed(); return NativeMethods.AudioRecordPeaks(_handle, outMinMax, maxPoints); }
+    public int[] RecordingTracks()
+    {
+        ThrowIfDisposed();
+        int n = NativeMethods.RecordingTracks(_handle, null, 0);
+        if (n <= 0) return Array.Empty<int>();
+        var ids = new int[n];
+        n = Math.Min(n, NativeMethods.RecordingTracks(_handle, ids, n));
+        return n == ids.Length ? ids : ids[..n];
+    }
+    public double AudioRecordLengthBeatsOf(int trackId) { ThrowIfDisposed(); return NativeMethods.AudioRecordLengthBeatsOf(_handle, trackId); }
+    public int AudioRecordPeaksOf(int trackId, float[] outMinMax, int maxPoints) { ThrowIfDisposed(); return NativeMethods.AudioRecordPeaksOf(_handle, trackId, outMinMax, maxPoints); }
+    public (int TrackId, RecordSkipReason Reason)[] RecordSkipped()
+    {
+        ThrowIfDisposed();
+        int n = NativeMethods.RecordSkipped(_handle, null, null, 0);
+        if (n <= 0) return Array.Empty<(int, RecordSkipReason)>();
+        var ids = new int[n];
+        var why = new int[n];
+        n = Math.Min(n, NativeMethods.RecordSkipped(_handle, ids, why, n));
+        var r = new (int, RecordSkipReason)[n];
+        for (int i = 0; i < n; i++) r[i] = (ids[i], (RecordSkipReason)why[i]);
+        return r;
+    }
+    public int TakeRecordTestArmed(float[] interleaved, int channels, int frames, double startBeat)
+    { ThrowIfDisposed(); return NativeMethods.TakeRecordTestArmed(_handle, interleaved, channels, frames, startBeat); }
+    /// <summary>Tests: as <see cref="TakeRecordTestArmed"/>, with one track disarmed partway (specs/086).</summary>
+    public int TakeRecordTestArmedDisarm(float[] interleaved, int channels, int frames, double startBeat, int disarmTrackId, int disarmAtFrame)
+    { ThrowIfDisposed(); return NativeMethods.TakeRecordTestArmedDisarm(_handle, interleaved, channels, frames, startBeat, disarmTrackId, disarmAtFrame); }
+    /// <summary>Tests (#521): one device block through the input thread's path — the capture gate,
+    /// then the take ring (see <see cref="SetTestInputDevice"/>); the next poll drains it.</summary>
+    public void InputBlockTest(float[] interleaved, int frames, int channels)
+    { ThrowIfDisposed(); NativeMethods.InputBlockTest(_handle, interleaved, frames, channels); }
+    public int RecordHeldNotes(NotaRecordHeldNote[] buffer, out int trackId, out int sessionScene, out double nowBeat)
+    { ThrowIfDisposed(); return NativeMethods.RecordHeldNotes(_handle, buffer, buffer.Length, out trackId, out sessionScene, out nowBeat); }
+
+    /// <summary>Message-thread pump: materialises recorded notes into clips. Call from the UI timer.</summary>
+    public void Poll() { ThrowIfDisposed(); NativeMethods.Poll(_handle); }
+
+    // --- Undo / redo (M6-6) ------------------------------------------------
+
+    /// <summary>Undo the last structural edit. Returns false if there was nothing to undo.</summary>
+    public bool Undo() { ThrowIfDisposed(); return NativeMethods.Undo(_handle) == NativeMethods.NotaResult.Ok; }
+    /// <summary>Redo the last undone edit. Returns false if there was nothing to redo.</summary>
+    public bool Redo() { ThrowIfDisposed(); return NativeMethods.Redo(_handle) == NativeMethods.NotaResult.Ok; }
+    public bool CanUndo { get { ThrowIfDisposed(); return NativeMethods.CanUndo(_handle) != 0; } }
+    public bool CanRedo { get { ThrowIfDisposed(); return NativeMethods.CanRedo(_handle) != 0; } }
+    public void BeginUndoGroup() { ThrowIfDisposed(); NativeMethods.UndoGroupBegin(_handle); }
+    public void EndUndoGroup() { ThrowIfDisposed(); NativeMethods.UndoGroupEnd(_handle); }
+    public void ClearUndoHistory() { ThrowIfDisposed(); NativeMethods.ClearUndoHistory(_handle); }
+
+    // --- Pan law (specs/006) -------------------------------------------------
+    public PanLaw PanLaw { get { ThrowIfDisposed(); return (PanLaw)NativeMethods.PanLaw(_handle); } }
+    public void SetPanLaw(PanLaw law, bool checkpoint = true)
+    { ThrowIfDisposed(); Check(NativeMethods.SetPanLaw(_handle, (int)law, checkpoint ? 1 : 0)); }
+
+    // --- Arrangement sections (specs/016) ---------------------------------------
+    public IReadOnlyList<SectionInfo> Sections
+    {
+        get
+        {
+            ThrowIfDisposed();
+            int n = NativeMethods.SectionCount(_handle);
+            var list = new SectionInfo[n];
+            for (int i = 0; i < n; i++)
+                list[i] = new SectionInfo(NativeMethods.SectionStart(_handle, i), NativeMethods.SectionLength(_handle, i),
+                    Marshal.PtrToStringUTF8(NativeMethods.SectionName(_handle, i)) ?? "");
+            return list;
+        }
+    }
+    public void SetSections(IReadOnlyList<SectionInfo> sections, bool checkpoint = true)
+    {
+        ThrowIfDisposed();
+        var rows = new NativeMethods.NotaSection[sections.Count];
+        try
+        {
+            for (int i = 0; i < rows.Length; i++)
+                rows[i] = new NativeMethods.NotaSection(sections[i].StartBeat, sections[i].LengthBeats,
+                    Marshal.StringToCoTaskMemUTF8(sections[i].Name ?? ""));
+            Check(NativeMethods.SetSections(_handle, rows, rows.Length, checkpoint ? 1 : 0));
+        }
+        finally
+        {
+            foreach (var r in rows) if (r.Name != IntPtr.Zero) Marshal.FreeCoTaskMem(r.Name);
+        }
+    }
+    public bool MoveSection(int index, int toBoundary)
+    { ThrowIfDisposed(); return NativeMethods.SectionMove(_handle, index, toBoundary) == NativeMethods.NotaResult.Ok; }
+    public bool DuplicateSectionWithContent(int index)
+    { ThrowIfDisposed(); return NativeMethods.SectionDuplicateWithContent(_handle, index) == NativeMethods.NotaResult.Ok; }
+    public bool DeleteSectionWithContent(int index)
+    { ThrowIfDisposed(); return NativeMethods.SectionDeleteWithContent(_handle, index) == NativeMethods.NotaResult.Ok; }
+    public bool SectionOverlaps(int index)
+    { ThrowIfDisposed(); return NativeMethods.SectionOverlaps(_handle, index) != 0; }
+
+    // --- Value undo (specs/009, specs/016) -------------------------------------
+    public int BeginMixGesture(params MixTarget[] targets)
+    { ThrowIfDisposed(); return targets.Length == 0 ? 0 : NativeMethods.MixGestureBegin(_handle, targets, targets.Length); }
+    public void EndMixGesture(int handle) { ThrowIfDisposed(); if (handle > 0) NativeMethods.MixGestureEnd(_handle, handle); }
+    public float MasterVolume { get { ThrowIfDisposed(); return NativeMethods.MasterVolume(_handle); } }
+    public int GetStereoMeasures(StereoMeasure[] buffer)
+    { ThrowIfDisposed(); return NativeMethods.StereoMeasures(_handle, buffer, buffer.Length); }
+    /// <summary>Device-free: undo/redo pass over a step whose track is gone. Clears the history.</summary>
+    public bool MixUndoSelfTest() { ThrowIfDisposed(); return NativeMethods.MixUndoSelfTest(_handle) != 0; }
+
+    // --- Project load (M7-6) -----------------------------------------------
+
+    /// <summary>Clears the session to an empty project (used by File → New / Open).</summary>
+    public void Reset() { ThrowIfDisposed(); NativeMethods.Reset(_handle); }
+
+    // --- Offline render (tests / export) -----------------------------------
+
+    /// <summary>Renders `frames` of interleaved stereo into `outBuffer` (length &gt;= 2*frames).</summary>
+    public void RenderOffline(float[] outBuffer, int frames)
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.RenderOffline(_handle, outBuffer, frames));
+    }
+
+    /// <summary>
+    /// Renders one block the way the audio device callback does (real-time deadline), without
+    /// a device — for tests that pace blocks like a callback. Device must be stopped.
+    /// </summary>
+    public void RenderDeviceBlock(float[] outBuffer, int frames)
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.RenderDeviceBlock(_handle, outBuffer, frames));
+    }
+
+    /// <summary>Tests: one device block into Main and the Cue bus (specs/089); both stereo.</summary>
+    public void RenderDeviceBlockCue(float[] main, float[]? cue, int frames)
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.RenderDeviceBlockCue(_handle, main, cue, frames));
+    }
+
+    /// <summary>
+    /// Renders `frames` of interleaved stereo at <paramref name="sampleRate"/> (WAV export, M6-4).
+    /// Stop the audio backend first — this mutates transport state the audio thread reads.
+    /// </summary>
+    public void RenderOffline(float[] outBuffer, int frames, double sampleRate)
+    {
+        ThrowIfDisposed();
+        Check(NativeMethods.RenderOfflineAt(_handle, outBuffer, frames, sampleRate));
+    }
+
+    // --- audio preview / audition (M7-4a) ---
+
+    /// <summary>Decodes and auditions <paramref name="path"/> through the live output (one at a time).</summary>
+    public void PreviewFile(string path)
+    { ThrowIfDisposed(); Check(NativeMethods.PreviewFile(_handle, path)); }
+
+    /// <summary>Auditions <paramref name="path"/> from <paramref name="startSeconds"/> in (reuses the loaded file).</summary>
+    public void PreviewFileAt(string path, double startSeconds)
+    { ThrowIfDisposed(); Check(NativeMethods.PreviewFileAt(_handle, path, startSeconds)); }
+
+    /// <summary>Loops the audition until stopped.</summary>
+    public void SetPreviewLoop(bool on)
+    { ThrowIfDisposed(); Check(NativeMethods.SetPreviewLoop(_handle, on ? 1 : 0)); }
+
+    /// <summary>Audition level, linear gain.</summary>
+    public void SetPreviewGain(float gain)
+    { ThrowIfDisposed(); Check(NativeMethods.SetPreviewGain(_handle, gain)); }
+
+    /// <summary>Audition playhead in seconds into the file.</summary>
+    public double PreviewPosition
+    { get { ThrowIfDisposed(); return NativeMethods.PreviewPosition(_handle); } }
+
+    public int ReadPreviewScope(float[] output)
+    { ThrowIfDisposed(); return NativeMethods.PreviewScope(_handle, output, Math.Min(output.Length, 4096)); }
+
+    /// <summary>Stops the current audition.</summary>
+    public void StopPreview()
+    { ThrowIfDisposed(); Check(NativeMethods.StopPreview(_handle)); }
+
+    /// <summary>Whether an audition is currently playing.</summary>
+    public bool IsPreviewActive
+    { get { ThrowIfDisposed(); return NativeMethods.PreviewActive(_handle) != 0; } }
+
+    /// <summary>Device-free self-test: auditions a synthetic buffer and asserts audible output.</summary>
+    public bool PreviewSelfTest()
+    { ThrowIfDisposed(); return NativeMethods.PreviewSelfTest(_handle) != 0; }
+
+    // --- xrun / dropout telemetry (M7-8) ---
+
+    /// <summary>Running count of audio-device dropouts since launch.</summary>
+    public int XrunCount
+    { get { ThrowIfDisposed(); return NativeMethods.XrunCount(_handle); } }
+
+    /// <summary>Device-free self-test: notifying a dropout bumps the counter by one.</summary>
+    public bool XrunSelfTest()
+    { ThrowIfDisposed(); return NativeMethods.XrunSelfTest(_handle) != 0; }
+
+    /// <summary>Device-free self-test: a replaced engine graph is freed two renders later,
+    /// not kept for the whole session.</summary>
+    public bool GraphRetireSelfTest()
+    { ThrowIfDisposed(); return NativeMethods.GraphRetireSelfTest(_handle) != 0; }
+
+    /// <summary>Device-free self-test (#436): a hosted plug-in instrument renders once per block,
+    /// every event at its sample offset; a built-in still renders between events.</summary>
+    public bool TimedEventsSelfTest()
+    { ThrowIfDisposed(); return NativeMethods.TimedEventsSelfTest(_handle) != 0; }
+
+    /// <summary>Device-free self-test (specs/085): articulation scheduling and delivery. 0 = pass,
+    /// else the number of the check that failed (see Engine::articulationSelfTest).</summary>
+    public int ArticulationSelfTest()
+    { ThrowIfDisposed(); return NativeMethods.ArticulationSelfTest(_handle); }
+
+    /// <summary>Smoothed real-time DSP load, 0..1 (render time / block budget).</summary>
+    public float CpuLoad
+    { get { ThrowIfDisposed(); return NativeMethods.CpuLoad(_handle); } }
+
+    /// <summary>
+    /// Dedicated parallel render threads (the audio thread helps too). Set while the device
+    /// is stopped: a negative count restores the default, 0 renders on the audio thread alone.
+    /// </summary>
+    public int RenderThreads
+    {
+        get { ThrowIfDisposed(); return NativeMethods.RenderThreads(_handle); }
+        set { ThrowIfDisposed(); Check(NativeMethods.SetRenderThreads(_handle, value)); }
+    }
+
+    /// <summary>CPU time the render threads have used, summed, in seconds (≈ constant while idle).</summary>
+    public double RenderThreadsCpuSeconds
+    { get { ThrowIfDisposed(); return NativeMethods.RenderThreadsCpuSeconds(_handle); } }
+
+    public void Dispose()
+    {
+        if (_handle != IntPtr.Zero)
+        {
+            NativeMethods.Destroy(_handle);
+            _handle = IntPtr.Zero;
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(NotaEngine));
+    }
+
+    private static void Check(NativeMethods.NotaResult result)
+    {
+        if (result != NativeMethods.NotaResult.Ok)
+            throw new NotaEngineException(result.ToString());
+    }
+}

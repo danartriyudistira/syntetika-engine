@@ -1,0 +1,279 @@
+diff --git a/crates/openvj-app/src/app.rs b/crates/openvj-app/src/app.rs
+index bf627ad..e2e213f 100644
+--- a/crates/openvj-app/src/app.rs
++++ b/crates/openvj-app/src/app.rs
+@@ -29,6 +29,7 @@ use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffe
+ use crate::browser::{self, Entry};
+ use crate::link::Link;
+ use crate::midi::{self, MidiPorts};
++use crate::nota_bridge::{Command as NotaCommand, NotaBridge};
+ use crate::player::PlayerState;
+ use crate::syphon_out::{self, SyphonOutput};
+ use crate::{
+@@ -358,6 +359,11 @@ pub struct App {
+     player: PlayerState,
+     /// Thumbnail ids of the playlist's presets, in row order.
+     player_thumbs: Vec<String>,
++
++    /// Syntetika Engine: Nota's transport + launches (None when running standalone).
++    nota: Option<NotaBridge>,
++    /// Launches waiting for their beat, from the Nota bridge.
++    nota_queue: Vec<(f64, NotaCommand)>,
+ }
+ 
+ impl App {
+@@ -478,6 +484,8 @@ impl App {
+             player_thumbs: Vec::new(),
+             library: crate::library::AppLibrary::load(),
+             frame_time: 0.0,
++            nota: None,
++            nota_queue: Vec::new(),
+         };
+         app.set_composition(comp, None);
+         app.open_midi();
+@@ -587,6 +595,58 @@ impl App {
+ 
+     /// Starts an empty composition. MIDI mappings carry over, since they belong to the
+     /// controller more than to the set.
++    /// Follow Nota's transport and clip launches (Syntetika Engine).
++    pub fn set_nota_bridge(&mut self, bridge: NotaBridge) {
++        self.nota = Some(bridge);
++        eprintln!("openVJ: following Nota's clock");
++    }
++
++    /// Drain bridge commands, then apply the ones whose beat has arrived. Launches are
++    /// scheduled by absolute beat, so packet jitter never moves the cut.
++    fn nota_tick(&mut self, now: f64, beat: f64) {
++        if let Some(bridge) = &self.nota {
++            for cmd in bridge.poll() {
++                let at = match cmd {
++                    NotaCommand::Scene { at_beat, .. }
++                    | NotaCommand::Slot { at_beat, .. } => at_beat,
++                    NotaCommand::StopLayer { .. } | NotaCommand::StopAll => beat,
++                };
++                self.nota_queue.push((at, cmd));
++            }
++        }
++        if self.nota_queue.is_empty() {
++            return;
++        }
++        let mut i = 0;
++        while i < self.nota_queue.len() {
++            if self.nota_queue[i].0 <= beat + 1e-9 {
++                let (at_beat, cmd) = self.nota_queue.remove(i);
++                let drift_ms = (beat - at_beat) * 60_000.0 / f64::from(self.comp.bpm.max(1.0));
++                match cmd {
++                    NotaCommand::Scene { col, .. } => {
++                        self.comp.trigger_column(col, now);
++                        eprintln!("openVJ: NOTA scene col={col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
++                    }
++                    NotaCommand::Slot { layer, col, .. } => {
++                        self.comp.trigger(layer, col, now);
++                        eprintln!("openVJ: NOTA clip {layer}:{col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
++                    }
++                    NotaCommand::StopLayer { layer } => {
++                        self.comp.clear_layer(layer, now);
++                        eprintln!("openVJ: NOTA stop layer {layer}");
++                    }
++                    NotaCommand::StopAll => {
++                        self.comp.clear_all(now);
++                        eprintln!("openVJ: NOTA stop all");
++                    }
++                }
++                self.grid_dirty = true;
++            } else {
++                i += 1;
++            }
++        }
++    }
++
+     pub fn new_composition(&mut self) {
+         let midi = std::mem::take(&mut self.comp.midi);
+         let mut comp = Composition::default();
+@@ -969,6 +1029,7 @@ impl App {
+         let dt = (now - self.last_frame).clamp(0.0, 0.25) as f32;
+         self.last_frame = now;
+         let beat = self.update_tempo(now);
++        self.nota_tick(now, beat);
+         let live = self.comp.live_clip_ids();
+         self.comp.tick(now, beat);
+         if self.comp.live_clip_ids() != live {
+@@ -1141,6 +1202,20 @@ impl App {
+ 
+     /// Beat position for this frame, from Ableton Link when it's on.
+     fn update_tempo(&mut self, now: f64) -> f64 {
++        // Syntetika Engine: Nota is the master clock while its bridge is streaming.
++        if let Some(sample) = self.nota.as_ref().and_then(|b| b.clock()) {
++            let age = sample.at.elapsed().as_secs_f64();
++            if age < 0.5 {
++                let beat = sample.beat + openvj_core::beats(age, sample.bpm);
++                let shown = (sample.bpm * 10.0).round() / 10.0;
++                if shown != self.comp.bpm {
++                    self.comp.bpm = shown;
++                    self.grid_dirty = true;
++                }
++                self.beat_clock.sync(now, beat, sample.bpm);
++                return self.beat_clock.beat_at(now);
++            }
++        }
+         let clock = if self.clock_on { self.midi_clock.bpm().zip(self.midi_clock.beat_at(now)) } else { None };
+         if let Some((bpm, beat)) = clock {
+             let shown = (bpm * 10.0).round() / 10.0;
+diff --git a/crates/openvj-app/src/main.rs b/crates/openvj-app/src/main.rs
+index a145200..ba863b7 100644
+--- a/crates/openvj-app/src/main.rs
++++ b/crates/openvj-app/src/main.rs
+@@ -10,6 +10,7 @@ mod mapping;
+ mod media_browser;
+ mod midi;
+ mod milk_pack;
++mod nota_bridge;
+ mod player;
+ mod prefs;
+ mod shadertoy_import;
+@@ -139,6 +140,10 @@ fn main() -> Result<()> {
+     let comp = Composition::demo();
+     let engine = Engine::new(device, queue, comp.width, comp.height);
+     let app = Rc::new(RefCell::new(App::new(engine, comp)));
++    // Syntetika Engine: follow Nota's transport when OPENVJ_NOTA points at its bridge.
++    if let Ok(addr) = std::env::var("OPENVJ_NOTA") {
++        app.borrow_mut().set_nota_bridge(nota_bridge::NotaBridge::connect(&addr));
++    }
+ 
+     #[cfg(target_os = "macos")]
+     let ui = titlebar::hidden(MainWindow::new)?;
+diff --git a/crates/openvj-app/src/nota_bridge.rs b/crates/openvj-app/src/nota_bridge.rs
+new file mode 100644
+index 0000000..ef5bd39
+--- /dev/null
++++ b/crates/openvj-app/src/nota_bridge.rs
+@@ -0,0 +1,129 @@
++//! Bridge to Nota (Syntetika Engine).
++//!
++//! Nota runs the audio engine and owns musical time; this process renders the visuals.
++//! A loopback TCP socket carries Nota's transport (~125 Hz) and clip-launch commands.
++//! Launch commands name the **beat** they must happen on, so the visual engine schedules
++//! them on the same musical grid instead of reacting to packet arrival.
++//!
++//! Protocol v1, one JSON object per line:
++//!   {"t":"hello","v":1}
++//!   {"t":"clock","beat":12.5,"bpm":120,"playing":true}
++//!   {"t":"scene","col":3,"atBeat":16}
++//!   {"t":"slot","layer":0,"col":3,"atBeat":16}
++//!   {"t":"stopLayer","layer":0}
++//!   {"t":"stopAll"}
++
++use std::io::{BufRead, BufReader};
++use std::net::TcpStream;
++use std::sync::mpsc::{Receiver, Sender};
++use std::sync::{Arc, Mutex};
++use std::time::{Duration, Instant};
++
++/// The newest transport sample from Nota, stamped with the local arrival time so the
++/// render loop can extrapolate the beat between packets.
++#[derive(Clone, Copy, Debug)]
++pub struct ClockSample {
++    pub beat: f64,
++    pub bpm: f32,
++    /// Nota's transport state. Kept for the freeze/clear choice when the transport stops.
++    #[allow(dead_code)]
++    pub playing: bool,
++    pub at: Instant,
++}
++
++#[derive(Clone, Copy, Debug)]
++pub enum Command {
++    Scene { col: usize, at_beat: f64 },
++    Slot { layer: usize, col: usize, at_beat: f64 },
++    StopLayer { layer: usize },
++    StopAll,
++}
++
++pub struct NotaBridge {
++    clock: Arc<Mutex<Option<ClockSample>>>,
++    rx: Receiver<Command>,
++}
++
++impl NotaBridge {
++    /// Connects in the background and reconnects whenever Nota restarts. Rendering is
++    /// never blocked by the bridge.
++    pub fn connect(addr: &str) -> Self {
++        let clock = Arc::new(Mutex::new(None));
++        let (tx, rx) = std::sync::mpsc::channel();
++        let addr = addr.to_string();
++        let thread_clock = Arc::clone(&clock);
++        std::thread::Builder::new()
++            .name("nota-bridge".into())
++            .spawn(move || run(&addr, tx, thread_clock))
++            .ok();
++        Self { clock, rx }
++    }
++
++    pub fn clock(&self) -> Option<ClockSample> {
++        *self.clock.lock().ok()?
++    }
++
++    /// Commands received since the last frame.
++    pub fn poll(&self) -> Vec<Command> {
++        let mut out = Vec::new();
++        while let Ok(cmd) = self.rx.try_recv() {
++            out.push(cmd);
++        }
++        out
++    }
++}
++
++fn run(addr: &str, tx: Sender<Command>, clock: Arc<Mutex<Option<ClockSample>>>) {
++    loop {
++        match TcpStream::connect(addr) {
++            Ok(stream) => {
++                stream.set_nodelay(true).ok();
++                eprintln!("openVJ: Nota bridge connected ({addr})");
++                let reader = BufReader::new(stream);
++                for line in reader.lines() {
++                    let Ok(line) = line else { break };
++                    if line.trim().is_empty() {
++                        continue;
++                    }
++                    handle(&line, &tx, &clock);
++                }
++                eprintln!("openVJ: Nota bridge disconnected; waiting for Nota");
++            }
++            Err(_) => { /* Nota isn't up yet; retry quietly. */ }
++        }
++        std::thread::sleep(Duration::from_millis(1000));
++    }
++}
++
++fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample>>>) {
++    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return };
++    match v.get("t").and_then(|t| t.as_str()) {
++        Some("clock") => {
++            let Some(beat) = v.get("beat").and_then(|x| x.as_f64()) else { return };
++            let bpm = v.get("bpm").and_then(|x| x.as_f64()).unwrap_or(120.0) as f32;
++            let playing = v.get("playing").and_then(|x| x.as_bool()).unwrap_or(true);
++            if let Ok(mut slot) = clock.lock() {
++                *slot = Some(ClockSample { beat, bpm, playing, at: Instant::now() });
++            }
++        }
++        Some("scene") => {
++            let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
++            let at_beat = v.get("atBeat").and_then(|x| x.as_f64()).unwrap_or(0.0);
++            let _ = tx.send(Command::Scene { col, at_beat });
++        }
++        Some("slot") => {
++            let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
++            let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
++            let at_beat = v.get("atBeat").and_then(|x| x.as_f64()).unwrap_or(0.0);
++            let _ = tx.send(Command::Slot { layer, col, at_beat });
++        }
++        Some("stopLayer") => {
++            let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
++            let _ = tx.send(Command::StopLayer { layer });
++        }
++        Some("stopAll") => {
++            let _ = tx.send(Command::StopAll);
++        }
++        _ => {}
++    }
++}

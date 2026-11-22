@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+
+using System.Runtime.InteropServices;
+
+namespace Nota.Infrastructure;
+
+/// <summary>Plugin hosting: scan worker, catalog, scan paths (M3-0/M3-1).</summary>
+/// <remarks>Part of <see cref="NotaEngine"/>'s P/Invoke surface; see nota_engine.h.</remarks>
+internal static partial class NativeMethods
+{
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_open_test_window")]
+    internal static partial NotaResult PluginHostOpenTestWindow();
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_pump")]
+    internal static partial int PluginHostPump();
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_scan", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int PluginHostScan(string workerPath);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_scan_ex", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int PluginHostScanEx(string workerPath, string? onlyDir, int flags);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_scan_progress")]
+    internal static partial int PluginHostScanProgress(out int done, out int total);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_scan_current")]
+    internal static partial IntPtr PluginHostScanCurrent();
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_scan_failed_count")]
+    internal static partial int PluginHostScanFailedCount();
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_plugin_count")]
+    internal static partial int PluginHostPluginCount();
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_plugin_desc")]
+    internal static partial IntPtr PluginHostPluginDesc(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_plugin_id")]
+    internal static partial IntPtr PluginHostPluginId(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_index_of_id", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int PluginHostIndexOfId(string identifier);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_add_scan_path", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult PluginHostAddScanPath(string dir);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_remove_scan_path")]
+    internal static partial NotaResult PluginHostRemoveScanPath(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_scan_path_count")]
+    internal static partial int PluginHostScanPathCount();
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_scan_path")]
+    internal static partial IntPtr PluginHostScanPath(int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_default_scan_path_count", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int PluginHostDefaultScanPathCount(string? format);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_default_scan_path", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr PluginHostDefaultScanPath(string? format, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_restore_default_scan_paths", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int PluginHostRestoreDefaultScanPaths(string? format);
+
+    [LibraryImport(Lib, EntryPoint = "nota_pluginhost_is_scan_path_removed", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int PluginHostIsScanPathRemoved(string? dir);
+}

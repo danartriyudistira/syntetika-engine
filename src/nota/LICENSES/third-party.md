@@ -1,0 +1,116 @@
+# Third-party dependency register
+
+Every dependency Nota ships or links must be recorded here, with its license. Nota is
+distributed under `AGPL-3.0-only`; a dependency qualifies if its license is permissive,
+public domain, or AGPL-compatible copyleft.
+
+**Rule:** before adding a dependency, add its row here and confirm the license.
+
+## Register
+
+| Dependency | Version | Purpose | License | Status |
+|---|---|---|---|---|
+| .NET runtime | 10 | Managed runtime | MIT | ✅ in use |
+| Avalonia | 12 | UI framework | MIT | ✅ in use |
+| Avalonia.Headless | 12.1.4 | Tempo interaction test harness (test only) | MIT | ✅ in use — package license expression checked |
+| JUCE | 8.0.14 | Plugin hosting (VST3 / AU) | **AGPL-3.0** | ✅ in use — CPM release tarball — see note 1 |
+| Steinberg VST3 SDK | bundled with JUCE 8 | VST3 hosting | MIT | ✅ in use — see note 2 |
+| miniaudio | 0.11.25 | Audio device I/O (WASAPI / PulseAudio / ALSA) | Unlicense **or** MIT-0 | ✅ in use — CPM release tarball, fetched to build dir |
+| Steinberg ASIO SDK | 2.3.4 (2025-10-15) | ASIO driver I/O (Windows) | **GPL-3.0** (dual: proprietary / GPLv3, used under GPLv3) | ✅ in use — CPM pinned zip, headers only, Windows only — see note 8 |
+| RtMidi | 6.0.0 (byte-identical to former snapshot) | MIDI I/O (WinMM / ALSA) | MIT-like (RtMidi) | ✅ in use — CPM pinned tarball, fetched to build dir |
+| dr_libs (dr_wav / dr_flac / dr_mp3) | headers wav 0.14.6 / flac 0.13.4 / mp3 0.7.4 (byte-identical to former snapshot) | WAV / FLAC / MP3 decoding | Unlicense **or** MIT-0 | ✅ in use — CPM pinned tarball, fetched to build dir — see note 3 |
+| libFLAC (xiph) | 1.5.0 | FLAC encoding (export) | BSD-3-Clause | ✅ in use — CPM release tarball, fetched to build dir |
+| LAME | 3.100 (sources byte-identical to former snapshot; wrapper moved to `cmake/lame/`) | MP3 encoding (export) | **LGPL-2.0-or-later** | ⚠️ cleared with a condition — see note 7 |
+| signalsmith-stretch | header v1.3.2 (byte-identical to former snapshot) | Time-stretch / pitch-shift (clip warping) | MIT | ✅ in use — CPM pinned tarball, fetched to build dir |
+| signalsmith-linear | fft.h (byte-identical to former snapshot) | FFT / linear DSP primitives | MIT | ✅ in use — CPM pinned tarball, fetched to build dir |
+| PFFFT | v1.3.0 | SIMD FFT on Linux and Windows | BSD-3-Clause | CPM pinned tarball; see THIRD-PARTY-NOTICES.md |
+| nlohmann/json | 3.12.0 | `audio.json` / `midi.json` device config (engine) | MIT | ✅ in use — CPM release tarball, fetched to build dir |
+| CPM.cmake | v0.43.2 | CMake package manager (build-time only, not linked) | MIT | ✅ in use — downloaded at configure time, never vendored |
+| HIIR (Laurent de Soras) | 1.50 (bump ex 1.40; snapshot unavailable upstream — null-gated, see note 4) | Oversampling (polyphase halfband IIR) | WTFPL | ✅ in use — CPM URL+HASH zip, fetched to build dir — see note 4 |
+| Apple CoreAudio / CoreMIDI / AudioToolbox | system | Audio + MIDI I/O (macOS) | system SDK | ✅ in use |
+| Geist and Geist Mono (Vercel) | 1.7.2 | The UI typeface; Geist Mono for values under the classic look (`assets/fonts`) | **SIL OFL 1.1** | ✅ in use — see note 5 |
+| ONNX Runtime — managed API (`Microsoft.ML.OnnxRuntime.Managed`) | 1.23.2 | Runs the AI models (Separate Stems, Convert to MIDI) | MIT | ✅ in use — see note 6 |
+| ONNX Runtime — native library | 1.23.2 | The same, downloaded with the first AI model | MIT | ✅ downloaded, not bundled — see note 6 |
+| htdemucs (Demucs v4, Meta) | v4 weights, ONNX export | Separate Stems model | MIT | ✅ downloaded, not bundled — see note 6 |
+| basic-pitch (Spotify) | 0.4.0 | Convert Melody / Harmony model | Apache-2.0 | ✅ downloaded, not bundled — see note 6 |
+| multilingual-e5-small (intfloat, int8 ONNX export by Xenova) | HF commit 761b726 | Assistant panel's Manual search model (meaning-based search) | MIT | ✅ downloaded, not bundled — see note 6 |
+| Markdig | 1.6.0 | Markdown parsing for the Assistant panel's replies | BSD-2-Clause | ✅ in use — NuGet |
+| Freeverb (algorithm only) | — | Built-in reverb | public domain | ✅ in use — own implementation of the Jezar algorithm; no vendored code (`src/native/nota.engine/src/Reverb.h`) |
+
+Status key: ✅ cleared · ⚠️ cleared with a condition · ⏳ planned · ❌ rejected (incompatible).
+
+## Notes
+
+**1 — JUCE is AGPL, and it sets the terms for the whole build.**
+JUCE 8 is used here under the **AGPLv3**. It is statically linked into `nota_pluginhost`,
+so the build is distributed under `AGPL-3.0-only` — this is why Nota's outbound license is
+AGPL and not GPL. The AGPL's §13 network clause applies to the combined work. The core
+engine is deliberately JUCE-free (see `ARCHITECTURE.md`); JUCE lives only in the
+pluginhost module.
+
+**2 — VST3 SDK is MIT since 2025.**
+Steinberg relicensed the VST3 SDK to MIT; the copy bundled with JUCE 8 carries an MIT
+notice (`Copyright (c) 2025, Steinberg Media Technologies GmbH`). The *code* imposes no
+copyleft. Separately, Steinberg's **VST trademark guidelines** govern use of the "VST"
+name and logo in marketing and UI — review them before using the mark.
+
+**3 — MP3 patents.**
+The core MP3 patents expired in 2017, so MP3 decoding (`dr_mp3`) and encoding (LAME,
+note 7) are generally considered patent-free. Re-confirm if targeting a jurisdiction
+with unusual patent terms.
+
+**4 — WTFPL is not accepted everywhere.**
+HIIR is released under the WTFPL, which some corporate legal reviews reject (it carries
+no warranty disclaimer and its enforceability is debated). It is fine for the AGPL build.
+
+**5 — Geist and Geist Mono ship as bundled font files under the SIL Open Font License.** OFL 1.1
+allows embedding and redistributing the fonts with any software, including AGPL software,
+provided the fonts are not sold on their own and the license travels with them
+(`LICENSES/OFL-1.1-Geist.txt`). The four static weights we use (Regular, Medium,
+SemiBold, Bold) are copied unmodified from the `geist` npm package; "Geist" is a Reserved
+Font Name, so a subset or other modification must be renamed. Numbers use Geist's own
+tabular figures (the `tnum` feature), turned on at shaping time rather than cut into the
+files. Geist Mono (same package, same licence, same four weights, unmodified) was dropped
+by the style guide (spec 038) and came back with the classic look (spec 091), which sets
+values and readouts in it as 0.59 did.
+They replace Inter, which came in through the `Avalonia.Fonts.Inter` package.
+
+**6 — The AI models and their runtime are downloaded, not shipped.**
+Only ONNX Runtime's managed API (MIT) is in the installer. The native ONNX Runtime library
+(from Microsoft's own release archives, with its `LICENSE` and `ThirdPartyNotices.txt`),
+htdemucs (MIT; exported to ONNX by `nota-daw/nota-models`) and basic-pitch (Apache-2.0,
+from Spotify's repository) are fetched by Settings → Downloads → AI Models into Nota's data
+folder, each pinned to a size and sha256 in `ModelCatalog.cs`. All three licenses permit
+use and redistribution with AGPL software. Nota's STFT, segmenting and note-decoding code
+around the models are its own ports of the reference Python (`src/managed/Nota.Infrastructure/Ai`).
+
+**7 — LAME is LGPL-2.0-or-later, statically compiled into the engine.**
+LAME 3.100 (upstream tarball pinned by URL+HASH, encoder-only sources identical
+to the former snapshot) is the MP3 encoder for export.
+LGPL-2.0+ is one-way compatible with AGPL-3.0-only via the "or later" upgrade clause, so it
+qualifies as AGPL-compatible copyleft under this register's rule — the maintainer accepted
+it as an *accounted* copyleft dependency (specs/001-mp3-flac-export). Conditions: the
+complete corresponding source is pinned and fetchable (upstream tarball URL+HASH),
+the LGPL text ships in LICENSES/, the register carries this row and note, and the
+combined work stays AGPL-3.0-only. No LAME symbol leaves the dylib (the `nota_*` export
+lists hide it, same as JUCE in note 1).
+
+**8 — The ASIO SDK is used under its GPLv3 option.**
+Steinberg's ASIO SDK 2.3.4 is dual-licensed: the proprietary Steinberg ASIO License, or
+the GNU GPL version 3 (SDK `LICENSE.txt`; steinberg.net/developers/asiosdk-open). Nota
+uses it under **GPLv3**. GPLv3 §13 and AGPLv3 §13 explicitly allow combining a GPLv3
+work with an AGPLv3 work: each part keeps its own license and the combined build is
+conveyed under AGPLv3 terms for Nota's part, with full source — which the AGPL release
+process already provides. Accepted as an *accounted* copyleft dependency
+(specs/049-asio-backend). Scope: Windows builds only; only the headers `common/asio.h`,
+`common/iasiodrv.h` and `common/asiosys.h` are compiled against (no SDK `.cpp`), fetched
+by CPM from Steinberg's own URL pinned by SHA256. The GPLv3 text ships as
+`GPL-3.0-only.txt`. **Trademark:** "ASIO" is a trademark of Steinberg Media Technologies
+GmbH, governed by Steinberg's usage guidelines rather than the GPL; Nota uses the word only
+as the name of the driver type (Preferences → Audio) and ships no ASIO logo.
+
+## Not shipped
+
+JUCE is fetched at build time by CPM (into the build dir) and
+is **not** redistributed in this repository's own source tree. Binary releases that
+statically link it do redistribute it, under AGPLv3.

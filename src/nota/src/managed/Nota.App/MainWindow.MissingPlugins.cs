@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// After a project opens with hosted plugins that aren't installed, offer the ones the
+// Nota plugin registry provides: install them (Get Plug-ins), rescan, and reopen the
+// project so the devices come back with their saved state. Silent when offline or when
+// the registry has none of them — the status bar already reports what was skipped.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Nota.Application;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public partial class MainWindow
+{
+    private async Task OfferMissingPluginsAsync(string dir, IReadOnlyList<string> missing)
+    {
+        if (_vm is null || missing.Count == 0) return;
+        var store = App.Services.GetRequiredService<IPluginStore>();
+        try { await store.FetchAsync(); }
+        catch (StoreException) { return; }
+
+        var offers = missing.Select(store.FindProvider).OfType<StorePlugin>()
+            .Where(p => p.Asset is not null).DistinctBy(p => p.Id)
+            // Already installed yet still unresolved (the scan didn't match it): reinstalling won't help.
+            .Where(p => !store.Installed.Any(i => i.Id == p.Id && i.Version == p.Version))
+            .ToList();
+        if (offers.Count == 0 || _projectPath != dir) return;
+
+        bool one = offers.Count == 1;
+        var names = string.Join(", ", offers.Select(p => p.Name));
+        var ok = await new ConfirmWindow(Loc.T("main.missing_plugins.missing_plugins"),
+            one ? Loc.F("main.missing_plugins.this_project_uses_which_isnt", names)
+                : Loc.F("main.missing_plugins.this_project_uses_which_arent", names),
+            Loc.T("main.missing_plugins.install"), Loc.T("main.not_now")).ShowDialog<bool>(this);
+        if (!ok || _vm is null) return;
+
+        string? error = null;
+        await RunBackgroundAsync(Loc.T("main.missing_plugins.installing_plugins"), async prog =>
+        {
+            foreach (var p in offers)
+            {
+                try
+                {
+                    await store.InstallAsync(p, new Progress<StoreProgress>(r =>
+                        prog.Report(r.Fraction < 0 ? ProgressReport.Indeterminate(r.Message) : ProgressReport.At(r.Fraction, r.Message))));
+                }
+                catch (StoreException e) { error ??= e.Message; }
+            }
+            prog.Report(ProgressReport.Indeterminate(Loc.T("main.missing_plugins.scanning_plugins")));
+            await PluginScan.RescanAsync(_vm, new Progress<PluginScanProgress>(s =>
+                prog.Report(new ProgressReport(PluginScan.Fraction(s), PluginScan.Describe(s)))), onlyDir: store.PluginsDir);
+        });
+
+        if (error is not null) { _vm.StatusText = error; return; }
+        // Reopen only when that's lossless: same project, nothing edited since it opened.
+        if (_projectPath == dir && !HasUnsavedChanges()) OpenProject(dir);
+        else _vm.StatusText = one ? Loc.F("main.missing_plugins.installed_reopen_the_project_to", names) : Loc.F("main.missing_plugins.installed_reopen_the_project_to_n", names);
+    }
+}

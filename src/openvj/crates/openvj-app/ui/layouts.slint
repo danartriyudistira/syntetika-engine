@@ -1,0 +1,233 @@
+// Layouts: the whole-window views picked from the LAYOUT menu at the left of the
+// top bar, as in openDJ. Mixer is the full mixing screen; Player and Synthesis are
+// lighter screens over the same running show.
+import { Theme, CloseIcon } from "theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Chevron, FlatButton, BlendPicker } from "controls.slint";
+
+export global Layouts {
+    // Order matches the menu and Cmd/Ctrl+1, 2, 3, 4.
+    out property <[string]> names: ["Mixer", "Player", "Synthesis", "Discover"];
+    out property <int> mixer: 0;
+    out property <int> player: 1;
+    out property <int> synthesis: 2;
+    out property <int> discover: 3;
+}
+
+/// Outline icon for a layout, in openDJ's style: a rounded frame with a hint of
+/// what the layout shows inside.
+export component LayoutIcon inherits Path {
+    in property <int> layout;
+    in property <color> color: Theme.text;
+    width: 24px;
+    height: 16px;
+    viewbox-width: 24;
+    viewbox-height: 16;
+    stroke: root.color;
+    stroke-width: 1.6px;
+    fill: transparent;
+    // Mixer: a grid of clip cells. Player: a big picture with a playlist beside it.
+    // Synthesis: three faders. Discover: a magnifier over a row of thumbnails.
+    commands: "M 3 1 L 21 1 Q 23 1 23 3 L 23 13 Q 23 15 21 15 L 3 15 Q 1 15 1 13 L 1 3 Q 1 1 3 1 Z "
+        + (root.layout == 0 ? "M 5 5 L 8 5 M 10.5 5 L 13.5 5 M 16 5 L 19 5 M 5 11 L 8 11 M 10.5 11 L 13.5 11 M 16 11 L 19 11"
+        : root.layout == 1 ? "M 5 4.5 L 11 4.5 L 11 11.5 L 5 11.5 Z M 14 5 L 19 5 M 14 8 L 19 8 M 14 11 L 17 11"
+        : root.layout == 2 ? "M 7 4 L 7 12 M 12 4 L 12 12 M 17 4 L 17 12 M 5.5 9 L 8.5 9 M 10.5 6 L 13.5 6 M 15.5 10 L 18.5 10"
+        : "M 4 11 L 7 11 M 4 5 L 7 5 M 4 8 L 6 8 M 14 4 A 3.5 3.5 0 1 0 14 11 A 3.5 3.5 0 1 0 14 4 Z M 16.5 10 L 20 13.5");
+}
+
+component Check inherits Path {
+    width: 12px;
+    height: 9px;
+    viewbox-width: 12;
+    viewbox-height: 9;
+    commands: "M 1 4.5 L 4.5 8 L 11 1";
+    stroke: Theme.accent;
+    stroke-width: 1.6px;
+    fill: transparent;
+}
+
+/// The LAYOUT menu button: the current layout's icon and name; click opens the menu.
+export component LayoutPicker inherits Rectangle {
+    in property <int> current;
+    callback picked(int);
+
+    width: row.preferred-width;
+    border-radius: Theme.radius;
+    background: ta.pressed ? Theme.pressed : ta.has-hover ? #1d1d20 : Theme.panel-2;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    row := HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        spacing: 8px;
+        LayoutIcon {
+            layout: root.current;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: Layouts.names[root.current];
+            color: Theme.text;
+            font-size: Theme.font-normal;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        Chevron {
+            y: (parent.height - self.height) / 2;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { popup.show(); }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: 200px;
+        Rectangle {
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 10px;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #000000b0;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 2px;
+                Text {
+                    height: 26px;
+                    x: 10px;
+                    text: "LAYOUT";
+                    color: Theme.text-dim;
+                    font-size: Theme.font-small;
+                    font-weight: 600;
+                    letter-spacing: 0.8px;
+                    vertical-alignment: center;
+                }
+                for name[i] in Layouts.names: Rectangle {
+                    height: 34px;
+                    border-radius: Theme.radius;
+                    background: item-ta.has-hover ? Theme.raised : transparent;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 12px;
+                        spacing: 12px;
+                        LayoutIcon {
+                            layout: i;
+                            y: (parent.height - self.height) / 2;
+                            color: i == root.current ? Theme.accent : Theme.text;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: name;
+                            color: i == root.current ? Theme.accent : Theme.text;
+                            font-size: Theme.font-normal;
+                            font-weight: i == root.current ? 600 : 400;
+                            vertical-alignment: center;
+                        }
+                        if i == root.current: Check {
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                    item-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.picked(i); }
+                    }
+                }
+            }
+        }
+    }
+}
+/// openDJ's labelled picker: LABEL value ▾, opening a menu that can have headings.
+/// `headings[i]`, when not empty, is shown above item i.
+export component LabeledPicker inherits Rectangle {
+    in property <string> label;
+    in property <[string]> items;
+    in property <[string]> headings;
+    in property <int> current;
+    callback picked(int);
+
+    height: 32px;
+    border-radius: Theme.radius;
+    background: ta.has-hover ? #1d1d20 : Theme.panel-2;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            text: root.label;
+            color: Theme.text-dim;
+            font-size: Theme.font-small;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            vertical-alignment: center;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.items[root.current];
+            color: Theme.text;
+            font-size: Theme.font-normal;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Chevron {
+            y: (parent.height - self.height) / 2;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { popup.show(); }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: max(root.width, 200px);
+        Rectangle {
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 10px;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #000000b0;
+            VerticalLayout {
+                padding: 6px;
+                for item[i] in root.items: VerticalLayout {
+                    if root.headings[i] != "": Text {
+                        height: 26px;
+                        x: 10px;
+                        text: root.headings[i];
+                        color: Theme.text-dim;
+                        font-size: Theme.font-small;
+                        font-weight: 600;
+                        letter-spacing: 0.8px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        height: 30px;
+                        border-radius: Theme.radius;
+                        background: i == root.current ? Theme.accent.with-alpha(0.3) : item-ta.has-hover ? Theme.raised : transparent;
+                        Text {
+                            x: 16px;
+                            text: item;
+                            color: Theme.text;
+                            font-size: Theme.font-normal;
+                            font-weight: i == root.current ? 600 : 400;
+                            vertical-alignment: center;
+                        }
+                        item-ta := TouchArea {
+                            clicked => { root.picked(i); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

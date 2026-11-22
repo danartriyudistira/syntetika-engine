@@ -1,0 +1,1095 @@
+diff --git a/scripts/bundle-mac.sh b/scripts/bundle-mac.sh
+index 791596a..55f8137 100755
+--- a/scripts/bundle-mac.sh
++++ b/scripts/bundle-mac.sh
+@@ -12,35 +12,43 @@ set -euo pipefail
+ cd "$(dirname "$0")/.."
+ 
+ RID="osx-arm64"
+-APP_NAME="Nota"
+-BUNDLE_ID="com.nota.daw"
++APP_NAME="NotAopenVJ"
++# The assembly (and therefore the Mach-O executable inside the bundle) keeps its
++# Nota.App name; only the product/bundle identity is rebranded.
++APP_EXE="Nota.App"
++BUNDLE_ID="studio.syntetika.notaopenvj"
+ # App version: single source of truth is the repo-root VERSION file.
+ # CFBundleVersion must monotonically increase per build;
+ # derive it from the semver so QA can tell builds apart.
+ VERSION="$(tr -d '[:space:]' < VERSION)"
+ BUILD_NUMBER="$(echo "${VERSION}" | awk -F. '{ printf "%d%03d%03d", $1, $2, $3 }')"
+ NATIVE_BUILD="src/native/nota.engine/build"
+-APP_DIR="${NOTA_APP_DIR:-/Applications}"
++APP_DIR="${NOTA_APP_DIR:-$PWD/dist}"
+ APP="${APP_DIR}/${APP_NAME}.app"
+ CONTENTS="${APP}/Contents"
+ 
+-echo "==> Building native engine (universal)…"
+-cmake -G Ninja -S src/native/nota.engine -B "${NATIVE_BUILD}" \
+-  -DCMAKE_BUILD_TYPE=Release >/dev/null
+-cmake --build "${NATIVE_BUILD}" >/dev/null
++PUBDIR="${NOTA_PUBLISH_DIR:-$(pwd)/dist/publish}"
++if [ "${NOTA_SKIP_BUILD:-0}" != "1" ]; then
++  echo "==> Building native engine (universal)…"
++  cmake -G Ninja -S src/native/nota.engine -B "${NATIVE_BUILD}" \
++    -DCMAKE_BUILD_TYPE=Release >/dev/null
++  cmake --build "${NATIVE_BUILD}" >/dev/null
+ 
+-echo "==> Publishing managed app (${RID}, self-contained)…"
+-PUBDIR="$(pwd)/dist/publish"
+-rm -rf "${PUBDIR}"
+-dotnet publish src/managed/Nota.App -c Release -r "${RID}" --self-contained true \
+-  -p:DebugType=none -p:DebugSymbols=false -o "${PUBDIR}" >/dev/null
++  echo "==> Publishing managed app (${RID}, self-contained)…"
++  rm -rf "${PUBDIR}"
++  dotnet publish src/managed/Nota.App -c Release -r "${RID}" --self-contained true \
++    -p:DebugType=none -p:DebugSymbols=false -p:NotaSkipWebBuild=true \
++    -p:NotaNativeDir="${NATIVE_BUILD}" -o "${PUBDIR}" >/dev/null
++else
++  echo "==> Reusing published app in ${PUBDIR}"
++fi
+ 
+ echo "==> Assembling ${APP}…"
+ mkdir -p "${APP_DIR}"
+ rm -rf "${APP}"
+ mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
+ cp -R "${PUBDIR}/." "${CONTENTS}/MacOS/"
+-chmod +x "${CONTENTS}/MacOS/${APP_NAME}.App" "${CONTENTS}/MacOS/nota-scanworker" 2>/dev/null || true
++chmod +x "${CONTENTS}/MacOS/${APP_EXE}" "${CONTENTS}/MacOS/nota-scanworker" 2>/dev/null || true
+ 
+ echo "==> Generating app icon (${APP_NAME}.icns)…"
+ ICON_SRC="assets/icons/logo.png"
+@@ -64,7 +72,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
+   <key>CFBundleName</key>            <string>${APP_NAME}</string>
+   <key>CFBundleDisplayName</key>     <string>${APP_NAME}</string>
+   <key>CFBundleIdentifier</key>      <string>${BUNDLE_ID}</string>
+-  <key>CFBundleExecutable</key>      <string>${APP_NAME}.App</string>
++  <key>CFBundleExecutable</key>      <string>${APP_EXE}</string>
+   <key>CFBundleIconFile</key>        <string>${APP_NAME}</string>
+   <key>CFBundlePackageType</key>     <string>APPL</string>
+   <key>CFBundleShortVersionString</key> <string>${VERSION}</string>
+@@ -76,7 +84,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
+   <key>LSMinimumSystemVersion</key>  <string>12.0</string>
+   <key>NSHighResolutionCapable</key> <true/>
+   <key>NSMicrophoneUsageDescription</key>
+-  <string>Nota records audio from your selected input device.</string>
++  <string>NotAopenVJ records audio from your selected input device.</string>
+ </dict>
+ </plist>
+ PLIST
+diff --git a/src/managed/Nota.App/App.axaml b/src/managed/Nota.App/App.axaml
+index 1d0e46b..7e9aebd 100644
+--- a/src/managed/Nota.App/App.axaml
++++ b/src/managed/Nota.App/App.axaml
+@@ -1,7 +1,7 @@
+ <Application xmlns="https://github.com/avaloniaui"
+              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+              x:Class="Nota.App.App"
+-             Name="Nota"
++             Name="NotAopenVJ"
+              RequestedThemeVariant="Dark">
+              <!-- Dark is the default; App.OnFrameworkInitializationCompleted hands the
+                   real choice (Preferences → Appearance) to NotaThemeService before the
+diff --git a/src/managed/Nota.App/App.axaml.cs b/src/managed/Nota.App/App.axaml.cs
+index 11c71ae..95fbed7 100644
+--- a/src/managed/Nota.App/App.axaml.cs
++++ b/src/managed/Nota.App/App.axaml.cs
+@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
+ using Nota.Application;
+ using Nota.Application.Localization;
+ using Nota.Infrastructure;
++using Nota.Infrastructure.Visuals;
+ using Nota.Presentation;
+ 
+ namespace Nota.App;
+@@ -20,6 +21,9 @@ public partial class App : Avalonia.Application
+     /// <summary>App-wide service container (M4.1-A).</summary>
+     public static IServiceProvider Services { get; private set; } = default!;
+ 
++    /// <summary>Syntetika Engine: mirrors track/scene structure to the visual engine.</summary>
++    private Avalonia.Threading.DispatcherTimer? _visualLayout;
++
+     public override void Initialize()
+     {
+         // Numbers read the same on every OS locale: a point, and U+2212 for the minus.
+@@ -43,6 +47,8 @@ public partial class App : Avalonia.Application
+         NotaEngine.SetDataDir(NotaPaths.DataDir);
+         services.AddSingleton<NotaEngine>();
+         services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<NotaEngine>());
++        // Syntetika Engine: master clock + launch commands for the separate visual process.
++        services.AddSingleton<VisualBridge>();
+         services.AddSingleton(new EngineBuildInfo(NotaEngine.Version));
+         // Application ports → Infrastructure implementations.
+         services.AddSingleton<ILogSink, LogSink>();
+@@ -105,6 +111,14 @@ public partial class App : Avalonia.Application
+         // Log crashes so a later bug report carries the stack trace.
+         var log = Services.GetRequiredService<ILogSink>();
+         log.Info($"App started · v{AppInfo.Version}");
++        // Visual bridge: harmless when no visual engine connects (loopback listener only).
++        try { Services.GetRequiredService<VisualBridge>().Start(); }
++        catch (Exception ex) { log.Error("Visual bridge could not start", ex); }
++        // Structural sync is polled on the UI thread (track list reads are not thread-safe).
++        _visualLayout = new Avalonia.Threading.DispatcherTimer(
++            TimeSpan.FromMilliseconds(250), Avalonia.Threading.DispatcherPriority.Background,
++            (_, _) => Services.GetService<VisualBridge>()?.PublishLayout());
++        _visualLayout.Start();
+         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+             log.Error("Unhandled exception", e.ExceptionObject as Exception);
+         // A control moved between windows (the popped-out Detail window, the Mixer window) can
+@@ -222,6 +236,8 @@ public partial class App : Avalonia.Application
+             desktop.Exit += (_, _) => DownloadJobs.Shared.CancelAll();
+             // A language change asked for a restart (Preferences → Appearance): start again once gone.
+             desktop.Exit += (_, _) => AppRestart.RunPending();
++            // Syntetika Engine: let the visual process notice the session ended.
++            desktop.Exit += (_, _) => Services.GetService<VisualBridge>()?.Stop();
+ 
+             // Show the splash immediately, then defer the heavy engine spin-up to a
+             // background dispatcher tick so the splash actually paints before the audio
+diff --git a/src/managed/Nota.App/MacAppMenu.cs b/src/managed/Nota.App/MacAppMenu.cs
+index ad88a0d..e05ffcd 100644
+--- a/src/managed/Nota.App/MacAppMenu.cs
++++ b/src/managed/Nota.App/MacAppMenu.cs
+@@ -13,13 +13,14 @@
+ using System;
+ using System.Collections.Generic;
+ using System.Runtime.InteropServices;
++using Nota.Application;
+ using Nota.Application.Localization;
+ 
+ namespace Nota.App;
+ 
+ internal static class MacAppMenu
+ {
+-    private const string AppName = "Nota";
++    private const string AppName = Branding.ProductName;
+     private const string ObjC = "/usr/lib/libobjc.dylib";
+ 
+     [DllImport(ObjC)] private static extern IntPtr objc_getClass(string name);
+diff --git a/src/managed/Nota.App/MainWindow.Files.cs b/src/managed/Nota.App/MainWindow.Files.cs
+index 25cbb52..a76491f 100644
+--- a/src/managed/Nota.App/MainWindow.Files.cs
++++ b/src/managed/Nota.App/MainWindow.Files.cs
+@@ -14,6 +14,7 @@ using Avalonia.Media;
+ using Avalonia.Platform.Storage;
+ using Microsoft.Extensions.DependencyInjection;
+ using Nota.Application;
++using Nota.Infrastructure.Visuals;
+ using Nota.Presentation;
+ using Nota.Application.Localization;
+ 
+@@ -181,6 +182,7 @@ public partial class MainWindow
+         if (!await ConfirmLeaveChangesAsync(Loc.T("common.new_project"),
+                 Loc.T("main.files.save_your_changes_before_starting"))) return;
+         _links.Clear();    // no live-freeze links (cleared first: stale ids must not hit the new graph)
++        Nota.Application.TrackUids.Clear();   // new project = new track identities
+         Engine.Reset();
+         // Reset transport to defaults (these setters drive the engine + UI).
+         _vm.Transport.Bpm = 120;
+@@ -194,6 +196,7 @@ public partial class MainWindow
+         _vm.Transport.KeyCode = -1;
+         _panLawLegacy = false;     // new projects use the Stereo pan law (set by the template)
+         _projectPath = null;
++        VisualBridge.Current?.SetProjectDir(null);
+         if (_vm is not null) _vm.Browser.OpenProjectPath = null;
+         _learn?.Clear();   // start with a clean MIDI-map for the new project
+         _devicePages?.LoadProject(null);   // a new project has no pages of its own
+@@ -284,6 +287,7 @@ public partial class MainWindow
+             _vm.Transport.KeyCode = result.Transport.Key;
+             _panLawLegacy = result.Transport.PanLawLegacy;
+             _projectPath = dir;
++            VisualBridge.Current?.SetProjectDir(dir);
+             _learn?.LoadMappings(dir);   // MIDI-learn mappings ride in the bundle sidecar
+             _devicePages?.LoadProject(dir);   // the project's copy of edited controller pages (specs/051)
+             _controllers?.Overrides?.LoadProject(dir, _controllers.TrackIdAt);   // its controller rebinds (Story 7)
+@@ -365,6 +369,7 @@ public partial class MainWindow
+             // The bundle is written, so it's the open project now: set the path before the
+             // version is recorded, since the History tab refreshes against it (#317).
+             _projectPath = dir;
++            VisualBridge.Current?.SetProjectDir(dir);
+             string? historyNote = RecordVersion(dir, previousPath, note);   // after every sidecar is written
+             RecordRecentProject(dir);    // surface it on the welcome screen next launch
+             UpdateWindowTitle();
+diff --git a/src/managed/Nota.App/MainWindow.axaml b/src/managed/Nota.App/MainWindow.axaml
+index ac76127..a45ce72 100644
+--- a/src/managed/Nota.App/MainWindow.axaml
++++ b/src/managed/Nota.App/MainWindow.axaml
+@@ -12,7 +12,7 @@
+         Background="{DynamicResource Brush.BgApp}"
+         Icon="/Assets/logo.png"
+         WindowState="Maximized"
+-        Title="Nota">
++        Title="NotAopenVJ">
+   <Window.Resources>
+     <app:ToolbarSideToAlignmentConverter x:Key="ToolbarSideToAlignment"/>
+   </Window.Resources>
+diff --git a/src/managed/Nota.App/PreferencesWindow.Mcp.cs b/src/managed/Nota.App/PreferencesWindow.Mcp.cs
+index 689d572..0b9b5cb 100644
+--- a/src/managed/Nota.App/PreferencesWindow.Mcp.cs
++++ b/src/managed/Nota.App/PreferencesWindow.Mcp.cs
+@@ -83,7 +83,7 @@ public sealed partial class PreferencesWindow
+         string McpConfigJson()
+         {
+             int port = settings?.Current.McpPort ?? 3900;
+-            return "{\n  \"mcpServers\": {\n    \"nota\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:" + port + "/\"\n    }\n  }\n}";
++            return "{\n  \"mcpServers\": {\n    \"notaopenvj\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:" + port + "/\"\n    }\n  }\n}";
+         }
+         DispatcherTimer? copied = null;
+         copyBtn.Click += async (_, _) =>
+diff --git a/src/managed/Nota.App/Program.cs b/src/managed/Nota.App/Program.cs
+index b99b081..40e9dff 100644
+--- a/src/managed/Nota.App/Program.cs
++++ b/src/managed/Nota.App/Program.cs
+@@ -12,10 +12,40 @@ class Program
+     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
+     // yet and stuff might break.
+     [STAThread]
+-    public static void Main(string[] args) => BuildAvaloniaApp()
+-        .StartWithClassicDesktopLifetime(args);
++    public static void Main(string[] args)
++    {
++        // One copy only: a second instance would share the same data folder and could take
++        // the visual bridge, leaving the visible window with no visuals. A file lock (not a
++        // named mutex) is used because the mutex's lifetime is tied to the calling thread,
++        // which Avalonia's macOS loop does not keep; the lock file lives as long as the stream.
++        if (!HoldInstanceLock())
++        {
++            Console.Error.WriteLine("NotAopenVJ is already running.");
++            return;
++        }
++        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
++    }
+ 
+     // Avalonia configuration, don't remove; also used by visual designer.
++    /// <summary>Held for the whole process; released by the OS when it exits or crashes.</summary>
++    private static System.IO.FileStream? _instanceLock;
++
++    private static bool HoldInstanceLock()
++    {
++        try
++        {
++            var dir = Nota.Infrastructure.NotaPaths.DataDir;
++            System.IO.Directory.CreateDirectory(dir);
++            _instanceLock = new System.IO.FileStream(
++                System.IO.Path.Combine(dir, "app.lock"),
++                System.IO.FileMode.OpenOrCreate, System.IO.FileAccess.ReadWrite,
++                System.IO.FileShare.None, 1, System.IO.FileOptions.None);
++            return true;
++        }
++        catch (System.IO.IOException) { return false; }          // another copy holds it
++        catch (System.UnauthorizedAccessException) { return true; } // don't block on a permissions quirk
++    }
++
+     public static AppBuilder BuildAvaloniaApp()
+         => AppBuilder.Configure<App>()
+             .UsePlatformDetect()
+diff --git a/src/managed/Nota.App/SessionView.Grid.cs b/src/managed/Nota.App/SessionView.Grid.cs
+index 459696c..3c72d99 100644
+--- a/src/managed/Nota.App/SessionView.Grid.cs
++++ b/src/managed/Nota.App/SessionView.Grid.cs
+@@ -74,7 +74,7 @@ public sealed partial class SessionView
+ 
+         var stopAll = new Button { HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(0) };
+         ToolTip.SetTip(stopAll, Loc.T("session.stop_every_session_clip"));
+-        stopAll.Click += (_, _) => { _engine.StopAllSession(); UpdateStates(); };
++        stopAll.Click += (_, _) => StopAll();
+ 
+         if (_across)
+         {
+@@ -481,6 +481,7 @@ public sealed partial class SessionView
+             }
+             if (_filled && LaunchZone.Contains(p))
+             {
++                _o.LaunchSlotVisual(_c, _scene);
+                 _o._engine.LaunchSlotVelocity(_c.TrackId, _scene, 1f);
+                 _launched = true;
+                 e.Pointer.Capture(this);   // a Gate / Repeat clip stops when the button lets go
+diff --git a/src/managed/Nota.App/SessionView.Toolbar.cs b/src/managed/Nota.App/SessionView.Toolbar.cs
+index f620660..51a39a8 100644
+--- a/src/managed/Nota.App/SessionView.Toolbar.cs
++++ b/src/managed/Nota.App/SessionView.Toolbar.cs
+@@ -132,7 +132,7 @@ public sealed partial class SessionView
+             },
+         };
+         ToolTip.SetTip(stopAll, Loc.T("session.stop_every_session_clip"));
+-        stopAll.Click += (_, _) => { _engine.StopAllSession(); UpdateStates(); };
++        stopAll.Click += (_, _) => StopAll();
+ 
+         // Turn the grid (specs/108): scenes down ↔ scenes across; the same setting as Preferences →
+         // Editing → Session grid.
+diff --git a/src/managed/Nota.App/SessionView.cs b/src/managed/Nota.App/SessionView.cs
+index 2612dc1..a8ef015 100644
+--- a/src/managed/Nota.App/SessionView.cs
++++ b/src/managed/Nota.App/SessionView.cs
+@@ -23,6 +23,7 @@ using Nota.App.Input;
+ using Avalonia.Layout;
+ using Avalonia.Media;
+ using Nota.Application;
++using Nota.Infrastructure.Visuals;
+ using Nota.Application.Editing;
+ using Nota.Presentation;
+ using Nota.Application.Localization;
+@@ -251,6 +252,14 @@ public sealed partial class SessionView : UserControl
+ 
+         BuildColumns();
+         AddSceneRail();
++        // Dev/self-test hook: exercise the real selection path once, so the visual engine's
++        // select mirror can be verified without a click.
++        if (Environment.GetEnvironmentVariable("NOTA_SELECT_TEST") is { Length: > 0 })
++            Avalonia.Threading.DispatcherTimer.RunOnce(() =>
++            {
++                if (_cols.FirstOrDefault(c => c.Kind == ColKind.Track) is { } first)
++                    SelectSlot(first.TrackId, 0);
++            }, TimeSpan.FromSeconds(6));
+         foreach (var c in _cols) AddColumn(c);
+ 
+         // Keep the selection on something that still exists.
+@@ -378,6 +387,9 @@ public sealed partial class SessionView : UserControl
+         bool selectable = sel.Kind == SelKind.Slot ? ColumnFor(sel.TrackId) is not null : sel.Kind == SelKind.Bus && BusColumn(sel.TrackId) is not null;
+         if (selectable && (prev != sel || renotify))
+             SlotSelected?.Invoke(sel.TrackId, sel.Scene);
++        // Syntetika Engine: the visual engine follows the selection (Preview + Properties).
++        if (sel.Kind == SelKind.Slot && ColumnFor(sel.TrackId) is { Kind: ColKind.Track })
++            VisualBridge.Current?.Select(VisualLayer(sel.TrackId), sel.Scene);
+     }
+ 
+     /// <summary>What is selected: a slot, a scene row or a Return / Master column (specs/107: the
+@@ -433,8 +445,35 @@ public sealed partial class SessionView : UserControl
+ 
+     private bool SlotFilled(int trackId, int scene) => _engine.SessionSlotState(trackId, scene) != 0;
+ 
++    /// <summary>The visual layer a track maps to: its position among launchable columns.</summary>
++    private int VisualLayer(int trackId)
++    {
++        // openVJ layer 0 is the bottom of the mix; NotA's first track is the top row, so the
++        // order is reversed. Group columns are not layers (their children are).
++        var cols = _cols.Where(c => c.Kind == ColKind.Track).ToList();
++        int i = cols.FindIndex(c => c.TrackId == trackId);
++        return i < 0 ? 0 : Math.Max(0, cols.Count - 1 - i);
++    }
++
++    /// <summary>Syntetika Engine: mirror a clip launch in the visual engine.</summary>
++    private void LaunchSlotVisual(Column c, int scene)
++    {
++        if (VisualBridge.Current is not { } bridge) return;
++        if (c.Kind == ColKind.Group) { foreach (int id in c.Children) bridge.Slot(VisualLayer(id), scene); }
++        else bridge.Slot(VisualLayer(c.TrackId), scene);
++    }
++
++    private void StopVisual(Column c)
++    {
++        if (VisualBridge.Current is not { } bridge) return;
++        if (c.Kind == ColKind.Group) { foreach (int id in c.Children) bridge.StopLayer(VisualLayer(id)); }
++        else bridge.StopLayer(VisualLayer(c.TrackId));
++    }
++
+     private void LaunchSceneRow(int scene)
+     {
++        // Syntetika Engine: the visual engine schedules the same column on the same beat.
++        VisualBridge.Current?.Scene(scene);
+         _engine.LaunchScene(scene);
+         Select(new Selection(SelKind.Scene, 0, _selectNextOnLaunch ? Math.Min(scene + 1, _sceneCount - 1) : scene));
+     }
+@@ -467,6 +506,7 @@ public sealed partial class SessionView : UserControl
+ 
+     private void StopColumn(Column c)
+     {
++        StopVisual(c);
+         if (c.Kind == ColKind.Group) foreach (int id in c.Children) _engine.StopSlot(id);
+         else _engine.StopSlot(c.TrackId);
+     }
+@@ -485,7 +525,12 @@ public sealed partial class SessionView : UserControl
+     internal void LaunchSelectedScene() { LaunchSceneRow(_sel.Scene); UpdateStates(); }
+ 
+     /// <summary>Stops every playing clip, as the toolbar's Stop All does.</summary>
+-    internal void StopAll() { _engine.StopAllSession(); UpdateStates(); }
++    internal void StopAll()
++    {
++        VisualBridge.Current?.StopAll();
++        _engine.StopAllSession();
++        UpdateStates();
++    }
+ 
+     /// <summary>A step by scene or by track, for the Session commands — a controller's buttons and
+     /// encoder (specs/051) — whichever way the grid is turned (specs/108).</summary>
+@@ -515,6 +560,7 @@ public sealed partial class SessionView : UserControl
+         if (_sel.Kind == SelKind.Scene) { LaunchSceneRow(_sel.Scene); return; }
+         if (ColumnFor(_sel.TrackId) is { } c)
+         {
++            LaunchSlotVisual(c, _sel.Scene);
+             if (c.Kind == ColKind.Group) LaunchGroup(c, _sel.Scene);
+             else _engine.LaunchSlot(c.TrackId, _sel.Scene);
+         }
+diff --git a/src/managed/Nota.Application/Localization/en.json b/src/managed/Nota.Application/Localization/en.json
+index 5468ca4..72ae7ef 100644
+--- a/src/managed/Nota.Application/Localization/en.json
++++ b/src/managed/Nota.Application/Localization/en.json
+@@ -669,7 +669,7 @@
+     "commands.view": "View",
+     "commands.widen_grid": "Widen grid",
+     "common.1_bar": "1 bar",
+-    "common.about_nota": "About Nota",
++    "common.about_nota": "About NotAopenVJ",
+     "common.attack": "Attack",
+     "common.audio": "Audio",
+     "common.audio_n": "Audio {0}",
+@@ -715,7 +715,7 @@
+     "common.new_project": "New project",
+     "common.no_signal": "no signal",
+     "common.none": "None",
+-    "common.nota": "Nota",
++    "common.nota": "NotAopenVJ",
+     "common.off": "Off",
+     "common.open": "Open",
+     "common.other": "Other",
+@@ -2292,7 +2292,7 @@
+     "history.name": "Name…",
+     "history.name_version": "Name version",
+     "history.no_starred_versions_yet_right": "No starred versions yet. Right-click a version and choose Star.",
+-    "history.nota": "Nota {0}",
++    "history.nota": "NotAopenVJ {0}",
+     "history.older_versions_take_on_disk": "{0} · older versions take {1} on disk",
+     "history.open_as_copy": "Open as copy…",
+     "history.open_copy": "Open copy",
+@@ -2597,8 +2597,8 @@
+     "main.files.exporting_stems": "Exporting stems…",
+     "main.files.import_audio": "Import audio",
+     "main.files.new_project": "New project.",
+-    "main.files.nota": "Nota — {0}",
+-    "main.files.nota_project": "Nota project",
++    "main.files.nota": "NotAopenVJ — {0}",
++    "main.files.nota_project": "NotAopenVJ project",
+     "main.files.nothing_to_export_the_arrangement": "Nothing to export — the arrangement is empty.",
+     "main.files.open_failed": "Open failed: {0}",
+     "main.files.open_nota_project_nota_folder": "Open Nota project (.nota folder)",
+diff --git a/src/managed/Nota.Application/Settings.cs b/src/managed/Nota.Application/Settings.cs
+index 0648d0d..3af79ef 100644
+--- a/src/managed/Nota.Application/Settings.cs
++++ b/src/managed/Nota.Application/Settings.cs
+@@ -125,7 +125,7 @@ public sealed class Settings
+     /// live app. Off by default; loopback-only. Toggled in Preferences.</summary>
+     public bool McpEnabled { get; set; }
+     /// <summary>Loopback TCP port for the MCP HTTP server.</summary>
+-    public int McpPort { get; set; } = 3900;
++    public int McpPort { get; set; } = Branding.DefaultMcpPort;
+     /// <summary>Nota Remote: serve the phone controller on the local network. Off by default;
+     /// phones pair with a code from the QR. See Settings → Remote.</summary>
+     public bool RemoteEnabled { get; set; }
+diff --git a/src/managed/Nota.Application/TrackUids.cs b/src/managed/Nota.Application/TrackUids.cs
+new file mode 100644
+index 0000000..b58b840
+--- /dev/null
++++ b/src/managed/Nota.Application/TrackUids.cs
+@@ -0,0 +1,63 @@
++// SPDX-License-Identifier: AGPL-3.0-only
++// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
++//
++// Stable track identity for the Syntetika Engine visual layout.
++//
++// Engine track ids are only unique inside one engine session: loading a project creates new
++// tracks with new ids. The visual engine needs an identity that survives save/load so a
++// track's visual layer follows the track, not its position. `ProjectDto.Track.Uid` carries
++// that id in the project file; this registry maps it to the live engine id.
++//
++// Lives in the Application layer because both persistence (Infrastructure) and the visual
++// bridge need it, and Application is the only shared dependency.
++
++using System;
++using System.Collections.Generic;
++
++namespace Nota.Application;
++
++public static class TrackUids
++{
++    private static readonly object Gate = new();
++    private static readonly Dictionary<int, string> ByTrack = new();
++    private static readonly Dictionary<string, int> ByUid = new(StringComparer.Ordinal);
++
++    /// <summary>The persistent id for a live track, generated on first use (new tracks).</summary>
++    public static string UidFor(int trackId)
++    {
++        lock (Gate)
++        {
++            if (ByTrack.TryGetValue(trackId, out var uid)) return uid;
++            uid = Guid.NewGuid().ToString("N");
++            ByTrack[trackId] = uid;
++            ByUid[uid] = trackId;
++            return uid;
++        }
++    }
++
++    /// <summary>Re-attaches a saved id to the track the loader just created.</summary>
++    public static void Bind(string? uid, int trackId)
++    {
++        if (string.IsNullOrEmpty(uid)) return;
++        lock (Gate)
++        {
++            ByTrack[trackId] = uid;
++            ByUid[uid] = trackId;
++        }
++    }
++
++    public static bool TryGetUid(int trackId, out string uid)
++    {
++        lock (Gate) return ByTrack.TryGetValue(trackId, out uid!);
++    }
++
++    /// <summary>A new project or a project load starts a fresh id space.</summary>
++    public static void Clear()
++    {
++        lock (Gate)
++        {
++            ByTrack.Clear();
++            ByUid.Clear();
++        }
++    }
++}
+diff --git a/src/managed/Nota.Infrastructure/NotaPaths.cs b/src/managed/Nota.Infrastructure/NotaPaths.cs
+index 3c7d312..a12a76f 100644
+--- a/src/managed/Nota.Infrastructure/NotaPaths.cs
++++ b/src/managed/Nota.Infrastructure/NotaPaths.cs
+@@ -6,9 +6,11 @@
+ // NotaEngine.SetDataDir (nota_set_data_dir); the engine itself never infers
+ // platform paths — besides this value only NOTA_DATA_DIR (tests) is honoured.
+ // Platform conventions:
+-//   macOS   -> ~/Library/Application Support/Nota   (unchanged from the mac-only era)
+-//   Windows -> %APPDATA%\Nota                       (Roaming AppData)
+-//   Linux   -> $XDG_CONFIG_HOME/nota or ~/.config/nota (lowercase, XDG style)
++//   macOS   -> ~/Library/Application Support/NotAopenVJ
++//   Windows -> %APPDATA%\NotAopenVJ                  (Roaming AppData)
++//   Linux   -> $XDG_CONFIG_HOME/notaopenvj or ~/.config/notaopenvj
++
++using Nota.Application;
+ 
+ namespace Nota.Infrastructure;
+ 
+@@ -38,18 +40,18 @@ public static class NotaPaths
+         {
+             // %APPDATA% == Roaming AppData; on Windows SpecialFolder.ApplicationData maps here.
+             root = Path.Combine(
+-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Nota");
++                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), Branding.DataFolder);
+         }
+         else if (OperatingSystem.IsMacOS())
+         {
+-            // Preserve the exact mac-only path so existing installs keep their data.
+-            root = Path.Combine(Home, "Library", "Application Support", "Nota");
++            // The fork keeps its own data root so a stock Nota install is untouched.
++            root = Path.Combine(Home, "Library", "Application Support", Branding.DataFolder);
+         }
+         else
+         {
+             var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+             var baseDir = string.IsNullOrEmpty(xdg) ? Path.Combine(Home, ".config") : xdg;
+-            root = Path.Combine(baseDir, "nota");
++            root = Path.Combine(baseDir, Branding.DataFolder.ToLowerInvariant());
+         }
+ 
+         try { Directory.CreateDirectory(root); } catch { /* best-effort */ }
+diff --git a/src/managed/Nota.Infrastructure/Persistence/ProjectModel.cs b/src/managed/Nota.Infrastructure/Persistence/ProjectModel.cs
+index f88dbb8..eb2cb9a 100644
+--- a/src/managed/Nota.Infrastructure/Persistence/ProjectModel.cs
++++ b/src/managed/Nota.Infrastructure/Persistence/ProjectModel.cs
+@@ -129,6 +129,9 @@ public sealed class TransportDto
+ 
+ public sealed class TrackDto
+ {
++    /// <summary>Stable identity across save/load (Syntetika Engine visual layout). Absent in
++    /// projects saved before this field existed; generated on the next save.</summary>
++    public string? Uid { get; set; }
+     public int Type { get; set; }             // 0 = audio, 1 = instrument, 2 = return, 3 = group
+     public string? Name { get; set; }
+     public float Volume { get; set; } = 1.0f;
+diff --git a/src/managed/Nota.Infrastructure/Persistence/ProjectService.cs b/src/managed/Nota.Infrastructure/Persistence/ProjectService.cs
+index bd87845..042cb88 100644
+--- a/src/managed/Nota.Infrastructure/Persistence/ProjectService.cs
++++ b/src/managed/Nota.Infrastructure/Persistence/ProjectService.cs
+@@ -106,6 +106,7 @@ public sealed class ProjectService
+             if (!engine.TryGetTrackInfo(i, out var ti)) continue;
+             var t = new TrackDto
+             {
++                Uid = Nota.Application.TrackUids.UidFor(ti.Id),
+                 Type = ti.Type,
+                 Name = engine.GetTrackName(ti.Id) is { Length: > 0 } tn ? tn : null,
+                 Volume = ti.Volume,
+@@ -636,6 +637,8 @@ public sealed class ProjectService
+     /// content downgraded on load.</summary>
+     public static IReadOnlyList<string> Apply(ProjectDocument doc, IAudioEngine engine, string bundleDir)
+     {
++        // Engine track ids are new for this load; saved uids re-attach to them.
++        Nota.Application.TrackUids.Clear();
+         var warnings = new List<string>();
+         engine.Reset();
+ 
+@@ -820,6 +823,7 @@ public sealed class ProjectService
+                 continue;
+             }
+ 
++            Nota.Application.TrackUids.Bind(t.Uid, id);   // Syntetika Engine: visual layer identity
+             engine.SetTrackVolume(id, t.Volume);
+             engine.SetTrackPan(id, t.Pan);
+             engine.SetTrackMute(id, t.Mute);
+diff --git a/src/managed/Nota.Infrastructure/Update/AppUpdater.cs b/src/managed/Nota.Infrastructure/Update/AppUpdater.cs
+index 3a3f841..d9e83bc 100644
+--- a/src/managed/Nota.Infrastructure/Update/AppUpdater.cs
++++ b/src/managed/Nota.Infrastructure/Update/AppUpdater.cs
+@@ -81,6 +81,8 @@ public sealed partial class AppUpdater : IAppUpdater
+ 
+     public async Task<AppRelease?> CheckAsync(CancellationToken ct = default)
+     {
++        // The fork ships from its own feed; a stock Nota release would replace this build.
++        if (!Branding.UpdatesEnabled) return null;
+         if (_pending is null) CleanUpdatesDir();
+         LastCheckFailed = true;
+         try
+@@ -318,6 +320,7 @@ public sealed partial class AppUpdater : IAppUpdater
+ 
+     public void RunPendingInstall()
+     {
++        if (!Branding.UpdatesEnabled) return;
+         if (_pending is not { } p) return;
+         _pending = null;
+         try
+diff --git a/src/managed/Nota.Infrastructure/Visuals/VisualBridge.cs b/src/managed/Nota.Infrastructure/Visuals/VisualBridge.cs
+new file mode 100644
+index 0000000..b0053f9
+--- /dev/null
++++ b/src/managed/Nota.Infrastructure/Visuals/VisualBridge.cs
+@@ -0,0 +1,404 @@
++// SPDX-License-Identifier: AGPL-3.0-only
++// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
++//
++// Visual engine bridge (Syntetika Engine): Nota is the master clock.
++//
++// A loopback TCP line-delimited JSON channel carries transport state to the separate
++// openVJ-based visual process (~120 Hz) and clip-launch commands stamped with the
++// transport beat they must happen on. Commands use absolute beats, never "now": the
++// visual engine schedules them against the same musical grid, so network jitter cannot
++// move a visual off the beat.
++//
++// Protocol v1 (one JSON object per line):
++//   Nota -> visual : {"t":"hello","v":1}
++//                    {"t":"clock","beat":1.5,"bpm":120,"playing":true}
++//                    {"t":"scene","col":3,"atBeat":4}
++//                    {"t":"slot","layer":0,"col":3,"atBeat":4}
++//                    {"t":"stopLayer","layer":0}
++//                    {"t":"stopAll"}
++//
++// No audio ever crosses this channel; only musical time and commands.
++
++using System;
++using System.Globalization;
++using System.IO;
++using System.Net;
++using System.Net.Sockets;
++using System.Text;
++using System.Text.Json;
++using System.Threading;
++
++namespace Nota.Infrastructure.Visuals;
++
++public sealed class VisualBridge : IDisposable
++{
++    /// <summary>Loopback port the visual engine connects to. 47810 is not used by Nota itself.</summary>
++    public const int DefaultPort = 47810;
++    private const int ClockIntervalMs = 8;   // ~125 Hz
++
++    private readonly NotaEngine _engine;
++    private readonly object _gate = new();
++    private readonly object _writeGate = new();
++
++    private TcpListener? _listener;
++    /// <summary>Cross-process guard: only one running Nota may own the bridge port.</summary>
++    private Mutex? _owner;
++    private TcpClient? _client;
++    private NetworkStream? _stream;
++    private Thread? _acceptThread;
++    private Thread? _clockThread;
++    private volatile bool _running;
++    private volatile bool _loggedFirstClient;
++    /// <summary>Set when a client connects, so it gets the current layout immediately.</summary>
++    private volatile bool _layoutDirty = true;
++    private string _layoutSignature = "";
++    /// <summary>Bumped per accepted client, so each new connection gets a layout even when the
++    /// structure did not change (a send racing a disconnect must not lose the snapshot).</summary>
++    private volatile int _clientEpoch;
++    private int _sentEpoch = -1;
++    /// <summary>Current .nota bundle, for the `visuals/layout.json` sidecar (null = unsaved).</summary>
++    private string? _projectDir;
++
++    public VisualBridge(NotaEngine engine) => _engine = engine;
++
++    /// <summary>Set by the composition root so UI code can reach the running bridge.</summary>
++    public static VisualBridge? Current { get; private set; }
++
++    public bool Running => _running;
++    public int Port { get; private set; }
++    public bool Connected
++    {
++        get { lock (_writeGate) return _stream is not null; }
++    }
++
++    public void Start(int port = DefaultPort)
++    {
++        lock (_gate)
++        {
++            if (_running) return;
++            // macOS lets a second listener bind the same port with SO_REUSEADDR (unlike Linux),
++            // so a leftover dev instance silently stole openVJ's connection. A named mutex makes
++            // ownership explicit across processes: the newest instance does not steal the bridge.
++            _owner = new Mutex(initiallyOwned: true, name: "studio.syntetika.notaopenvj.visual-bridge", out bool createdNew);
++            if (!createdNew)
++            {
++                _owner.Dispose();
++                _owner = null;
++                AppLog("visual bridge already owned by another Nota instance; not starting");
++                return;
++            }
++            Port = port;
++            _listener = new TcpListener(IPAddress.Loopback, port);
++            _listener.Start();
++            _running = true;
++            Current = this;
++            _acceptThread = new Thread(AcceptLoop) { IsBackground = true, Name = "visual-bridge-accept" };
++            _acceptThread.Start();
++            _clockThread = new Thread(ClockLoop) { IsBackground = true, Name = "visual-bridge-clock" };
++            _clockThread.Start();
++            // Dev/self-test hook (like openVJ's OPENVJ_SNAPSHOT): launch two scenes on the
++            // musical grid so the bridge can be verified without clicking the UI.
++            if (Environment.GetEnvironmentVariable("NOTA_VISUAL_TEST") is { Length: > 0 })
++                new Thread(TestLoop) { IsBackground = true, Name = "visual-bridge-test" }.Start();
++            // Layout mirror self-test: add tracks, remove one, add a scene — openVJ must follow.
++            if (Environment.GetEnvironmentVariable("NOTA_LAYOUT_TEST") is { Length: > 0 })
++                new Thread(LayoutTestLoop) { IsBackground = true, Name = "visual-layout-test" }.Start();
++        }
++    }
++
++    public void Stop()
++    {
++        _running = false;
++        Current = null;
++        try { _listener?.Stop(); } catch { /* best effort */ }
++        lock (_writeGate)
++        {
++            try { _stream?.Dispose(); } catch { }
++            _stream = null;
++            try { _client?.Dispose(); } catch { }
++            _client = null;
++        }
++        try { _acceptThread?.Join(500); } catch { }
++        try { _clockThread?.Join(500); } catch { }
++        if (_owner is { } owner)
++        {
++            try { owner.ReleaseMutex(); } catch { }
++            owner.Dispose();
++            _owner = null;
++        }
++    }
++
++    public void Dispose() => Stop();
++
++    // ---- layout (UI thread, ~4 Hz) ------------------------------------------
++
++    /// <summary>The open project bundle, or null. The layout sidecar lives in `visuals/`.</summary>
++    public void SetProjectDir(string? dir)
++    {
++        _projectDir = dir;
++        _layoutDirty = true;   // re-send (and re-write) for the new project
++    }
++
++    /// <summary>
++    /// Mirrors NotA's structure to the visual engine: one layer per playable track (audio /
++    /// instrument; group, return and master are skipped) and one column per scene, in NotA's
++    /// top-to-bottom order. Sends a full snapshot only when something changed, so reconnects
++    /// and undo/redo/load are covered without hooking every edit.
++    /// </summary>
++    public void PublishLayout()
++    {
++        if (!_running) return;
++        try
++        {
++            var tracks = new List<object>();
++            var scenes = new List<object>();
++            var sig = new StringBuilder(512);
++            for (int i = 0; i < _engine.TrackCount; i++)
++            {
++                if (!_engine.TryGetTrackInfo(i, out var ti)) continue;
++                if (ti.Type is not (0 or 1)) continue;          // audio + instrument only
++                string name = _engine.GetTrackName(ti.Id) ?? "";
++                string uid = Nota.Application.TrackUids.UidFor(ti.Id);
++                sig.Append(ti.Id).Append(':').Append(uid).Append(':').Append(name).Append('|');
++                tracks.Add(new { uid, name, kind = ti.Type, id = ti.Id });
++            }
++            int sceneCount = _engine.SceneCount;
++            for (int i = 0; i < sceneCount; i++)
++            {
++                string name = _engine.GetSceneName(i) ?? "";
++                sig.Append('s').Append(i).Append(':').Append(name).Append('|');
++                scenes.Add(new { index = i, name });
++            }
++
++            string signature = sig.ToString();
++            int epoch = _clientEpoch;
++            if (!_layoutDirty && signature == _layoutSignature && epoch == _sentEpoch) return;
++            _layoutDirty = false;
++            _layoutSignature = signature;
++            _sentEpoch = epoch;
++
++            string json = JsonSerializer.Serialize(new { t = "layout", v = 1, tracks, scenes });
++            AppLog($"layout sent: {tracks.Count} tracks / {scenes.Count} scenes");
++            Send(json);
++            WriteLayoutFile(json);
++        }
++        catch (ObjectDisposedException) { /* app closing */ }
++    }
++
++    private void WriteLayoutFile(string json)
++    {
++        if (_projectDir is not { Length: > 0 } dir) return;
++        try
++        {
++            var visuals = Path.Combine(dir, "visuals");
++            Directory.CreateDirectory(visuals);
++            var target = Path.Combine(visuals, "layout.json");
++            var tmp = target + ".tmp";
++            File.WriteAllText(tmp, json);
++            File.Move(tmp, target, overwrite: true);
++        }
++        catch (IOException) { /* a read-only bundle: the mirror still works in memory */ }
++        catch (UnauthorizedAccessException) { }
++    }
++
++    // ---- commands (UI thread) ------------------------------------------------
++
++    /// <summary>Launch a Session scene's visual column on the next launch quantum.</summary>
++    public void Scene(int scene) => SendLaunch("scene", scene, atBeat: NextQuantumBeat());
++
++    /// <summary>Mirror the selected clip: openVJ selects the same slot (Preview + Properties).</summary>
++    public void Select(int layer, int scene)
++        => Send($"{{\"t\":\"select\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{scene.ToString(CultureInfo.InvariantCulture)}}}");
++
++    /// <summary>Launch one track's visual clip (layer, column) on the next launch quantum.</summary>
++    public void Slot(int layer, int scene) => SendLaunch("slot", scene, atBeat: NextQuantumBeat(), layer: layer);
++
++    public void StopLayer(int layer)
++        => Send($"{{\"t\":\"stopLayer\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)}}}");
++
++    public void StopAll() => Send("{\"t\":\"stopAll\"}");
++
++    /// <summary>
++    /// The beat the engine will actually apply a launch on, matching SessionPlayer's
++    /// ceil(blockStart / quant - eps) * quant. quant &lt;= 0 means immediately.
++    /// </summary>
++    public double NextQuantumBeat()
++    {
++        try
++        {
++            double quant = _engine.LaunchQuant;
++            double now = _engine.PositionBeats;
++            if (quant <= 1e-9) return Math.Round(now, 6);
++            // Match SessionPlayer: a beat already on the boundary stays on it.
++            double beat = Math.Ceiling(now / quant - 1e-9) * quant;
++            return Math.Round(beat < 0 ? 0 : beat, 6);
++        }
++        catch (ObjectDisposedException)
++        {
++            return 0;
++        }
++    }
++
++    private void SendLaunch(string kind, int col, double atBeat, int layer = 0)
++    {
++        string b = Num(atBeat);
++        string c = col.ToString(CultureInfo.InvariantCulture);
++        string json = kind == "scene"
++            ? $"{{\"t\":\"scene\",\"col\":{c},\"atBeat\":{b}}}"
++            : $"{{\"t\":\"slot\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{c},\"atBeat\":{b}}}";
++        Send(json);
++    }
++
++    private void TestLoop()
++    {
++        try
++        {
++            AppLog("test: armed (NOTA_VISUAL_TEST)");
++            // Let the engine finish opening its audio device before driving the transport.
++            Thread.Sleep(6000);
++            if (!_engine.IsPlaying) _engine.Play();
++            Thread.Sleep(4000);
++            AppLog($"test: scene 0 at beat {NextQuantumBeat():0.###}");
++            Scene(0);
++            Thread.Sleep(6000);
++            AppLog($"test: scene 1 at beat {NextQuantumBeat():0.###}");
++            Scene(1);
++            Thread.Sleep(8000);
++            AppLog("test: stopAll");
++            StopAll();
++        }
++        catch (Exception ex) { AppLog("test loop failed: " + ex.Message); }
++    }
++
++    private void LayoutTestLoop()
++    {
++        try
++        {
++            Thread.Sleep(5000);
++            AppLog("layout test: add Volt track");
++            _engine.AddVoltSynthTrack();
++            Thread.Sleep(4000);
++            AppLog("layout test: add audio track");
++            _engine.AddAudioTrack();
++            Thread.Sleep(4000);
++            AppLog("layout test: add scene");
++            _engine.AddScene();
++            Thread.Sleep(4000);
++            AppLog("layout test: move the last track to the top");
++            if (_engine.TrackCount > 1 && _engine.TryGetTrackInfo(_engine.TrackCount - 1, out var lastTi))
++                _engine.MoveTrack(lastTi.Id, 0);
++            Thread.Sleep(4000);
++            AppLog("layout test: remove the first added track");
++            for (int i = 0; i < _engine.TrackCount; i++)
++                if (_engine.TryGetTrackInfo(i, out var ti) && ti.Type == 1) { _engine.RemoveTrack(ti.Id); break; }
++            Thread.Sleep(4000);
++            AppLog($"layout test: done ({_engine.TrackCount} tracks, {_engine.SceneCount} scenes)");
++            Thread.Sleep(2000);
++            AppLog("layout test: remove every playable track");
++            for (int i = _engine.TrackCount - 1; i >= 0; i--)
++                if (_engine.TryGetTrackInfo(i, out var ti) && ti.Type is 0 or 1) _engine.RemoveTrack(ti.Id);
++            Thread.Sleep(4000);
++            AppLog("layout test: add one audio track back");
++            _engine.AddAudioTrack();
++            Thread.Sleep(4000);
++            AppLog($"layout test: end ({_engine.TrackCount} tracks)");
++        }
++        catch (Exception ex) { AppLog("layout test failed: " + ex.Message); }
++    }
++
++    // ---- transport loop ------------------------------------------------------
++
++    private void AcceptLoop()
++    {
++        while (_running)
++        {
++            TcpClient client;
++            try
++            {
++                client = _listener!.AcceptTcpClient();
++            }
++            catch (SocketException) { break; }
++            catch (ObjectDisposedException) { break; }
++
++            client.NoDelay = true;
++            AppLog($"client accepted ({client.Client.RemoteEndPoint})");
++            lock (_writeGate)
++            {
++                try { _stream?.Dispose(); } catch { }
++                try { _client?.Close(); } catch { }
++                _client = client;
++                _stream = client.GetStream();
++            }
++            _layoutDirty = true;
++            _clientEpoch++;
++            Send("{\"t\":\"hello\",\"v\":2}");
++            if (!_loggedFirstClient)
++            {
++                _loggedFirstClient = true;
++                try { AppLog($"visual engine connected on 127.0.0.1:{Port}"); } catch { }
++            }
++        }
++    }
++
++    private void ClockLoop()
++    {
++        while (_running)
++        {
++            if (Connected)
++            {
++                try
++                {
++                    double beat = _engine.PositionBeats;
++                    double bpm = _engine.Bpm;
++                    bool playing = _engine.IsPlaying;
++                    Send("{\"t\":\"clock\",\"beat\":" + Num(beat) +
++                         ",\"bpm\":" + Num(bpm) +
++                         ",\"playing\":" + (playing ? "true" : "false") + "}");
++                }
++                catch (ObjectDisposedException)
++                {
++                    break;
++                }
++                catch (IOException)
++                {
++                    DropClient();
++                }
++                catch (SocketException)
++                {
++                    DropClient();
++                }
++            }
++            Thread.Sleep(ClockIntervalMs);
++        }
++    }
++
++    private static string Num(double v) => v.ToString("0.#########", CultureInfo.InvariantCulture);
++
++    private void Send(string line)
++    {
++        lock (_writeGate)
++        {
++            if (_stream is not { } s) return;
++            try
++            {
++                byte[] bytes = Encoding.UTF8.GetBytes(line + "\n");
++                s.Write(bytes, 0, bytes.Length);
++            }
++            catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
++            {
++                AppLog($"send failed: {ex.GetType().Name}: {ex.Message}");
++                DropClient();
++            }
++        }
++    }
++
++    private void DropClient()
++    {
++        try { _stream?.Dispose(); } catch { }
++        try { _client?.Close(); } catch { }
++        _stream = null;
++        _client = null;
++    }
++
++    private static void AppLog(string text) => Console.Error.WriteLine("[visual-bridge] " + text);
++}
+diff --git a/src/managed/Nota.Mcp/NotaMcpServer.cs b/src/managed/Nota.Mcp/NotaMcpServer.cs
+index 60b0228..32bb0f4 100644
+--- a/src/managed/Nota.Mcp/NotaMcpServer.cs
++++ b/src/managed/Nota.Mcp/NotaMcpServer.cs
+@@ -41,7 +41,7 @@ public sealed class NotaMcpServer : IAsyncDisposable
+         configureServices?.Invoke(builder.Services);
+ 
+         builder.Services
+-            .AddMcpServer(o => { o.ServerInfo = new() { Name = "Nota", Version = "1" }; })
++            .AddMcpServer(o => { o.ServerInfo = new() { Name = Branding.ProductName, Version = "1" }; })
+             .WithHttpTransport()
+             .WithToolsFromAssembly();                        // discovers [McpServerToolType] in this assembly
+ 
+diff --git a/src/native/nota.engine/src/engine/Engine_Tracks.cpp b/src/native/nota.engine/src/engine/Engine_Tracks.cpp
+index 4faf33f..37f8bdb 100644
+--- a/src/native/nota.engine/src/engine/Engine_Tracks.cpp
++++ b/src/native/nota.engine/src/engine/Engine_Tracks.cpp
+@@ -1923,12 +1923,15 @@ bool Engine::moveClipBlock(const std::vector<ClipMoveReq>& moves) {
+     std::vector<int32_t> newIndex(items.size(), -1);
+ 
+     for (auto& [tid, nt] : clones) {
++        // Portability: clang < 16 has no P1091 (structured bindings in lambdas), so the
++        // lambda below takes a plain copy of the track id instead of the binding.
++        const int32_t rowTrack = tid;
+         const auto& ranges = incoming[tid];
+         auto rebuild = [&](auto& clips, auto carve) {
+             std::remove_reference_t<decltype(clips)> out;
+             out.reserve(clips.size() + 2 * ranges.size());
+             for (int32_t ci = 0; ci < static_cast<int32_t>(clips.size()); ++ci) {
+-                auto f = itemOf.find({tid, ci});
++                auto f = itemOf.find({rowTrack, ci});
+                 if (f != itemOf.end()) {
+                     auto& it = items[f->second];
+                     if (!it.sameTrack) continue; // leaves this track

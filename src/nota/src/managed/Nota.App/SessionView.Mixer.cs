@@ -1,0 +1,459 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Session view — the mixer under each column, in three sections the toolbar shows or hides:
+// I/O (input, monitor, output), Sends (one row per return bus) and Mixer (pan, volume,
+// meter, mute / solo / arm). The scene rail carries the row labels.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application;
+using Nota.Application.Editing;
+using Nota.Presentation;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+public sealed partial class SessionView
+{
+    private const double IoRowH = 22;
+    private const double FaderRowH = 18;
+    private const double MeterRowH = 6;
+    private const double ButtonRowH = 22;
+    private const double SectionTop = 6;
+
+    /// <summary>Master fader plumbing (the master level lives on the transport view-model).</summary>
+    public Func<float>? GetMasterVolume { get; set; }
+    public Action<float>? SetMasterVolume { get; set; }
+
+    private sealed class MixerParts
+    {
+        public required Control Root { get; init; }
+        public required Action UpdateMeter { get; init; }
+    }
+
+    private int ReturnRows => Math.Min(_engine.ReturnTrackCount, 4);
+
+    private List<(int Id, string Name)> Returns()
+    {
+        var list = new List<(int, string)>();
+        for (int i = 0; i < _engine.TrackCount; i++)
+            if (_engine.TryGetTrackInfo(i, out var ti) && ti.IsReturn) list.Add((ti.Id, TrackNames.Of(_engine, ti)));
+        return list;
+    }
+
+    private Control MixerRailLabels()
+    {
+        // Scenes across (specs/108): the sections sit side by side, so the corner names the
+        // sections; each control's row name moves to its tooltip (Named below).
+        if (_across)
+        {
+            var titles = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gap };
+            Border Title(string text) => new()
+            {
+                Width = TrackColW, Height = HeaderH,
+                Child = new TextBlock
+                {
+                    Text = text, FontSize = 8.5, FontWeight = FontWeight.SemiBold, Foreground = NotaPalette.TextDisabled,
+                    Margin = new Thickness(4, 0), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+                },
+            };
+            if (_showIO) titles.Children.Add(Title("I/O"));
+            if (_showSends && ReturnRows > 0) titles.Children.Add(Title(Loc.T("common.sends")));
+            if (_showMixer) titles.Children.Add(Title(Loc.T("common.mixer")));
+            return titles;
+        }
+        var stack = new StackPanel { Spacing = Gap };
+        TextBlock Label(string text) => new()
+        {
+            Text = text, FontSize = 8.5, FontWeight = FontWeight.SemiBold, Foreground = NotaPalette.TextDisabled,
+            Margin = new Thickness(10, 0), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Border Row(double h, string text) => new() { Height = h, Child = Label(text) };
+        if (_showIO)
+            stack.Children.Add(Section(Row(IoRowH, Loc.T("common.input")), Row(IoRowH, Loc.T("session.mixer.monitor")), Row(IoRowH, Loc.T("common.output"))));
+        if (_showSends && ReturnRows > 0)
+        {
+            var rows = Returns().Take(ReturnRows).Select((r, i) => (Control)Row(FaderRowH, Loc.F("session.mixer.send_n", (char)('A' + i), r.Name))).ToArray();
+            stack.Children.Add(Section(rows));
+        }
+        if (_showMixer)
+            stack.Children.Add(Section(Row(FaderRowH, Loc.T("common.pan")), Row(FaderRowH, Loc.T("common.volume")), new Border { Height = MeterRowH }, new Border { Height = ButtonRowH }));
+        return stack;
+    }
+
+    // One mixer section: below the cells (Scenes down), or a column of its own beside the next
+    // section at the right of the lane (Scenes across, specs/108).
+    private StackPanel Section(params Control[] rows)
+    {
+        var s = _across
+            ? new StackPanel { Spacing = Gap, Width = TrackColW, VerticalAlignment = VerticalAlignment.Center }
+            : new StackPanel { Spacing = Gap, Margin = new Thickness(0, SectionTop, 0, 0) };
+        foreach (var r in rows) s.Children.Add(r);
+        return s;
+    }
+
+    // Every track's info, read once per UI tick, so the sections below the grid follow volume,
+    // pan and M / S / Arm changed anywhere else — the docked Mixer sits right next to them
+    // (specs/054), and track headers, automation, undo and controllers move them too.
+    private readonly Dictionary<int, NotaTrackInfo> _mixInfo = new();
+
+    private void SnapshotMixInfo()
+    {
+        _mixInfo.Clear();
+        int n = _engine.TrackCount;
+        for (int i = 0; i < n; i++)
+            if (_engine.TryGetTrackInfo(i, out var t)) _mixInfo[t.Id] = t;
+        // Arming elsewhere (the docked Mixer, a track header) must also make an empty slot
+        // record: the cells read _armed, and they tick after this.
+        foreach (var c in _cols)
+        {
+            if (c.Kind != ColKind.Track || !_mixInfo.TryGetValue(c.TrackId, out var ct)) continue;
+            if (ct.Armed != 0) _armed.Add(c.TrackId); else _armed.Remove(c.TrackId);
+        }
+    }
+
+    private MixerParts BuildMixer(Column c)
+    {
+        var root = new StackPanel { Spacing = Gap, Orientation = _across ? Orientation.Horizontal : Orientation.Vertical };
+        bool hasTrack = c.Kind != ColKind.Master;
+        NotaTrackInfo ti = default;
+        if (hasTrack)
+            for (int i = 0; i < _engine.TrackCount; i++)
+                if (_engine.TryGetTrackInfo(i, out var t) && t.Id == c.TrackId) { ti = t; break; }
+        if (c.Kind == ColKind.Track && ti.Armed != 0) _armed.Add(c.TrackId); else _armed.Remove(c.TrackId);
+
+        if (_showIO) root.Children.Add(Section(Named(InputRow(c), Loc.T("common.input")), Named(MonitorRow(c), Loc.T("session.mixer.monitor")), Named(OutputRow(c), Loc.T("common.output"))));
+
+        // Send faders follow changes made elsewhere — the Devices panel's Sends card, the
+        // Mixer window, automation (#138) — on the same tick as the meters.
+        var sendSyncs = new List<Action>();
+        if (_showSends && ReturnRows > 0)
+        {
+            var rows = new List<Control>();
+            // Scenes across names each send row in its tooltip (the rail's labels are gone).
+            var sendNames = _across ? Returns().Select(r => r.Name).Concat(Enumerable.Repeat("", ReturnRows)).ToList() : null;
+            for (int b = 0; b < ReturnRows; b++)
+            {
+                if (c.Kind is ColKind.Track or ColKind.Group)
+                {
+                    int bus = b, id = c.TrackId;
+                    // The send amount is written inside the bar (style guide: shell sliders).
+                    static string SendText(double v) => v <= 0.005 ? "–" : NotaNum.Str(v * 100, "0");
+                    var f = new MiniFader(_engine.GetTrackSend(id, bus), 1.0) { Default = 0, Text = SendText };
+                    SendControl.Attach(f, _engine, id, bus);   // undoable, writes automation (specs/072)
+                    ValueEntry.Attach(f, f.EntryField(Loc.T("session.mixer.send"), SendText));
+                    sendSyncs.Add(() =>
+                    {
+                        if (f.Dragging) return;
+                        double v = _engine.GetTrackSend(id, bus);
+                        if (Math.Abs(v - f.Value) > 1e-3) f.Value = v;
+                    });
+                    rows.Add(_across ? Named(FaderRow(f, null), Loc.F("session.mixer.send_n", (char)('A' + b), sendNames![b])) : FaderRow(f, null));
+                }
+                else rows.Add(new Border { Height = FaderRowH });
+            }
+            root.Children.Add(Section(rows.ToArray()));
+        }
+
+        Action meter = () => { };
+        var follow = new List<Action<NotaTrackInfo>>();
+        bool cueShown = CueKey.Shown(_engine);   // Cue keys (specs/089)
+        if (_showMixer)
+        {
+            Control panRow;
+            if (hasTrack)
+            {
+                int id = c.TrackId;
+                var pan = new PanBar(ti.Pan) { VerticalAlignment = VerticalAlignment.Center };   // draws its own C / 12L readout
+                var panUndo = new MixGesture(_engine, MixTarget.Pan(id));   // one undo step per drag (specs/009)
+                pan.GestureBegin += panUndo.Begin;
+                pan.GestureEnd += panUndo.End;
+                Action<double> setPan = p => _engine.SetTrackPan(id, (float)p);
+                pan.PanChanged += p => panUndo.Change(p, setPan);
+                ValueEntry.Attach(pan, pan.EntryField(Loc.T("common.pan")));
+                follow.Add(t => { if (!pan.Dragging && Math.Abs(pan.Pan - t.Pan) > 1e-3) pan.Pan = t.Pan; });
+                panRow = Named(FaderRow(pan, null), Loc.T("common.pan"));
+            }
+            else panRow = new Border { Height = FaderRowH };
+
+            double vol0 = hasTrack ? ti.Volume : GetMasterVolume?.Invoke() ?? 1f;
+            static string DbText(double v) => v <= 1e-4 ? "−∞" : NotaNum.Db(AudioMath.LinToDb(v), signed: true);
+            var vol = new MiniFader(vol0, 1.5) { Default = 1.0, Text = DbText };
+            var volUndo = new MixGesture(_engine, hasTrack ? MixTarget.Volume(c.TrackId) : MixTarget.Master);
+            vol.GestureBegin += volUndo.Begin;
+            vol.GestureEnd += volUndo.End;
+            Action<double> setVol = v =>
+            {
+                if (hasTrack) _engine.SetTrackVolume(c.TrackId, (float)v);
+                else SetMasterVolume?.Invoke((float)v);
+            };
+            vol.ValueChanged += v => volUndo.Change(v, setVol);
+            ValueEntry.Attach(vol, vol.EntryField(Loc.T("common.volume"), DbText));
+            if (hasTrack) follow.Add(t => { if (!vol.Dragging && Math.Abs(vol.Value - t.Volume) > 1e-3) vol.Value = t.Volume; });
+
+            var mL = new MeterLine(); var mR = new MeterLine();
+            var meters = new StackPanel { Height = MeterRowH, Spacing = 1, Margin = new Thickness(4, 0), VerticalAlignment = VerticalAlignment.Center, Children = { mL, mR } };
+            meter = () =>
+            {
+                NotaMeter m = default;
+                if (hasTrack) { if (!_engine.TryGetTrackMeter(c.TrackId, out m)) m = default; }
+                else m = _engine.MasterMeter();
+                mL.Level = m.PeakL; mR.Level = m.PeakR;
+            };
+
+            var btns = new UniformGrid { Rows = 1, Height = ButtonRowH, Margin = new Thickness(4, 0) };
+            if (hasTrack)
+            {
+                int id = c.TrackId;
+                btns.Children.Add(MixToggle("M", ti.Muted != 0, false, (v, _) => _engine.SetTrackMute(id, v), out var syncMute));
+                btns.Children.Add(MixToggle("S", ti.Soloed != 0, false, (v, _) => _engine.SetTrackSolo(id, v), out var syncSolo));
+                follow.Add(t => { syncMute(t.Muted != 0); syncSolo(t.Soloed != 0); });
+                if (cueShown)   // Cue (specs/089)
+                {
+                    var cue = CueKey.Create(_engine, id, 0, 20, NotaRadius.Cell, out var syncCue);
+                    cue.Margin = new Thickness(1.5, 0);
+                    btns.Children.Add(cue);
+                    follow.Add(t => syncCue(_engine.GetTrackCue(t.Id)));
+                }
+                if (c.Kind == ColKind.Track)
+                {
+                    btns.Children.Add(MixToggle(null, ti.Armed != 0, true, (v, additive) =>
+                    {
+                        TrackArming.Set(_engine, id, v, additive);
+                        if (v) _armed.Add(id); else _armed.Remove(id);
+                        UpdateStates();
+                    }, out var syncArm));
+                    follow.Add(t => syncArm(t.Armed != 0));
+                }
+                else if (c.Kind == ColKind.Group)   // a group's Link key (specs/076)
+                {
+                    bool linkOn = _engine.GetTrackEditLink(id);
+                    var glyph = new Glyph(GlyphKind.ChainLink, 10);
+                    var key = new Border { Height = 17, Margin = new Thickness(1, 0), CornerRadius = NotaRadius.Field, BorderThickness = new Thickness(1), Child = glyph, Cursor = new Cursor(StandardCursorType.Hand) };
+                    ToolTip.SetTip(key, ArrangementView.LinkTip);
+                    ArrangementView.PaintLinkChip(key, glyph, linkOn);
+                    key.PointerPressed += (_, e) =>
+                    {
+                        if (!e.GetCurrentPoint(key).Properties.IsLeftButtonPressed) return;
+                        e.Handled = true;
+                        if (!_engine.SetTrackEditLink(id, !linkOn)) return;
+                        linkOn = !linkOn; ArrangementView.PaintLinkChip(key, glyph, linkOn);
+                        ArrangementChanged?.Invoke();   // the Arrangement repaints its headers
+                    };
+                    btns.Children.Add(key);
+                    follow.Add(_ => { bool v = _engine.GetTrackEditLink(id); if (v != linkOn) { linkOn = v; ArrangementView.PaintLinkChip(key, glyph, v); } });
+                }
+            }
+            root.Children.Add(Section(panRow, Named(FaderRow(vol, null), Loc.T("common.volume")), meters, btns));
+        }
+        if (sendSyncs.Count > 0)
+        {
+            var meterOnly = meter;
+            meter = () => { meterOnly(); foreach (var sync in sendSyncs) sync(); };
+        }
+        if (follow.Count > 0)
+        {
+            var before = meter;
+            int trackId = c.TrackId;
+            meter = () =>
+            {
+                before();
+                if (_mixInfo.TryGetValue(trackId, out var t)) foreach (var f in follow) f(t);
+            };
+        }
+        return new MixerParts { Root = root, UpdateMeter = meter };
+    }
+
+    // Scenes across has no row labels (the rail carried them), so a row's name is its tooltip.
+    private Control Named(Control row, string name)
+    {
+        if (_across && ToolTip.GetTip(row) is null) ToolTip.SetTip(row, name);
+        return row;
+    }
+
+    private static TextBlock ReadoutText()
+    {
+        var t = new TextBlock { FontSize = 8.5, Foreground = NotaPalette.TextMuted, Width = 30, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+        t.BindResource(TextBlock.FontFamilyProperty, "Font.Measure");
+        return t;
+    }
+
+    private static Control FaderRow(Control fader, TextBlock? readout)
+    {
+        fader.VerticalAlignment = VerticalAlignment.Center;
+        var g = new Grid { Height = FaderRowH, ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(4, 0), ColumnSpacing = 6 };
+        g.Children.Add(fader);
+        if (readout is not null) { Grid.SetColumn(readout, 1); g.Children.Add(readout); }
+        return g;
+    }
+
+    // M / S / record-arm: a 20px key. Engaged mute fills amber, solo blue, arm the record red
+    // with its white disc (DESIGN.md § Controls), each with derived ink.
+    // set(on, additive): additive = ⌘/Ctrl held (the arm button arms without disarming the others, #332).
+    private static Control MixToggle(string? label, bool initial, bool arm, Action<bool, KeyModifiers> set, out Action<bool> sync)
+    {
+        bool on = initial;
+        var text = new TextBlock { Text = label ?? "", FontSize = 9, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        var disc = new Glyph(GlyphKind.Record, 7);
+        var b = new Border
+        {
+            Height = 20, Margin = new Thickness(1.5, 0), CornerRadius = NotaRadius.Cell, BorderThickness = new Thickness(1),
+            BorderBrush = NotaPalette.Seam, Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+            Child = arm ? disc : text,
+        };
+        void Paint()
+        {
+            if (arm)
+            {
+                b.Background = on ? NotaPalette.Record : NotaPalette.SurfaceRaised;
+                b.BorderBrush = on ? NotaPalette.Record : NotaPalette.Seam;
+                disc.Foreground = on ? NotaPalette.RecordInk : NotaPalette.Record;
+                return;
+            }
+            var fill = label == "S" ? NotaPalette.Solo : NotaPalette.Mute;
+            b.Background = on ? fill : NotaPalette.SurfaceRaised;
+            b.BorderBrush = on ? fill : NotaPalette.Seam;
+            text.Foreground = on ? NotaPalette.InkOn(fill) : NotaPalette.TextSecondary;
+        }
+        ToolTip.SetTip(b, arm ? TrackArming.Tip : label == "M" ? Loc.T("common.mute") : Loc.T("common.solo"));
+        b.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(b).Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+            on = !on; set(on, e.KeyModifiers); Paint();
+        };
+        sync = v => { if (v == on) return; on = v; Paint(); };
+        Paint();
+        return b;
+    }
+
+    // ---- I/O rows --------------------------------------------------------------------
+
+    private Control InputRow(Column c)
+    {
+        if (c.Kind != ColKind.Track) return new Border { Height = IoRowH };
+        var names = new List<(int Id, string Name, bool Instrument)>();
+        for (int i = 0; i < _engine.TrackCount; i++)
+            if (_engine.TryGetTrackInfo(i, out var t) && t.Id != c.TrackId && !t.IsGroup)
+                names.Add((t.Id, TrackNames.Of(_engine, t), t.IsInstrument));
+
+        // An audio track's hardware input appears once per channel pick: every input, then the
+        // stereo pairs (#340, specs/086).
+        var items = new List<(RecordInputPick Value, string Label)>();
+        RecordInputPick cur;
+        if (c.IsInstrument) // the live input (All inputs / a device) or a track to take MIDI from (specs/086)
+        {
+            var (entries, curEntry) = MidiInputPick.Compact(_engine, c.TrackId, names.Where(n => n.Instrument).Select(n => (n.Id, n.Name)));
+            var mcb = new ComboBox { Height = IoRowH, FontSize = 10, Padding = new Thickness(6, 0), HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(4, 0) };
+            foreach (var en in entries) mcb.Items.Add(new ComboBoxItem { Content = en.Label, FontSize = 10 });
+            mcb.SelectedIndex = curEntry;
+            int tid = c.TrackId;
+            mcb.SelectionChanged += (_, _) =>
+            {
+                if (mcb.SelectedIndex >= 0 && mcb.SelectedIndex < entries.Count) MidiInputPick.Apply(_engine, tid, entries[mcb.SelectedIndex]);
+            };
+            ToolTip.SetTip(mcb, Loc.T("session.mixer.midi_input_every_input_or"));
+            return mcb;
+        }
+        else
+        {
+            foreach (var (pick, _, shortName) in RecordInputPick.HardwareEntries(_engine, c.TrackId)) items.Add((pick, shortName));
+            items.Add((RecordInputPick.Track(-1), Loc.T("common.master")));
+            foreach (var n in names) items.Add((RecordInputPick.Track(n.Id), n.Name));
+            cur = RecordInputPick.Of(_engine, c.TrackId);
+        }
+        var cb = new ComboBox { Height = IoRowH, FontSize = 9, Padding = new Thickness(6, 0), HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(4, 0) };
+        foreach (var it in items) cb.Items.Add(new ComboBoxItem { Content = it.Label, FontSize = 9 });
+        int sel = items.FindIndex(it => it.Value.Matches(cur));
+        cb.SelectedIndex = sel >= 0 ? sel : 0;
+        int id = c.TrackId;
+        bool inst = c.IsInstrument;
+        cb.SelectionChanged += (_, _) =>
+        {
+            if (cb.SelectedIndex < 0) return;
+            var v = items[cb.SelectedIndex].Value;
+            if (inst) _engine.SetTrackMidiSource(id, v.Source); else v.ApplyTo(_engine, id);
+        };
+        ToolTip.SetTip(cb, inst ? Loc.T("session.mixer.midi_input_every_input_or") : Loc.T("common.record_input"));
+        return cb;
+    }
+
+    private Control MonitorRow(Column c)
+    {
+        if (c.Kind != ColKind.Track || !c.IsAudio) return new Border { Height = IoRowH };
+        int id = c.TrackId;
+        bool on = _engine.GetTrackMonitor(id);
+        var seg = Segmented(new[] { "In", Loc.T("common.auto") }, on ? 0 : 1, i => _engine.SetTrackMonitor(id, i == 0), compact: true);
+        seg.Margin = new Thickness(4, 0);
+        ToolTip.SetTip(seg, Loc.T("session.mixer.in_hear_the_input_live"));
+        return seg;
+    }
+
+    private Control OutputRow(Column c)
+    {
+        string text = c.Kind == ColKind.Master ? "Ext Out 1/2" : Loc.T("common.master");
+        if (c.GroupId > 0 && ColumnFor(c.GroupId) is { } g) text = g.Name;
+        else if (c.GroupId > 0)
+            for (int i = 0; i < _engine.TrackCount; i++)
+                if (_engine.TryGetTrackInfo(i, out var t) && t.Id == c.GroupId) { text = TrackNames.Of(_engine, t); break; }
+        var b = new Border
+        {
+            Height = IoRowH, Margin = new Thickness(4, 0), Padding = new Thickness(6, 0), CornerRadius = NotaRadius.Cell,
+            Background = NotaPalette.SurfaceCard, BorderBrush = NotaPalette.BorderDefault, BorderThickness = new Thickness(1),
+            Child = new TextBlock { Text = text, FontSize = 9, Foreground = NotaPalette.TextSecondary, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis },
+        };
+        ToolTip.SetTip(b, Loc.T("session.mixer.output_group_a_track_to"));
+        return b;
+    }
+
+    /// <summary>A segmented switch (Border.segmented + ToggleButton.seg); exactly one is lit.</summary>
+    internal static Border Segmented(IReadOnlyList<string> labels, int selected, Action<int> pick, bool compact = false, bool mono = false)
+    {
+        var row = new UniformGrid { Rows = 1 };
+        var buttons = new List<ToggleButton>();
+        for (int i = 0; i < labels.Count; i++)
+        {
+            int idx = i;
+            var tb = new ToggleButton
+            {
+                Content = labels[i], Classes = { "seg" }, IsChecked = i == selected, HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Center, Padding = new Thickness(compact ? 4 : 8, 0),
+                FontSize = compact ? 9 : 10, Height = compact ? 16 : 20, MinWidth = 0,
+            };
+            if (mono) tb.BindResource(ToggleButton.FontFamilyProperty, "Font.Measure");
+            tb.Click += (_, _) =>
+            {
+                foreach (var b in buttons) b.IsChecked = ReferenceEquals(b, tb);
+                pick(idx);
+            };
+            buttons.Add(tb);
+            row.Children.Add(tb);
+        }
+        return new Border { Classes = { "segmented" }, Padding = new Thickness(2), Child = row };
+    }
+
+    /// <summary>A thin horizontal peak meter line (Signal green), 2px tall.</summary>
+    private sealed class MeterLine : Control
+    {
+        private double _level;
+        public MeterLine() { Height = 2; }
+        public double Level
+        {
+            set { double v = Math.Clamp(value, 0, 1); if (Math.Abs(v - _level) < 0.004) return; _level = v; InvalidateVisual(); }
+        }
+        public override void Render(DrawingContext ctx)
+        {
+            double w = Bounds.Width;
+            ctx.DrawRectangle(NotaPalette.SurfaceRaised, null, new Rect(0, 0, w, 2), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+            if (_level > 0) ctx.DrawRectangle(NotaPalette.Success, null, new Rect(0, 0, w * _level, 2), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+        }
+    }
+}

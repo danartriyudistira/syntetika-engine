@@ -1,0 +1,369 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// M4.1-A: transport as the first MVVM slice. Wraps the engine's transport +
+// master behind observable properties and commands; the clock calls Tick().
+
+using System;
+using System.Globalization;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Nota.Application;
+using Nota.Application.Localization;
+
+namespace Nota.Presentation;
+
+public partial class TransportViewModel(IAudioEngine engine) : ObservableObject
+{
+    private readonly IAudioEngine _engine = engine;
+
+    // A bar is the time signature's numerator in beats, as the metronome counts it (#405).
+    private int BeatsPerBar => Math.Max(1, TimeSigNumerator);
+
+    [ObservableProperty] private string _positionText = "1.1.00";
+    [ObservableProperty] private string _playLabel = "▶ Play";
+    [ObservableProperty] private bool _isPlaying;
+    [ObservableProperty] private decimal _bpm = 120; // decimal for NumericUpDown
+    /// <summary>False while the master Tempo lane drives the tempo (specs/099): the field then
+    /// shows the tempo under the playhead and takes no input.</summary>
+    [ObservableProperty] private bool _bpmEditable = true;
+    [ObservableProperty] private int _timeSigNumerator = 4;
+    [ObservableProperty] private int _timeSigDenominator = 4;
+    /// <summary>The project key as a <see cref="Nota.Application.Samples.MusicalKey.Code"/>
+    /// (−1 = none). Managed-only: the engine has no use for it; samples dropped in are
+    /// transposed to it on request.</summary>
+    [ObservableProperty] private int _keyCode = -1;
+
+    public Nota.Application.Samples.MusicalKey? Key => Nota.Application.Samples.MusicalKey.FromCode(KeyCode);
+    [ObservableProperty] private double _masterVolume = 1.0;
+    [ObservableProperty] private string _masterDbText = "0.0\u2009dB";
+    [ObservableProperty] private bool _metronomeOn;
+    /// <summary>Bars of count-in before Play / Record from stop (0 = off).</summary>
+    [ObservableProperty] private int _countInBars;
+    /// <summary>The count-in is clicking (the transport hasn't rolled yet).</summary>
+    [ObservableProperty] private bool _isCountingIn;
+    [ObservableProperty] private bool _loopOn;
+    /// <summary>Loop record mode: false = Overdub, true = Replace (the first new note of a loop
+    /// pass replaces what earlier passes of the take recorded).</summary>
+    [ObservableProperty] private bool _loopRecordReplace;
+    [ObservableProperty] private string _loopRangeText = "1.1–5.1";
+    [ObservableProperty] private bool _recordOn;
+    /// <summary>Which clock the position readout is showing, printed under it so the
+    /// number is never ambiguous (transport console, mockup 1b).</summary>
+    [ObservableProperty] private string _positionUnitText = Loc.T("transport.bars");
+
+    private bool _revertingRec;
+
+    /// <summary>Status text for the record button (armed? / input failed? / recording).</summary>
+    public event Action<string>? Message;
+
+    /// <summary>Supplies the track to auto-arm when Record is pressed with nothing
+    /// armed (0 = none). Lets "hit Record" work without a separate arm click.</summary>
+    public Func<int>? RecordArmTarget { get; set; }
+
+    /// <summary>Supplies the loop region the current arrangement selection asks for (a
+    /// selected clip / time range), or null. Turning the loop on uses it when present.</summary>
+    public Func<(double Start, double End)?>? SelectionLoopRange { get; set; }
+
+    /// <summary>Fired after auto-arming a track so the track headers can refresh.</summary>
+    public event Action? TracksChanged;
+
+    private bool _syncingLoop;
+
+    // The tempo this view-model last sent and is waiting to read back. SetBpm only queues
+    // the change for the audio thread, so until the engine reports it, Tick must not
+    // mistake the old tempo for an outside change and snap the field back mid-drag.
+    private double? _sentBpm;
+    private long _sentBpmAt;
+    private const long SentBpmTimeoutMs = 1000;   // no audio thread draining commands: stop waiting
+    private bool _followingBpm;                   // reflecting the engine's tempo, not a user edit
+
+    partial void OnBpmChanged(decimal value)
+    {
+        if (_followingBpm) return;   // the engine already has it (unrounded): don't echo it back
+        if (_engine.IsTempoAutomated) { FollowEngineBpm(); return; }   // the master Tempo lane leads (specs/099)
+        _sentBpm = (double)value;
+        _sentBpmAt = Environment.TickCount64;
+        _engine.SetBpm((double)value);
+    }
+
+    public void RestoreBpm(double value)
+    {
+        _followingBpm = true;
+        Bpm = (decimal)Math.Round(value, 2);
+        _followingBpm = false;
+        _sentBpm = null;
+    }
+    partial void OnTimeSigNumeratorChanged(int value)
+    {
+        _engine.SetTimeSignature(value, TimeSigDenominator);
+        if (!IsCountingIn) UpdatePositionText(_lastBeats);   // the readouts re-count at once
+        SyncLoop();
+    }
+    partial void OnTimeSigDenominatorChanged(int value) => _engine.SetTimeSignature(TimeSigNumerator, value);
+    partial void OnMasterVolumeChanged(double value)
+    {
+        _engine.SetMasterVolume((float)value);
+        // Show the gain the fader is actually applying. Silence has no dB value, so it
+        // gets the symbol rather than a very large negative number.
+        MasterDbText = value <= 1e-4
+            ? "\u2212\u221e\u2009dB"
+            : (20.0 * Math.Log10(value)).ToString("0.0", CultureInfo.CurrentCulture) + "\u2009dB";
+    }
+    partial void OnMetronomeOnChanged(bool value) => _engine.SetMetronome(value);
+    partial void OnCountInBarsChanged(int value) => _engine.SetCountIn(value);
+    partial void OnLoopRecordReplaceChanged(bool value) => _engine.SetLoopRecordMode(value);
+
+    partial void OnLoopOnChanged(bool value)
+    {
+        if (_syncingLoop) return;   // reflecting engine state, not a user toggle
+        // Toggle over the current region (set from the arrangement ruler / "Loop
+        // selection"); fall back to the first four bars if none has been set.
+        // Turning it on with something selected in the arrangement loops that selection.
+        double s = _engine.LoopStart, e = _engine.LoopEnd;
+        if (value && SelectionLoopRange?.Invoke() is { } sel) (s, e) = sel;
+        if (e <= s) { s = 0; e = 4 * BeatsPerBar; }
+        _engine.SetLoop(value, s, e);
+        LoopRangeText = FormatRange(s, e);
+    }
+
+    /// <summary>Reflect the engine's loop region in the transport bar (called after
+    /// the arrangement authors a region via the ruler or "Loop selection").</summary>
+    public void SyncLoop()
+    {
+        _syncingLoop = true;
+        LoopOn = _engine.LoopEnabled;
+        _syncingLoop = false;
+        double s = _engine.LoopStart, e = _engine.LoopEnd;
+        if (e <= s) { s = 0; e = 4 * BeatsPerBar; }   // a cleared region: what Loop would use (#125)
+        LoopRangeText = FormatRange(s, e);
+    }
+
+    private string FormatRange(double startBeat, double endBeat) => $"{BarBeat(startBeat)}–{BarBeat(endBeat)}";   // closed: plain numbers
+    private string BarBeat(double beat)
+    {
+        int bar = (int)(beat / BeatsPerBar) + 1;
+        int b = (int)(beat % BeatsPerBar) + 1;
+        return $"{bar}.{b}";
+    }
+
+    partial void OnRecordOnChanged(bool value)
+    {
+        if (_revertingRec) return;               // ignore the re-entry from a revert below
+        _engine.SetRecording(value);
+        // Stopping materialises the captured audio into a clip — refresh so the take
+        // appears (otherwise the last live frame lingers and the take seems to vanish).
+        if (!value) { TracksChanged?.Invoke(); Message?.Invoke(""); return; }
+        if (_engine.IsRecording) { Message?.Invoke(RecordingMessage()); return; }
+
+        // Failed only because nothing is armed? Auto-arm the record target and
+        // retry, so pressing Record just works without a separate arm click.
+        if (_engine.RecordStartStatus == 1 && RecordArmTarget?.Invoke() is int tid && tid > 0)
+        {
+            _engine.SetTrackArmed(tid, true);
+            TracksChanged?.Invoke();
+            _engine.SetRecording(true);
+            if (_engine.IsRecording) { Message?.Invoke(RecordingMessage()); return; }
+        }
+
+        // Couldn't start — pop the button back up and explain why.
+        _revertingRec = true; RecordOn = false; _revertingRec = false;
+        Message?.Invoke(_engine.RecordStartStatus switch
+        {
+            1 => Loc.T("transport.cant_record_arm_a_track"),
+            2 => Loc.T("transport.cant_record_no_audio_input"),
+            _ => Loc.T("transport.recording_didnt_start"),
+        });
+    }
+
+    // "● Recording…", or for a take on several tracks how many, and which armed tracks it
+    // skipped and why (specs/086).
+    private string RecordingMessage()
+    {
+        // Nothing armed while the Session plays: the take records the performance alone (#971).
+        if (_engine.RecordStartStatus == 3) return Loc.T("transport.recording_session_performance");
+        int n = _engine.RecordingTracks().Length;
+        var skipped = _engine.RecordSkipped();
+        if (n <= 1 && skipped.Length == 0) return Loc.T("transport.recording");
+        string msg = Loc.Plural("transport.recording_n_tracks", n);
+        if (skipped.Length == 0) return msg;
+        var why = new System.Collections.Generic.List<string>();
+        foreach (var (id, reason) in skipped)
+        {
+            string name = _engine.GetTrackName(id);
+            if (name.Length == 0) name = Loc.F("common.track_n", id);
+            why.Add(reason switch
+            {
+                RecordSkipReason.InputUnavailable => Loc.F("transport.skipped_not_on_device", name),
+                RecordSkipReason.SwitchedOff => Loc.F("transport.skipped_switched_off", name),
+                RecordSkipReason.MixedSources => Loc.F("transport.skipped_mixed_sources", name),
+                _ => Loc.F("transport.skipped_too_many", name),
+            });
+        }
+        return Loc.F("transport.recording_with_skipped", msg, string.Join(", ", why));
+    }
+
+    /// <summary>⌘. (#185, specs/078): throw the take being recorded away and record it again —
+    /// the Arrangement from where the transport was started, a Session slot from the next launch
+    /// quantum. The record button stays down; nothing of the take is left, not even an undo step.</summary>
+    [RelayCommand]
+    private void RetryTake()
+    {
+        switch (_engine.RetryTake())
+        {
+            case RetryTakeResult.Arrangement:
+            case RetryTakeResult.Session:
+                TracksChanged?.Invoke();
+                Message?.Invoke(Loc.T("transport.take_discarded_retrying"));
+                break;
+            case RetryTakeResult.Failed:
+                // The take is gone but recording couldn't start again: pop the button up.
+                if (RecordOn) { _revertingRec = true; RecordOn = false; _revertingRec = false; }
+                _engine.SetRecording(false);
+                TracksChanged?.Invoke();
+                Message?.Invoke(_engine.RecordStartStatus switch
+                {
+                    1 => Loc.T("transport.cant_record_arm_a_track"),
+                    2 => Loc.T("transport.cant_record_no_audio_input"),
+                    _ => Loc.T("transport.recording_didnt_start"),
+                });
+                break;
+            default:
+                Message?.Invoke(Loc.T("transport.no_take_to_discard"));
+                break;
+        }
+    }
+
+    [RelayCommand]
+    private void PlayStop()
+    {
+        if (_engine.IsPlaying || _engine.CountInBeats > 0 || RecordOn) StopAll();
+        else _engine.PlayWithCountIn();
+    }
+
+    [RelayCommand]
+    private void Play() => _engine.PlayWithCountIn();
+
+    /// <summary>⇧Space (#51): Play / pause. Stop rewinds to where playback started (the
+    /// engine's start anchor); pause leaves the playhead where it is, and the next Play
+    /// carries on from there. Seeking there is what moves the anchor.</summary>
+    [RelayCommand]
+    private void PlayPause()
+    {
+        if (_engine.IsPlaying || _engine.CountInBeats > 0 || RecordOn)
+        {
+            bool counting = !_engine.IsPlaying;
+            double here = _engine.PositionBeats;
+            StopAll();
+            if (!counting) _engine.Seek(here);   // a count-in hasn't moved anything yet
+            Message?.Invoke(Loc.T("transport.paused_play_carries_on_from"));
+        }
+        else _engine.PlayWithCountIn();
+    }
+
+    [RelayCommand]
+    private void Stop()
+    {
+        // First press stops (pause at position); a second press while already
+        // stopped returns the playhead to the start (1.1) — classic DAW behaviour.
+        if (!_engine.IsPlaying && !RecordOn && _engine.CountInBeats <= 0) { _engine.Seek(0); return; }
+        StopAll();
+    }
+
+    /// <summary>Stop the transport, ending an in-progress take first: turning
+    /// RecordOn off materialises the captured clip (and refreshes the timeline),
+    /// then the transport halts. Otherwise recording would keep capturing.</summary>
+    private void StopAll()
+    {
+        if (RecordOn) RecordOn = false;   // -> OnRecordOnChanged(false) -> SetRecording(false)
+        _engine.StopTransport();
+    }
+
+    /// <summary>When true the position readout shows elapsed time (m:ss.mmm) instead of bars.beats.
+    /// Toggled by clicking the readout.</summary>
+    [ObservableProperty] private bool _showTimeDisplay;
+
+    private double _lastBeats;
+
+    /// <summary>Flip the position readout between bars.beats and minutes:seconds.</summary>
+    public void ToggleTimeDisplay()
+    {
+        ShowTimeDisplay = !ShowTimeDisplay;
+        if (IsCountingIn) return;         // the readout is showing the count-in; Tick restores it
+        PositionUnitText = ShowTimeDisplay ? Loc.T("transport.time") : Loc.T("transport.bars");
+        UpdatePositionText(_lastBeats);   // reflect immediately, don't wait for the next tick
+    }
+
+    /// <summary>Pulled by the playhead clock (~30 Hz) to refresh the readout.</summary>
+    public void Tick()
+    {
+        double beats = _engine.PositionBeats;
+        _lastBeats = beats;
+        double countIn = _engine.CountInBeats;
+        bool wasCounting = IsCountingIn;
+        IsCountingIn = countIn > 0;
+        if (IsCountingIn) PositionText = CountInText(countIn);
+        else UpdatePositionText(beats);
+        if (IsCountingIn != wasCounting) PositionUnitText = IsCountingIn ? Loc.T("transport.count_in") : ShowTimeDisplay ? Loc.T("transport.time") : Loc.T("transport.bars");
+        IsPlaying = _engine.IsPlaying || IsCountingIn;   // the Play button lights from the first click
+        // Recording can end outside the UI (an MCP retry that couldn't restart): let the button go.
+        if (RecordOn && !_engine.IsRecording) { _revertingRec = true; RecordOn = false; _revertingRec = false; }
+        PlayLabel = IsPlaying ? "■ Stop" : "▶ Play";
+        // The loop record mode can also be set from outside the UI (MCP): follow the engine.
+        bool replace = _engine.LoopRecordReplace;
+        if (replace != LoopRecordReplace) LoopRecordReplace = replace;
+        FollowEngineBpm();
+    }
+
+    /// <summary>The tempo can also be set from outside the UI (MCP, a controller driving
+    /// it): follow the engine, so the BPM field shows it and saving keeps it. Our own
+    /// change is still in flight until the engine reports it, so wait for that first.</summary>
+    private void FollowEngineBpm()
+    {
+        bool automated = _engine.IsTempoAutomated;
+        if (BpmEditable == automated) BpmEditable = !automated;
+        if (automated) _sentBpm = null;   // nothing of ours can be in flight: the engine refuses it
+        double engineBpm = _engine.Bpm;
+        if (_sentBpm is double sent)
+        {
+            bool landed = Math.Abs(engineBpm - sent) < 1e-6;
+            if (!landed && Environment.TickCount64 - _sentBpmAt < SentBpmTimeoutMs) return;
+            _sentBpm = null;
+        }
+        decimal bpm = Math.Round((decimal)engineBpm, 2);   // the field's resolution
+        if (bpm == Bpm) return;
+        _followingBpm = true;
+        Bpm = bpm;
+        _followingBpm = false;
+    }
+
+    /// <summary>The count-in as negative bars counting up to the start: −2.1 … −2.4, −1.1 … −1.4.</summary>
+    private string CountInText(double remainingBeats)
+    {
+        int bpb = Math.Max(1, TimeSigNumerator);
+        int left = (int)Math.Ceiling(remainingBeats - 1e-6);   // beats left, the sounding one included
+        if (left < 1) left = 1;
+        int bar = (left + bpb - 1) / bpb;
+        int beat = bpb - (left - 1) % bpb;
+        return $"\u2212{bar}.{beat}";
+    }
+
+    private void UpdatePositionText(double beats)
+    {
+        if (ShowTimeDisplay)
+        {
+            double sec = _engine.BeatToSeconds(beats);
+            int m = (int)(sec / 60.0);
+            double s = sec - m * 60.0;
+            // The app installs a display culture (point separator, U+2212 minus) at start-up.
+            PositionText = m + ":" + s.ToString("00.000", CultureInfo.CurrentCulture);
+        }
+        else
+        {
+            int bar = (int)(beats / BeatsPerBar) + 1;
+            int beatInBar = (int)(beats % BeatsPerBar) + 1;
+            int ticks = (int)((beats - Math.Floor(beats)) * 100);
+            PositionText = $"{bar}.{beatInBar}.{ticks:00}";
+        }
+    }
+}

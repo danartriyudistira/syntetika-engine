@@ -1,0 +1,489 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices — a uniform view over a rack (Instrument Rack via Rack*, Audio
+// Effect Rack via RackDev*, MIDI Effect Rack via MidiRack*), so the one card renders all. HasInstrumentChains hides
+// the per-chain instrument selector for effect racks; AutomationDeviceIndex is the
+// plugin-param device index used when driving/recording the macros.
+
+using Nota.Application;
+
+namespace Nota.App;
+
+/// <summary>Which rack a card shows (specs/040): the three share one card.</summary>
+internal enum RackKind { Instrument, AudioEffect, MidiEffect }
+
+internal interface IRackAccess
+{
+    bool HasInstrumentChains { get; }
+    int AutomationDeviceIndex { get; }
+    /// <summary>The rack in a MIDI Learn rack target (MidiTarget.DeviceIndex).</summary>
+    int LearnDeviceIndex => AutomationDeviceIndex;
+    /// <summary>The rack's address for the engine's RackDev* calls (−1 the track's Instrument or
+    /// Drum Rack, ≥0 an Audio Effect Rack, −1000 − mi a MIDI Effect Rack), used by the chain
+    /// device clipboard (specs/042); null for a strip that isn't a rack (Nota Rhythm's voices).</summary>
+    int? RackAddress => null;
+    /// <summary>Make the in-place edits that follow one undo step (fork the rack now).</summary>
+    void Checkpoint() { }
+    int ChainCount();
+    int AddChain(int instKind);
+    bool RemoveChain(int chain);
+    bool SetChainInstrument(int chain, int instKind);
+    int ChainInstrumentKind(int chain);
+    string ChainInstrumentName(int chain);
+    int ChainInstrumentParamCount(int chain);
+    string ChainInstrumentParamName(int chain, int param);
+    float ChainInstrumentParamGet(int chain, int param);
+    void ChainInstrumentParamSet(int chain, int param, float v);
+    int ChainDeviceCount(int chain);
+    int AddChainDevice(int chain, int kind);
+    int AddPluginInstrumentChain(int catalogIndex);   // hosted plugin instrument as a new chain (-1 for effect racks)
+    int AddPluginChainDevice(int chain, int catalogIndex);   // hosted plugin effect into a chain
+    bool RemoveChainDevice(int chain, int dev);
+    void MoveChainDevice(int chain, int from, int to);
+    string ChainDeviceName(int chain, int dev);
+    int ChainDeviceParamCount(int chain, int dev);
+    string ChainDeviceParamName(int chain, int dev, int p);
+    float ChainDeviceParamMin(int chain, int dev, int p);
+    float ChainDeviceParamMax(int chain, int dev, int p);
+    float ChainDeviceParamGet(int chain, int dev, int p);
+    void ChainDeviceParamSet(int chain, int dev, int p, float v);
+    bool ChainDeviceBypassed(int chain, int dev);
+    void SetChainDeviceBypassed(int chain, int dev, bool b);
+    int ChainDeviceBuiltinKind(int chain, int dev);   // -1 = hosted plug-in
+    void OpenChainDeviceEditor(int chain, int dev);   // hosted-plugin effect native GUI
+    float ChainGain(int chain); void SetChainGain(int chain, float v);
+    float ChainPan(int chain); void SetChainPan(int chain, float v);
+    bool ChainMute(int chain); void SetChainMute(int chain, bool b);
+    bool ChainSolo(int chain); void SetChainSolo(int chain, bool b);
+    int ChainTriggerNote(int chain); void SetChainTriggerNote(int chain, int note);
+    int AddMacroMapping(int macro, int chain, int targetDevice, int param, float lo, float hi);
+    int MappingCount();
+    bool TryGetMapping(int index, out RackMacroMapping m);
+    bool RemoveMapping(int index);
+    // Shared macro-name + meter + mapping-edit surface (di-agnostic), so the macro strip
+    // and macro-map view render for both rack kinds.
+    string MacroName(int i); void SetMacroName(int i, string name);
+    float ChainMeter(int chain);
+    bool SetMappingRange(int index, float lo, float hi);
+    int MappingCurve(int index); bool SetMappingCurve(int index, int curve);
+    /// <summary>Whether a chain can take a hosted plug-in effect (not Nota Rhythm's voices).</summary>
+    bool HostsPlugins => true;
+    // Live telemetry of a chain device (meters, scopes, curves) for its pop-out card; none by default.
+    float ChainDeviceGainReduction(int chain, int dev) => 0f;
+    int ChainDeviceScope(int chain, int dev, float[] outSamples, int maxSamples) => 0;
+    int ChainDeviceLayerWave(int chain, int dev, int layer, float[] outSamples, int maxSamples) => 0;
+    string ChainDeviceText(int chain, int dev, int id) => "";
+    void ChainDeviceAction(int chain, int dev, int id, int iarg, float farg) { }
+
+    // ---- shared rack card surface (specs/040) --------------------------------
+    // Defaults describe "not supported", so an access only implements what its rack has.
+    RackKind Kind => HasInstrumentChains ? RackKind.Instrument : RackKind.AudioEffect;
+    float MacroGet(int i) => 0f;
+    void MacroSet(int i, float v) { }
+    string ChainName(int chain) => "";
+    void SetChainName(int chain, string name) { }
+    /// <summary>Key and velocity zone (Instrument and MIDI racks).</summary>
+    void ChainZone(int chain, out int keyLo, out int keyHi, out int velLo, out int velHi) { keyLo = 0; keyHi = 127; velLo = 0; velHi = 127; }
+    void SetChainZone(int chain, int keyLo, int keyHi, int velLo, int velHi) { }
+    /// <summary>Select-mode range, 0..127 (Audio Effect and MIDI racks). Which engine fields hold
+    /// it is the access's business: the Audio Effect Rack keeps it in its velocity fields.</summary>
+    void SelectRange(int chain, out int lo, out int hi) { lo = 0; hi = 127; }
+    void SetSelectRange(int chain, int lo, int hi) { }
+    bool MoveChain(int from, int to) => false;
+    /// <summary>Copies a chain (devices, controls, its mappings) after itself; the new index or &lt;0.</summary>
+    int DuplicateChain(int chain) => -1;
+
+    // Chain MIDI effects: a MIDI Effect Rack chain, or the MIDI section in front of an
+    // Instrument Rack chain's instrument (issue #329). None by default.
+    int ChainMidiCount(int chain) => 0;
+    int AddChainMidi(int chain, int kind) => -1;
+    bool RemoveChainMidi(int chain, int idx) => false;
+    void MoveChainMidi(int chain, int from, int to) { }
+    int ChainMidiKind(int chain, int idx) => -1;
+    string ChainMidiName(int chain, int idx) => "";
+    int ChainMidiParamCount(int chain, int idx) => 0;
+    string ChainMidiParamName(int chain, int idx, int p) => "";
+    float ChainMidiParamMin(int chain, int idx, int p) => 0f;
+    float ChainMidiParamMax(int chain, int idx, int p) => 1f;
+    float ChainMidiParamGet(int chain, int idx, int p) => 0f;
+    void ChainMidiParamSet(int chain, int idx, int p, float v) { }
+    bool ChainMidiBypassed(int chain, int idx) => false;
+    void SetChainMidiBypassed(int chain, int idx, bool b) { }
+
+    // Rack output and routing (what each rack has: see RackKindProfile).
+    int RackMode() => 0;                      // 0 Parallel, 1 Serial, 2 Select
+    void SetRackMode(int mode) { }
+    float Selector() => 0.5f;                 // Select-mode selector, 0..1 (the manual one)
+    void SetSelector(float v) { }
+    bool SelectorFollows() => false;          // Audio Effect Rack: the selector follows the input level
+    void SetSelectorFollows(bool on) { }
+    float LiveSelector() => Selector();       // where the selector is now (follow or manual)
+    float RackVolume() => 1f;                 // linear
+    void SetRackVolume(float v) { }
+    float RackGlide() => 0f;                  // 0..1 = 0..500 ms
+    void SetRackGlide(float v) { }
+    bool RackMono() => false;
+    void SetRackMono(bool on) { }
+    float RackDryWet() => 1f;
+    void SetRackDryWet(float v) { }
+    bool RackPdc() => false;
+    void SetRackPdc(bool on) { }
+    bool RackMerge() => true;
+    void SetRackMerge(bool on) { }
+    bool RackThru() => true;
+    void SetRackThru(bool on) { }
+    int ChainTranspose(int chain) => 0;       // MIDI chains, semitones
+    void SetChainTranspose(int chain, int st) { }
+    float ChainVelScale(int chain) => 1f;     // MIDI chains' Volume, 0..2
+    void SetChainVelScale(int chain, float v) { }
+
+    /// <summary>Where a macro's moves are recorded as automation, and what MIDI Learn binds it to.</summary>
+    (AutomationTarget Target, int Device, int Param, string Id) MacroAutomation(int i) => (AutomationTarget.PluginParam, AutomationDeviceIndex, -1, $"macro{i + 1}");
+    MidiTarget MacroLearnTarget(int track, int i) => MidiTarget.PluginParam(track, AutomationDeviceIndex, i);
+}
+
+internal sealed class InstrumentRackAccess(IAudioEngine e, int t) : IRackAccess
+{
+    public int? RackAddress => -1;
+    public void Checkpoint() => e.RackDevCheckpoint(t, -1);
+    public bool HasInstrumentChains => true;
+    public int AutomationDeviceIndex => -1;
+    public int ChainCount() => e.RackChainCount(t);
+    public int AddChain(int k) => e.RackAddChain(t, k);
+    public bool RemoveChain(int c) => e.RackRemoveChain(t, c);
+    public bool SetChainInstrument(int c, int k) => e.RackSetChainInstrument(t, c, k);
+    public int ChainInstrumentKind(int c) => e.RackChainInstrumentKind(t, c);
+    public string ChainInstrumentName(int c) => e.RackChainInstrumentName(t, c);
+    public int ChainInstrumentParamCount(int c) => e.RackChainInstrumentParamCount(t, c);
+    public string ChainInstrumentParamName(int c, int p) => e.RackChainInstrumentParamName(t, c, p);
+    public float ChainInstrumentParamGet(int c, int p) => e.RackChainInstrumentParamGet(t, c, p);
+    public void ChainInstrumentParamSet(int c, int p, float v) => e.RackChainInstrumentParamSet(t, c, p, v);
+    public int ChainDeviceCount(int c) => e.RackChainDeviceCount(t, c);
+    public int AddChainDevice(int c, int k) => e.RackAddChainDevice(t, c, k);
+    public int AddPluginInstrumentChain(int catalogIndex) => e.RackAddPluginInstrumentChain(t, catalogIndex);
+    public int AddPluginChainDevice(int c, int catalogIndex) => e.RackAddPluginChainDevice(t, c, catalogIndex);
+    public bool RemoveChainDevice(int c, int d) => e.RackRemoveChainDevice(t, c, d);
+    public void MoveChainDevice(int c, int f, int to) => e.RackMoveChainDevice(t, c, f, to);
+    public string ChainDeviceName(int c, int d) => e.RackChainDeviceName(t, c, d);
+    public int ChainDeviceParamCount(int c, int d) => e.RackChainDeviceParamCount(t, c, d);
+    public string ChainDeviceParamName(int c, int d, int p) => e.RackChainDeviceParamName(t, c, d, p);
+    public float ChainDeviceParamMin(int c, int d, int p) => e.RackChainDeviceParamMin(t, c, d, p);
+    public float ChainDeviceParamMax(int c, int d, int p) => e.RackChainDeviceParamMax(t, c, d, p);
+    public float ChainDeviceParamGet(int c, int d, int p) => e.RackChainDeviceParamGet(t, c, d, p);
+    public void ChainDeviceParamSet(int c, int d, int p, float v) => e.RackChainDeviceParamSet(t, c, d, p, v);
+    public bool ChainDeviceBypassed(int c, int d) => e.RackChainDeviceBypassed(t, c, d);
+    public void SetChainDeviceBypassed(int c, int d, bool b) => e.RackSetChainDeviceBypassed(t, c, d, b);
+    public int ChainDeviceBuiltinKind(int c, int d) => e.RackChainDeviceBuiltinKind(t, c, d);
+    public void OpenChainDeviceEditor(int c, int d) => e.RackOpenChainDeviceEditor(t, c, d);
+    public float ChainDeviceGainReduction(int c, int d) => e.RackDevChainDeviceGainReduction(t, -1, c, d);
+    public int ChainDeviceScope(int c, int d, float[] o, int n) => e.RackDevChainDeviceScope(t, -1, c, d, o, n);
+    public int ChainDeviceLayerWave(int c, int d, int l, float[] o, int n) => e.RackDevChainDeviceLayerWave(t, -1, c, d, l, o, n);
+    public string ChainDeviceText(int c, int d, int id) => e.RackDevChainDeviceText(t, -1, c, d, id);
+    public void ChainDeviceAction(int c, int d, int id, int iarg, float farg) => e.RackDevChainDeviceAction(t, -1, c, d, id, iarg, farg);
+    public float ChainGain(int c) => e.RackChainGain(t, c);
+    public void SetChainGain(int c, float v) => e.RackSetChainGain(t, c, v);
+    public float ChainPan(int c) => e.RackChainPan(t, c);
+    public void SetChainPan(int c, float v) => e.RackSetChainPan(t, c, v);
+    public bool ChainMute(int c) => e.RackChainMute(t, c);
+    public void SetChainMute(int c, bool b) => e.RackSetChainMute(t, c, b);
+    public bool ChainSolo(int c) => e.RackChainSolo(t, c);
+    public void SetChainSolo(int c, bool b) => e.RackSetChainSolo(t, c, b);
+    public int ChainTriggerNote(int c) => e.RackChainTriggerNote(t, c);
+    public void SetChainTriggerNote(int c, int note) => e.RackSetChainTriggerNote(t, c, note);
+    public int AddMacroMapping(int m, int c, int td, int p, float lo, float hi) => e.RackAddMacroMapping(t, m, c, td, p, lo, hi);
+    public int MappingCount() => e.RackMappingCount(t);
+    public bool TryGetMapping(int i, out RackMacroMapping m) => e.RackTryGetMapping(t, i, out m);
+    public bool RemoveMapping(int i) => e.RackRemoveMapping(t, i);
+    public string MacroName(int i) => e.RackMacroName(t, i);
+    public void SetMacroName(int i, string name) => e.RackSetMacroName(t, i, name);
+    public float ChainMeter(int c) => e.RackChainMeter(t, c);
+    public bool SetMappingRange(int i, float lo, float hi) => e.RackSetMappingRange(t, i, lo, hi);
+    public int MappingCurve(int i) => e.RackMappingCurve(t, i);
+    public bool SetMappingCurve(int i, int curve) => e.RackSetMappingCurve(t, i, curve);
+    public RackKind Kind => RackKind.Instrument;
+    public float MacroGet(int i) => e.RackMacroGet(t, i);
+    public void MacroSet(int i, float v) => e.RackMacroSet(t, i, v);
+    public string ChainName(int c) => e.RackChainName(t, c);
+    public void SetChainName(int c, string name) => e.RackSetChainName(t, c, name);
+    public void ChainZone(int c, out int kl, out int kh, out int vl, out int vh) => e.RackChainZone(t, c, out kl, out kh, out vl, out vh);
+    public void SetChainZone(int c, int kl, int kh, int vl, int vh) => e.RackSetChainZone(t, c, kl, kh, vl, vh);
+    public int DuplicateChain(int c) => e.RackDuplicateChain(t, c);
+    public float RackVolume() => e.RackVolume(t);
+    public void SetRackVolume(float v) => e.RackSetVolume(t, v);
+    public float RackGlide() => e.RackGlide(t);
+    public void SetRackGlide(float v) => e.RackSetGlide(t, v);
+    public bool RackMono() => e.RackMono(t);
+    public void SetRackMono(bool on) => e.RackSetMono(t, on);
+    // MIDI effects in front of a chain's instrument (#329).
+    public int ChainMidiCount(int c) => e.RackChainMidiCount(t, c);
+    public int AddChainMidi(int c, int kind) => e.RackChainMidiAdd(t, c, kind);
+    public bool RemoveChainMidi(int c, int i) => e.RackChainMidiRemove(t, c, i);
+    public void MoveChainMidi(int c, int f, int to) => e.RackChainMidiMove(t, c, f, to);
+    public int ChainMidiKind(int c, int i) => e.RackChainMidiKind(t, c, i);
+    public string ChainMidiName(int c, int i) => e.RackChainMidiName(t, c, i);
+    public int ChainMidiParamCount(int c, int i) => e.RackChainMidiParamCount(t, c, i);
+    public string ChainMidiParamName(int c, int i, int p) => e.RackChainMidiParamName(t, c, i, p);
+    public float ChainMidiParamMin(int c, int i, int p) => e.RackChainMidiParamMin(t, c, i, p);
+    public float ChainMidiParamMax(int c, int i, int p) => e.RackChainMidiParamMax(t, c, i, p);
+    public float ChainMidiParamGet(int c, int i, int p) => e.RackChainMidiParamGet(t, c, i, p);
+    public void ChainMidiParamSet(int c, int i, int p, float v) => e.RackChainMidiParamSet(t, c, i, p, v);
+    public bool ChainMidiBypassed(int c, int i) => e.RackChainMidiBypassed(t, c, i);
+    public void SetChainMidiBypassed(int c, int i, bool b) => e.RackChainMidiSetBypassed(t, c, i, b);
+}
+
+internal sealed class EffectRackAccess(IAudioEngine e, int t, int di) : IRackAccess
+{
+    public int? RackAddress => di;
+    public void Checkpoint() => e.RackDevCheckpoint(t, di);
+    public bool HasInstrumentChains => false;
+    public int AutomationDeviceIndex => di;
+    public int ChainCount() => e.RackDevChainCount(t, di);
+    public int AddChain(int k) => e.RackDevAddChain(t, di, k);
+    public bool RemoveChain(int c) => e.RackDevRemoveChain(t, di, c);
+    public bool SetChainInstrument(int c, int k) => e.RackDevSetChainInstrument(t, di, c, k);
+    public int ChainInstrumentKind(int c) => e.RackDevChainInstrumentKind(t, di, c);
+    public string ChainInstrumentName(int c) => e.RackDevChainInstrumentName(t, di, c);
+    public int ChainInstrumentParamCount(int c) => e.RackDevChainInstrumentParamCount(t, di, c);
+    public string ChainInstrumentParamName(int c, int p) => e.RackDevChainInstrumentParamName(t, di, c, p);
+    public float ChainInstrumentParamGet(int c, int p) => e.RackDevChainInstrumentParamGet(t, di, c, p);
+    public void ChainInstrumentParamSet(int c, int p, float v) => e.RackDevChainInstrumentParamSet(t, di, c, p, v);
+    public int ChainDeviceCount(int c) => e.RackDevChainDeviceCount(t, di, c);
+    public int AddChainDevice(int c, int k) => e.RackDevAddChainDevice(t, di, c, k);
+    public int AddPluginInstrumentChain(int catalogIndex) => -1;   // effect-rack chains hold no instrument
+    public int AddPluginChainDevice(int c, int catalogIndex) => e.RackDevAddPluginChainDevice(t, di, c, catalogIndex);
+    public bool RemoveChainDevice(int c, int d) => e.RackDevRemoveChainDevice(t, di, c, d);
+    public void MoveChainDevice(int c, int f, int to) => e.RackDevMoveChainDevice(t, di, c, f, to);
+    public string ChainDeviceName(int c, int d) => e.RackDevChainDeviceName(t, di, c, d);
+    public int ChainDeviceParamCount(int c, int d) => e.RackDevChainDeviceParamCount(t, di, c, d);
+    public string ChainDeviceParamName(int c, int d, int p) => e.RackDevChainDeviceParamName(t, di, c, d, p);
+    public float ChainDeviceParamMin(int c, int d, int p) => e.RackDevChainDeviceParamMin(t, di, c, d, p);
+    public float ChainDeviceParamMax(int c, int d, int p) => e.RackDevChainDeviceParamMax(t, di, c, d, p);
+    public float ChainDeviceParamGet(int c, int d, int p) => e.RackDevChainDeviceParamGet(t, di, c, d, p);
+    public void ChainDeviceParamSet(int c, int d, int p, float v) => e.RackDevChainDeviceParamSet(t, di, c, d, p, v);
+    public bool ChainDeviceBypassed(int c, int d) => e.RackDevChainDeviceBypassed(t, di, c, d);
+    public void SetChainDeviceBypassed(int c, int d, bool b) => e.RackDevSetChainDeviceBypassed(t, di, c, d, b);
+    public int ChainDeviceBuiltinKind(int c, int d) => e.RackDevChainDeviceBuiltinKind(t, di, c, d);
+    public void OpenChainDeviceEditor(int c, int d) => e.RackDevOpenChainDeviceEditor(t, di, c, d);
+    public float ChainDeviceGainReduction(int c, int d) => e.RackDevChainDeviceGainReduction(t, di, c, d);
+    public int ChainDeviceScope(int c, int d, float[] o, int n) => e.RackDevChainDeviceScope(t, di, c, d, o, n);
+    public int ChainDeviceLayerWave(int c, int d, int l, float[] o, int n) => e.RackDevChainDeviceLayerWave(t, di, c, d, l, o, n);
+    public string ChainDeviceText(int c, int d, int id) => e.RackDevChainDeviceText(t, di, c, d, id);
+    public void ChainDeviceAction(int c, int d, int id, int iarg, float farg) => e.RackDevChainDeviceAction(t, di, c, d, id, iarg, farg);
+    public float ChainGain(int c) => e.RackDevChainGain(t, di, c);
+    public void SetChainGain(int c, float v) => e.RackDevSetChainGain(t, di, c, v);
+    public float ChainPan(int c) => e.RackDevChainPan(t, di, c);
+    public void SetChainPan(int c, float v) => e.RackDevSetChainPan(t, di, c, v);
+    public bool ChainMute(int c) => e.RackDevChainMute(t, di, c);
+    public void SetChainMute(int c, bool b) => e.RackDevSetChainMute(t, di, c, b);
+    public bool ChainSolo(int c) => e.RackDevChainSolo(t, di, c);
+    public void SetChainSolo(int c, bool b) => e.RackDevSetChainSolo(t, di, c, b);
+    public int ChainTriggerNote(int c) => e.RackDevChainTriggerNote(t, di, c);
+    public void SetChainTriggerNote(int c, int note) => e.RackDevSetChainTriggerNote(t, di, c, note);
+    public int AddMacroMapping(int m, int c, int td, int p, float lo, float hi) => e.RackDevAddMacroMapping(t, di, m, c, td, p, lo, hi);
+    public int MappingCount() => e.RackDevMappingCount(t, di);
+    public bool TryGetMapping(int i, out RackMacroMapping m) => e.RackDevTryGetMapping(t, di, i, out m);
+    public bool RemoveMapping(int i) => e.RackDevRemoveMapping(t, di, i);
+    public string MacroName(int i) => e.RackDevMacroName(t, di, i);
+    public void SetMacroName(int i, string name) => e.RackDevSetMacroName(t, di, i, name);
+    public float ChainMeter(int c) => e.RackDevChainMeter(t, di, c);
+    public bool SetMappingRange(int i, float lo, float hi) => e.RackDevSetMappingRange(t, di, i, lo, hi);
+    public int MappingCurve(int i) => e.RackDevMappingCurve(t, di, i);
+    public bool SetMappingCurve(int i, int curve) => e.RackDevSetMappingCurve(t, di, i, curve);
+    public RackKind Kind => RackKind.AudioEffect;
+    public float MacroGet(int i) => e.RackDevMacroGet(t, di, i);
+    public void MacroSet(int i, float v) => e.RackDevMacroSet(t, di, i, v);
+    // The Audio Effect Rack keeps its select range in the chain's velocity fields (v7 blobs).
+    public void SelectRange(int c, out int lo, out int hi) => e.RackDevChainZone(t, di, c, out lo, out hi);
+    public void SetSelectRange(int c, int lo, int hi) => e.RackDevSetChainZone(t, di, c, lo, hi);
+    public int DuplicateChain(int c) => e.RackDevDuplicateChain(t, di, c);
+    public int RackMode() => e.RackDevMode(t, di);
+    public void SetRackMode(int mode) => e.RackDevSetMode(t, di, mode);
+    public float Selector() => e.RackDevChainSelect(t, di);
+    public void SetSelector(float v) => e.RackDevSetChainSelect(t, di, v);
+    public bool SelectorFollows() => e.RackDevSelFollow(t, di);
+    public void SetSelectorFollows(bool on) => e.RackDevSetSelFollow(t, di, on);
+    public float LiveSelector() => e.RackDevSelFollow(t, di) ? e.RackDevLiveSelector(t, di) : e.RackDevChainSelect(t, di);
+    public float RackVolume() => e.RackDevVolume(t, di);
+    public void SetRackVolume(float v) => e.RackDevSetVolume(t, di, v);
+    public float RackDryWet() => e.RackDevDryWet(t, di);
+    public void SetRackDryWet(float v) => e.RackDevSetDryWet(t, di, v);
+    public bool RackPdc() => e.RackDevPdc(t, di);
+    public void SetRackPdc(bool on) => e.RackDevSetPdc(t, di, on);
+}
+
+// Nota Rhythm's eight voices as effect-only "chains": each voice's insert chain through the
+// same surface a rack chain has, so the rack's device slots, add menu and full device cards
+// work on a voice unchanged. The instrument / mix / macro members have no Rhythm meaning.
+internal sealed class RhythmVoiceAccess(IAudioEngine e, int t) : IRackAccess
+{
+    public bool HasInstrumentChains => false;
+    public int AutomationDeviceIndex => -1;
+    public bool HostsPlugins => false;
+    public int ChainCount() => RhythmModel.Voices;
+    public int AddChain(int k) => -1;
+    public bool RemoveChain(int c) => false;
+    public bool SetChainInstrument(int c, int k) => false;
+    public int ChainInstrumentKind(int c) => -2;
+    public string ChainInstrumentName(int c) => "";
+    public int ChainInstrumentParamCount(int c) => 0;
+    public string ChainInstrumentParamName(int c, int p) => "";
+    public float ChainInstrumentParamGet(int c, int p) => 0f;
+    public void ChainInstrumentParamSet(int c, int p, float v) { }
+    public int ChainDeviceCount(int c) => e.RhythmVoiceDeviceCount(t, c);
+    public int AddChainDevice(int c, int k) => e.RhythmAddVoiceDevice(t, c, k);
+    public int AddPluginInstrumentChain(int catalogIndex) => -1;
+    public int AddPluginChainDevice(int c, int catalogIndex) => -1;
+    public bool RemoveChainDevice(int c, int d) => e.RhythmRemoveVoiceDevice(t, c, d);
+    public void MoveChainDevice(int c, int f, int to) => e.RhythmMoveVoiceDevice(t, c, f, to);
+    public string ChainDeviceName(int c, int d) => e.RhythmVoiceDeviceName(t, c, d);
+    public int ChainDeviceParamCount(int c, int d) => e.RhythmVoiceDeviceParamCount(t, c, d);
+    public string ChainDeviceParamName(int c, int d, int p) => e.RhythmVoiceDeviceParamName(t, c, d, p);
+    public float ChainDeviceParamMin(int c, int d, int p) => e.RhythmVoiceDeviceParamMin(t, c, d, p);
+    public float ChainDeviceParamMax(int c, int d, int p) => e.RhythmVoiceDeviceParamMax(t, c, d, p);
+    public float ChainDeviceParamGet(int c, int d, int p) => e.RhythmVoiceDeviceParamGet(t, c, d, p);
+    public void ChainDeviceParamSet(int c, int d, int p, float v) => e.RhythmVoiceDeviceParamSet(t, c, d, p, v);
+    public bool ChainDeviceBypassed(int c, int d) => e.RhythmVoiceDeviceBypassed(t, c, d);
+    public void SetChainDeviceBypassed(int c, int d, bool b) => e.RhythmSetVoiceDeviceBypassed(t, c, d, b);
+    public int ChainDeviceBuiltinKind(int c, int d) => e.RhythmVoiceDeviceBuiltinKind(t, c, d);
+    public void OpenChainDeviceEditor(int c, int d) { }
+    public float ChainDeviceGainReduction(int c, int d) => e.RhythmVoiceDeviceGainReduction(t, c, d);
+    public int ChainDeviceScope(int c, int d, float[] o, int n) => e.RhythmVoiceDeviceScope(t, c, d, o, n);
+    public int ChainDeviceLayerWave(int c, int d, int l, float[] o, int n) => e.RhythmVoiceDeviceLayerWave(t, c, d, l, o, n);
+    public string ChainDeviceText(int c, int d, int id) => e.RhythmVoiceDeviceText(t, c, d, id);
+    public void ChainDeviceAction(int c, int d, int id, int iarg, float farg) => e.RhythmVoiceDeviceAction(t, c, d, id, iarg, farg);
+    public float ChainGain(int c) => 1f; public void SetChainGain(int c, float v) { }
+    public float ChainPan(int c) => 0f; public void SetChainPan(int c, float v) { }
+    public bool ChainMute(int c) => false; public void SetChainMute(int c, bool b) { }
+    public bool ChainSolo(int c) => false; public void SetChainSolo(int c, bool b) { }
+    public int ChainTriggerNote(int c) => c is >= 0 and < RhythmModel.Voices ? RhythmModel.MidiNotes[c] : -1;
+    public void SetChainTriggerNote(int c, int note) { }
+    public int AddMacroMapping(int m, int c, int td, int p, float lo, float hi) => -1;
+    public int MappingCount() => 0;
+    public bool TryGetMapping(int i, out RackMacroMapping m) { m = default; return false; }
+    public bool RemoveMapping(int i) => false;
+    public string MacroName(int i) => "";
+    public void SetMacroName(int i, string name) { }
+    public float ChainMeter(int c) => 0f;
+    public bool SetMappingRange(int i, float lo, float hi) => false;
+    public int MappingCurve(int i) => 0;
+    public bool SetMappingCurve(int i, int curve) => false;
+}
+
+// The MIDI Effect Rack (MIDI kind 6, specs/040) at MIDI effect index mi. Its chains hold MIDI
+// effects only. The card addresses a chain's MIDI effect j as RackMacroMapping.MidiDeviceBase − j;
+// the MidiRack* calls take plain j, so mappings translate on the way in and out. Its macros
+// are the MIDI effect's parameters 0..7 (automation, MIDI Learn).
+internal sealed class MidiRackAccess(IAudioEngine e, int t, int mi) : IRackAccess
+{
+    public int? RackAddress => -1000 - mi; // the engine's MIDI Effect Rack address
+    public void Checkpoint() => e.MidiRackCheckpoint(t, mi);
+    private static int Plain(int target) => target <= RackMacroMapping.MidiDeviceBase ? RackMacroMapping.MidiDeviceBase - target : target;
+    private static int Card(int device) => device >= 0 ? RackMacroMapping.MidiDeviceBase - device : device;
+
+    public RackKind Kind => RackKind.MidiEffect;
+    public bool HasInstrumentChains => false;
+    public bool HostsPlugins => false;
+    public int AutomationDeviceIndex => mi;
+    public int LearnDeviceIndex => MidiTarget.MidiRackBase - mi; // not an audio rack's index
+    public (AutomationTarget Target, int Device, int Param, string Id) MacroAutomation(int i) => (AutomationTarget.MidiDeviceParam, mi, i, "");
+    public MidiTarget MacroLearnTarget(int track, int i) => MidiTarget.MidiDeviceParam(track, mi, i);
+
+    public int ChainCount() => e.MidiRackChainCount(t, mi);
+    public int AddChain(int instKind) => e.MidiRackAddChain(t, mi);
+    public bool RemoveChain(int c) => e.MidiRackRemoveChain(t, mi, c);
+    public int DuplicateChain(int c) => e.MidiRackDuplicateChain(t, mi, c);
+    public string ChainName(int c) => e.MidiRackChainName(t, mi, c);
+    public void SetChainName(int c, string name) => e.MidiRackSetChainName(t, mi, c, name);
+
+    // No instrument, no audio devices.
+    public bool SetChainInstrument(int c, int k) => false;
+    public int ChainInstrumentKind(int c) => -2;
+    public string ChainInstrumentName(int c) => "";
+    public int ChainInstrumentParamCount(int c) => 0;
+    public string ChainInstrumentParamName(int c, int p) => "";
+    public float ChainInstrumentParamGet(int c, int p) => 0f;
+    public void ChainInstrumentParamSet(int c, int p, float v) { }
+    public int ChainDeviceCount(int c) => 0;
+    public int AddChainDevice(int c, int k) => -1;
+    public int AddPluginInstrumentChain(int catalogIndex) => -1;
+    public int AddPluginChainDevice(int c, int catalogIndex) => -1;
+    public bool RemoveChainDevice(int c, int d) => false;
+    public void MoveChainDevice(int c, int f, int to) { }
+    public string ChainDeviceName(int c, int d) => "";
+    public int ChainDeviceParamCount(int c, int d) => 0;
+    public string ChainDeviceParamName(int c, int d, int p) => "";
+    public float ChainDeviceParamMin(int c, int d, int p) => 0f;
+    public float ChainDeviceParamMax(int c, int d, int p) => 1f;
+    public float ChainDeviceParamGet(int c, int d, int p) => 0f;
+    public void ChainDeviceParamSet(int c, int d, int p, float v) { }
+    public bool ChainDeviceBypassed(int c, int d) => false;
+    public void SetChainDeviceBypassed(int c, int d, bool b) { }
+    public int ChainDeviceBuiltinKind(int c, int d) => -1;
+    public void OpenChainDeviceEditor(int c, int d) { }
+
+    // Chain MIDI effects.
+    public int ChainMidiCount(int c) => e.MidiRackChainDeviceCount(t, mi, c);
+    public int AddChainMidi(int c, int kind) => e.MidiRackChainDeviceAdd(t, mi, c, kind);
+    public bool RemoveChainMidi(int c, int i) => e.MidiRackChainDeviceRemove(t, mi, c, i);
+    public void MoveChainMidi(int c, int f, int to) => e.MidiRackChainDeviceMove(t, mi, c, f, to);
+    public int ChainMidiKind(int c, int i) => e.MidiRackChainDeviceKind(t, mi, c, i);
+    public string ChainMidiName(int c, int i) => e.MidiRackChainDeviceName(t, mi, c, i);
+    public int ChainMidiParamCount(int c, int i) => e.MidiRackChainDeviceParamCount(t, mi, c, i);
+    public string ChainMidiParamName(int c, int i, int p) => e.MidiRackChainDeviceParamName(t, mi, c, i, p);
+    public float ChainMidiParamMin(int c, int i, int p) => e.MidiRackChainDeviceParamMin(t, mi, c, i, p);
+    public float ChainMidiParamMax(int c, int i, int p) => e.MidiRackChainDeviceParamMax(t, mi, c, i, p);
+    public float ChainMidiParamGet(int c, int i, int p) => e.MidiRackChainDeviceParamGet(t, mi, c, i, p);
+    public void ChainMidiParamSet(int c, int i, int p, float v) => e.MidiRackChainDeviceParamSet(t, mi, c, i, p, v);
+    public bool ChainMidiBypassed(int c, int i) => e.MidiRackChainDeviceBypassed(t, mi, c, i);
+    public void SetChainMidiBypassed(int c, int i, bool b) => e.MidiRackChainDeviceSetBypassed(t, mi, c, i, b);
+
+    // Chain controls: Volume scales velocity; Transpose instead of Pan.
+    public float ChainGain(int c) => e.MidiRackChainVelScale(t, mi, c);
+    public void SetChainGain(int c, float v) => e.MidiRackSetChainVelScale(t, mi, c, v);
+    public float ChainPan(int c) => 0f;
+    public void SetChainPan(int c, float v) { }
+    public bool ChainMute(int c) => e.MidiRackChainMute(t, mi, c);
+    public void SetChainMute(int c, bool b) => e.MidiRackSetChainMute(t, mi, c, b);
+    public bool ChainSolo(int c) => e.MidiRackChainSolo(t, mi, c);
+    public void SetChainSolo(int c, bool b) => e.MidiRackSetChainSolo(t, mi, c, b);
+    public int ChainTriggerNote(int c) => -1;
+    public void SetChainTriggerNote(int c, int note) { }
+    public float ChainMeter(int c) => e.MidiRackChainActivity(t, mi, c);
+    public void ChainZone(int c, out int kl, out int kh, out int vl, out int vh) => e.MidiRackChainZone(t, mi, c, out kl, out kh, out vl, out vh);
+    public void SetChainZone(int c, int kl, int kh, int vl, int vh) => e.MidiRackSetChainZone(t, mi, c, kl, kh, vl, vh);
+    public void SelectRange(int c, out int lo, out int hi) => e.MidiRackChainSelectRange(t, mi, c, out lo, out hi);
+    public void SetSelectRange(int c, int lo, int hi) => e.MidiRackSetChainSelect(t, mi, c, lo, hi);
+    public int ChainTranspose(int c) => e.MidiRackChainTranspose(t, mi, c);
+    public void SetChainTranspose(int c, int st) => e.MidiRackSetChainTranspose(t, mi, c, st);
+    public float ChainVelScale(int c) => e.MidiRackChainVelScale(t, mi, c);
+    public void SetChainVelScale(int c, float v) => e.MidiRackSetChainVelScale(t, mi, c, v);
+
+    // Rack.
+    public int RackMode() => e.MidiRackMode(t, mi);
+    public void SetRackMode(int mode) => e.MidiRackSetMode(t, mi, mode);
+    public float Selector() => e.MidiRackSelector(t, mi);
+    public void SetSelector(float v) => e.MidiRackSetSelector(t, mi, v);
+    public bool RackMerge() => e.MidiRackMerge(t, mi);
+    public void SetRackMerge(bool on) => e.MidiRackSetMerge(t, mi, on);
+    public bool RackThru() => e.MidiRackThru(t, mi);
+    public void SetRackThru(bool on) => e.MidiRackSetThru(t, mi, on);
+
+    // Macros and mappings.
+    public float MacroGet(int i) => e.MidiRackMacroGet(t, mi, i);
+    public void MacroSet(int i, float v) => e.MidiRackMacroSet(t, mi, i, v);
+    public string MacroName(int i) => e.MidiRackMacroName(t, mi, i);
+    public void SetMacroName(int i, string name) => e.MidiRackSetMacroName(t, mi, i, name);
+    public int AddMacroMapping(int m, int c, int td, int p, float lo, float hi) => e.MidiRackAddMacroMapping(t, mi, m, c, Plain(td), p, lo, hi);
+    public int MappingCount() => e.MidiRackMappingCount(t, mi);
+    public bool TryGetMapping(int i, out RackMacroMapping m)
+    {
+        if (e.MidiRackMappingInfo(t, mi, i, out int macro, out int chain, out int device, out int param, out float lo, out float hi, out _) == 0) { m = default; return false; }
+        m = new RackMacroMapping(macro, chain, Card(device), param, lo, hi);
+        return true;
+    }
+    public bool RemoveMapping(int i) => e.MidiRackRemoveMapping(t, mi, i);
+    public bool SetMappingRange(int i, float lo, float hi) => e.MidiRackSetMappingRange(t, mi, i, lo, hi);
+    public int MappingCurve(int i) => e.MidiRackMappingInfo(t, mi, i, out _, out _, out _, out _, out _, out _, out int curve) != 0 ? curve : 0;
+    public bool SetMappingCurve(int i, int curve) => e.MidiRackSetMappingCurve(t, mi, i, curve);
+}

@@ -1,0 +1,697 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// M7-6a: the on-disk document model for the `.nota` project bundle. These DTOs
+// are the JSON shape of `project.json`; ProjectService captures them from the
+// engine and replays them back. Phase 1 covers built-in content only (Synth,
+// built-in devices, MIDI clips/notes, session MIDI slots, mixer, sends/returns,
+// transport). Audio samples (phase b) and hosted plugins (phase c) come later.
+//
+// Forward-compat (NFR-8): unknown JSON members are preserved on round-trip via
+// [JsonExtensionData] so a newer file opened by an older build keeps its extra
+// fields when re-saved.
+
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+
+namespace Nota.Infrastructure;
+
+public sealed class ProjectDocument
+{
+    /// <summary>Bumped on breaking format changes; older builds refuse newer files.</summary>
+    public int FormatVersion { get; set; } = ProjectService.CurrentFormatVersion;
+    public string App { get; set; } = "Nota";
+    public TransportDto Transport { get; set; } = new();
+    /// <summary>Set by the v33 → v34 migration (specs/099) when a #568 tempo point lay outside
+    /// 20–300 BPM and was limited: the app tells the user once. Never written back.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool TempoClamped { get; set; }
+    public int SceneCount { get; set; } = 8;
+    /// <summary>Session view settings + scene rows (names, colours, tempo, follow). Null in
+    /// files from before Session P0 = defaults.</summary>
+    public SessionDto? Session { get; set; }
+    public List<TrackDto> Tracks { get; set; } = new();
+    /// <summary>Master-volume automation points (graph-level, format v7).</summary>
+    public List<AutomationPointDto> MasterVolumeAutomation { get; set; } = new();
+    /// <summary>Master effect chain (devices on the master bus) + its name/colour.</summary>
+    public MasterDto Master { get; set; } = new();
+    /// <summary>Mixer-wide settings: the project pan law (format v21). Null = a pre-v21 project
+    /// (migration fills it in) = Balance + older project.</summary>
+    public MixerDto? Mixer { get; set; }
+    /// <summary>Arrangement sections (specs/016), sorted by start. Null in files from before
+    /// sections moved into the project: their bundle's <c>sections.json</c> sidecar is read
+    /// once on load instead.</summary>
+    public List<SectionDto>? Sections { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+
+    /// <summary>Samples referenced by this document: relative bundle path -&gt; live
+    /// engine sample id. Populated by Capture, consumed by Save to write
+    /// <c>samples/</c>; not serialized (paths already live in the DTOs).</summary>
+    [JsonIgnore] public Dictionary<string, long> SampleRefs { get; } = new();
+
+    /// <summary>Plugin state blobs: relative bundle path -&gt; bytes. Populated by
+    /// Capture, written to <c>plugin-states/</c> by Save; not serialized.</summary>
+    [JsonIgnore] public Dictionary<string, byte[]> StateBlobs { get; } = new();
+
+    /// <summary>Nota Aurora custom wavetables (format v29, specs/053): relative bundle path
+    /// -&gt; the table's frames (2048 floats each). Populated by Capture, written to
+    /// <c>samples/</c> as float32 WAV by Save; not serialized.</summary>
+    [JsonIgnore] public Dictionary<string, float[]> TableRefs { get; } = new();
+
+    /// <summary>Name binaries by live id / position (<c>sample-N.wav</c>, <c>state-N.bin</c>)
+    /// instead of by content hash. Cheap — nothing is read or hashed — but only stable within
+    /// a session, so it is for change detection (<see cref="ProjectService.Capture"/> with
+    /// <c>contentNames: false</c>) and never for a document that is saved.</summary>
+    [JsonIgnore] internal bool SessionNames { get; init; }
+}
+
+public sealed class MasterDto
+{
+    public string? Name { get; set; }
+    public int ColorIndex { get; set; } = -1;
+    public List<DeviceDto> Devices { get; set; } = new();
+    // Sidechain keys of devices inside the master's racks (v25, specs/044), as on a track.
+    public List<NestedSidechainDto>? NestedSidechains { get; set; }
+    /// <summary>Automation lanes on the master track (v34, specs/099): Tempo, Pan and master
+    /// device parameters, as on a track. Master volume stays in <c>masterVolumeAutomation</c>.</summary>
+    public List<AutomationLaneDto>? Automation { get; set; }
+    /// <summary>Master pan (specs/099), −1..1; null = centre (and older files).</summary>
+    public float? Pan { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>Mixer-wide settings (specs/006). <see cref="PanLaw"/> is "stereo" or "balance";
+/// <see cref="PanLawLegacy"/> marks a project made before the pan law (only drives the
+/// Mixer's OLDER PROJECT badge, never the sound).</summary>
+public sealed class MixerDto
+{
+    public string PanLaw { get; set; } = "balance";
+    public bool PanLawLegacy { get; set; }
+    /// <summary>The Cue mix's level (specs/089), linear; null = 1 (unity, and older files).</summary>
+    public float? CueVolume { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A named span of arrangement time (specs/016). The same shape the legacy
+/// <c>sections.json</c> sidecar used.</summary>
+public sealed class SectionDto
+{
+    public double Start { get; set; }
+    public double Length { get; set; }
+    public string Name { get; set; } = "";
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class TransportDto
+{
+    public double Bpm { get; set; } = 120.0;
+    public double MasterVolume { get; set; } = 1.0;
+    public bool MetronomeOn { get; set; }
+    public bool LoopOn { get; set; }
+    /// <summary>The loop region in beats (#455); null in files from before it was saved, and
+    /// when no region is set — loading those leaves the region as it is.</summary>
+    public double? LoopStart { get; set; }
+    public double? LoopEnd { get; set; }
+    public int TimeSigNumerator { get; set; } = 4;
+    public int TimeSigDenominator { get; set; } = 4;
+    /// <summary>The project key ("Am", "Eb"); null = none set. Loops dropped in can be
+    /// transposed to it.</summary>
+    public string? Key { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class TrackDto
+{
+    /// <summary>Stable identity across save/load (Syntetika Engine visual layout). Absent in
+    /// projects saved before this field existed; generated on the next save.</summary>
+    public string? Uid { get; set; }
+    public int Type { get; set; }             // 0 = audio, 1 = instrument, 2 = return, 3 = group
+    public string? Name { get; set; }
+    public float Volume { get; set; } = 1.0f;
+    public float Pan { get; set; }
+    public bool Mute { get; set; }
+    public bool Solo { get; set; }
+    public bool Armed { get; set; }
+    public bool? Cue { get; set; }              // in Cue (specs/089); null = not (and older files)
+    public int ReturnIndex { get; set; } = -1; // >=0 for return tracks
+    public int GroupId { get; set; } = -1;     // parent group's doc index, or -1 (top-level)
+    public int ColorIndex { get; set; } = -1;  // palette slot; -1 = auto by position
+    public bool? PianoFold { get; set; }       // piano roll Fold (specs/045); written only when on
+    public bool? EditLink { get; set; }        // group Link (specs/076); written only when on
+    // Record input: 0 hardware, -1 master, or (2 + track-list index) for another track's
+    // output (encoded so it survives id reassignment across save/load).
+    public int RecordInput { get; set; }
+    public bool Monitor { get; set; }   // live input monitoring (audio tracks)
+    // Hardware input channels (audio tracks): 0 stereo pair, 1 input 1, 2 input 2. Absent in
+    // files saved before 0.58, which recorded the stereo pair.
+    public int? InputChannels { get; set; }
+    // The hardware input as device channel + width (specs/086): InputFirst 1-based, InputWidth
+    // 1 (mono) or 2 (pair). Absent in files saved before 0.60 — then InputChannels says it.
+    // InputChannels is still written when it can name the pick, so 0.59 opens the file.
+    public int? InputFirst { get; set; }
+    public int? InputWidth { get; set; }
+    // MIDI routing source ("MIDI In") as a doc-list index (survives id reassignment), or -1 = off.
+    public int MidiFrom { get; set; } = -1;
+    // An instrument track's MIDI input (specs/086): the device's uid (absent = All inputs) and
+    // channel (absent / 0 = all, 1–16).
+    public string? MidiInputUid { get; set; }
+    public int? MidiInputChannel { get; set; }
+    // MIDI playback offset in ms (negative = earlier; playback only, notes don't move). Omitted = 0. v30.
+    public double? MidiOffsetMs { get; set; }
+    // The track's articulation map (specs/085), embedded as Nota's map JSON
+    // (contracts/nota-articulation-map-file.md). Omitted = none. v30.
+    public JsonObject? ArticulationMap { get; set; }
+    public float[] Sends { get; set; } = new float[4];
+    public InstrumentDto? Instrument { get; set; }
+    public List<MidiDeviceDto> MidiEffects { get; set; } = new();   // MIDI FX chain, before the instrument
+    public List<DeviceDto> Devices { get; set; } = new();
+    public List<MidiClipDto> MidiClips { get; set; } = new();
+    public List<AudioClipDto> AudioClips { get; set; } = new();
+    public List<AudioTakeDto>? Takes { get; set; }   // loop-recording take lanes (v29, specs/067)
+    public List<SessionSlotDto> SessionSlots { get; set; } = new();
+    /// <summary>Empty slots whose stop button was removed (scene launch leaves the track playing).</summary>
+    public List<int>? SessionNoStop { get; set; }
+    /// <summary>Slots with a next-take length of their own (#503); absent = every slot Global.
+    /// Written for filled slots too: the value stays with the slot under a clip.</summary>
+    public List<SlotTakeLengthDto>? SessionTakeLengths { get; set; }
+    public List<AutomationLaneDto> Automation { get; set; } = new();   // M9-A4 (format v2)
+    public List<ModulatorDto> Modulators { get; set; } = new();        // CV modulation sources (Phase 3)
+    public List<CvLinkDto> CvLinks { get; set; } = new();              // CV modulation edges (Phase 3)
+    // Links on devices inside the track's racks that the rack blob can't hold (v25, specs/044):
+    // a chain child's sidechain key (its source is a doc index, like a device's) and a chain
+    // MIDI effect's CC target. Null = none.
+    public List<NestedSidechainDto>? NestedSidechains { get; set; }
+    public List<NestedCcRouteDto>? NestedCcRoutes { get; set; }
+    /// <summary>Freeze (M7): relative path to the track's frozen-audio blob in
+    /// <c>plugin-states/</c> (null = not frozen). Restored + re-flagged frozen on load.</summary>
+    public string? FrozenState { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A CV modulation source (Phase 3, Modular editor). Kind 0 = LFO.</summary>
+public sealed class ModulatorDto
+{
+    public int Id { get; set; }
+    public int Kind { get; set; }
+    public int Waveform { get; set; }
+    public bool TempoSync { get; set; } = true;
+    public float RateHz { get; set; } = 1.0f;
+    public float RateSyncBeats { get; set; } = 0.5f;
+    public float Depth { get; set; } = 1.0f;
+    public float Phase { get; set; }
+    public float Attack { get; set; } = 10.0f;    // env follower / ADSR (ms)
+    public float Release { get; set; } = 120.0f;
+    public float Decay { get; set; } = 200.0f;    // ADSR (ms)
+    public float Sustain { get; set; } = 0.7f;    // ADSR (0..1)
+    public int InputA { get; set; } = -1;         // Math: source modulator ids (remapped on load)
+    public int InputB { get; set; } = -1;
+    public float MathOffset { get; set; }
+    // Scope view settings (specs/047); older projects read the defaults.
+    public float ScopeWindowMs { get; set; } = 1000f;
+    public bool ScopeSync { get; set; }
+    public float ScopeWindowBeats { get; set; } = 4f;
+    public int ScopeZoom { get; set; } = 1;
+    public int ScopeTrigger { get; set; }
+    public float ScopeHeight { get; set; } = 76f;
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A CV modulation edge: modulator (Source id) → built-in device param.
+/// Mode: 0 Add, 1 Multiply, 2 Override.</summary>
+public sealed class CvLinkDto
+{
+    public int Source { get; set; }                 // modulator id (SourceKind 0)
+    public int SourceKind { get; set; }             // 0 = modulator, 1 = parameter
+    public int SourceDevice { get; set; } = -1;     // param source: device/param on the owner track
+    public int SourceParam { get; set; } = -1;
+    public int TargetKind { get; set; }             // 0 device, 1 instrument, 2 MIDI-FX
+    /// <summary>Target track as a doc-list index (survives id reassignment); -1 = the modulator's own track.</summary>
+    public int TargetTrack { get; set; } = -1;
+    public int Device { get; set; } = -1;
+    public int Param { get; set; } = -1;
+    // A source / target inside a rack (v25, specs/044): SourceDevice / Device is then the rack's
+    // address and these the chain index and slot. Null = track level.
+    public int? SourceChain { get; set; }
+    public int? SourceSlot { get; set; }
+    public int? TargetChain { get; set; }
+    public int? TargetSlot { get; set; }
+    public float Depth { get; set; } = 1.0f;
+    public int Mode { get; set; }
+    /// <summary>Modulation centre (base) value — the device param value the link swings around.</summary>
+    public float Base { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A parameter-automation lane and its breakpoints (M9-A4, format v2).
+/// Target: 0 = track volume, 1 = pan, 2 = built-in device param (Device/Param set).</summary>
+/// <summary>A rack chain child's sidechain key (v25, specs/044). Host is the rack's address on
+/// the track, Slot >= 0 a device, -1 the chain instrument; Source a doc index.</summary>
+public sealed class NestedSidechainDto
+{
+    public int Host { get; set; }
+    public int Chain { get; set; }
+    public int Slot { get; set; }
+    public int Source { get; set; } = -1;
+    /// <summary>The part of the source's instrument (index at save time; -1 = the whole track).
+    /// Format v28, specs/050.</summary>
+    public int Part { get; set; } = -1;
+    public bool TapPre { get; set; }
+    public float GainDb { get; set; }
+    public float Mix { get; set; } = 1.0f;
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A rack chain MIDI effect's CC target (v25, specs/044): the MIDI effect at (Host,
+/// Chain, Index) drives DestDevice's Param, or the child (DestChain, DestSlot) of the rack there.</summary>
+public sealed class NestedCcRouteDto
+{
+    public int Host { get; set; }
+    public int Chain { get; set; }
+    public int Index { get; set; }
+    public int DestDevice { get; set; } = -2;
+    public int DestChain { get; set; } = -1;
+    public int DestSlot { get; set; } = -1;
+    public int Param { get; set; } = -1;
+    public float Depth { get; set; } = 1.0f;
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class AutomationLaneDto
+{
+    public int Target { get; set; }
+    public int DeviceIndex { get; set; } = -1;
+    public int ParamIndex { get; set; } = -1;
+    /// <summary>Stable hosted-plugin parameter id when Target == 3 (PluginParam, M9-B4).
+    /// Persisted instead of the version-unstable index; resolved on load.</summary>
+    public string? PluginParamId { get; set; }
+    // A lane on a device grouped into a rack (v25, specs/044): DeviceIndex is then the rack's
+    // address (>= 0 effect, -1 instrument, -1000 - i MIDI effect) and these the chain index and
+    // slot (>= 0 device, -1 chain instrument, -1000 - i chain MIDI effect). Null = track level.
+    public int? Chain { get; set; }
+    public int? Slot { get; set; }
+    public AutomationPointDto[] Points { get; set; } = System.Array.Empty<AutomationPointDto>();
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class AutomationPointDto
+{
+    public double Beat { get; set; }
+    public float Value { get; set; }
+    public float Curve { get; set; }   // segment shape to next point (M9-D4, format v4)
+
+    public AutomationPointDto() { }
+    public AutomationPointDto(AutomationPoint p) { Beat = p.Beat; Value = p.Value; Curve = p.Curve; }
+    public AutomationPoint ToPoint() => new(Beat, Value, Curve);
+}
+
+/// <summary>One controller curve of a MIDI clip (specs/020): the controller (a CC 0..127, 128 the
+/// pitch wheel, 129 channel pressure) and its breakpoints in clip-local beats, values normalised.
+/// Stored as parallel arrays — a recorded curve can hold a few thousand points, and an object per
+/// point would grow a project by ~150 bytes each. Curves is null when every segment is linear.</summary>
+public sealed class ControllerCurveDto
+{
+    public int Ctl { get; set; }
+    public double[] Beats { get; set; } = System.Array.Empty<double>();
+    public float[] Values { get; set; } = System.Array.Empty<float>();
+    public float[]? Curves { get; set; }
+
+    public static ControllerCurveDto From(int ctl, AutomationPoint[] pts)
+    {
+        var dto = new ControllerCurveDto
+        {
+            Ctl = ctl,
+            Beats = System.Array.ConvertAll(pts, p => Math.Round(p.Beat, 6)),
+            Values = System.Array.ConvertAll(pts, p => (float)Math.Round(p.Value, 4)),
+        };
+        if (System.Array.Exists(pts, p => p.Curve != 0f)) dto.Curves = System.Array.ConvertAll(pts, p => (float)Math.Round(p.Curve, 4));
+        return dto;
+    }
+
+    public AutomationPoint[] ToPoints()
+    {
+        int n = Math.Min(Beats.Length, Values.Length);
+        var pts = new AutomationPoint[n];
+        for (int i = 0; i < n; i++) pts[i] = new AutomationPoint(Beats[i], Values[i], Curves is { } c && i < c.Length ? c[i] : 0f);
+        return pts;
+    }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>The preset a device was loaded from (v26, specs/048): its id, name and the
+/// parameter values it left, so a reopened project still shows "Name *" once they moved.</summary>
+public sealed class PresetTagDto
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public float[] Loaded { get; set; } = System.Array.Empty<float>();
+}
+
+public sealed class InstrumentDto
+{
+    /// <summary>The preset it was loaded from (v26); null = none / Init.</summary>
+    public PresetTagDto? Preset { get; set; }
+    /// <summary>0 = Nota Synth, 1 = Sampler, 2 = Nota Physical, -1 = hosted plugin.</summary>
+    public int Kind { get; set; }
+    /// <summary>Set when Kind == 1 (built-in Sampler).</summary>
+    public SamplerDto? Sampler { get; set; }
+    /// <summary>Stable plugin identifier when Kind == -1 (M7-6c).</summary>
+    public string? PluginId { get; set; }
+    /// <summary>Relative path to the plugin's state blob in <c>plugin-states/</c>.</summary>
+    public string? State { get; set; }
+    /// <summary>Relative path to a JPEG of the plug-in's window, drawn behind its card (format
+    /// v27, specs/046); null = none.</summary>
+    public string? Preview { get; set; }
+    /// <summary>Sidechain source ("React", Nota Flux) as a track INDEX in this document
+    /// (-1 = none). Resolved to a live track id on load, since ids are reassigned.</summary>
+    public int SidechainSource { get; set; } = -1;
+    /// <summary>The part of the source React listens to (index at save time; -1 = the whole
+    /// track). Format v28, specs/050.</summary>
+    public int SidechainPart { get; set; } = -1;
+    /// <summary>Drawn as a narrow strip in the Devices panel (format v23, specs/022).</summary>
+    public bool Folded { get; set; }
+    /// <summary>Nota Rhythm (Kind == 12) per-voice one-shots (only sample-source voices).</summary>
+    public List<VoiceSampleDto>? VoiceSamples { get; set; }
+    /// <summary>Nota Aurora (Kind == 5) imported wavetables, one per oscillator that holds one
+    /// (format v29, specs/053); null = none.</summary>
+    public List<WavetableDto>? Wavetables { get; set; }
+    /// <summary>The card's on/off switch is off: the instrument makes no sound (#148).</summary>
+    public bool Bypassed { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>One drum voice's sample for Nota Rhythm: the voice index + a bundle-relative
+/// path into <c>samples/</c>.</summary>
+/// <summary>One Nota Aurora oscillator's imported wavetable (format v29, specs/053): its frames
+/// as a float32 WAV in <c>samples/</c> (a <c>clm </c> chunk names the 2048-sample frame), the
+/// name it was imported as, how the file was read (0 wavetable file, 1 single cycle,
+/// 2 recording) and whether the oscillator plays it. <see cref="Missing"/>: the table could not
+/// be restored when the project was last opened; <see cref="Sample"/> is empty then.</summary>
+public sealed class WavetableDto
+{
+    public int Osc { get; set; }
+    public string Sample { get; set; } = "";
+    public string Name { get; set; } = "";
+    public int Origin { get; set; }
+    public int Frames { get; set; }
+    public bool UseCustom { get; set; } = true;
+    public bool Missing { get; set; }
+}
+
+public sealed class VoiceSampleDto
+{
+    public int Voice { get; set; }
+    public string Sample { get; set; } = "";
+    /// <summary>The voice plays its synth engine; the sample is kept for switching back.</summary>
+    public bool Synth { get; set; }
+}
+
+public sealed class SamplerDto
+{
+    public string Sample { get; set; } = "";  // relative bundle path ("" = empty Sampler)
+    public int RootNote { get; set; } = 60;
+    public bool Loop { get; set; }
+    /// <summary>The file name the sample came from (no extension) — the bundle stores it as
+    /// sample-N.wav, so this keeps the Sampler's "Detect from file name" working after a reload.</summary>
+    public string Name { get; set; } = "";
+    /// <summary>Normalized plugin-param values (vol/pan/start/end/loop/ADSR/filter…). Empty = defaults.</summary>
+    public float[] Params { get; set; } = System.Array.Empty<float>();
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A placed audio clip (arrangement) or a session take. `Sample` is a
+/// bundle-relative path into <c>samples/</c>.</summary>
+public sealed class AudioClipDto
+{
+    public string Sample { get; set; } = "";
+    public string? Name { get; set; }
+    public bool Active { get; set; } = true;   // clip deactivate / key 0 (v17); default true = plays
+    public double StartBeat { get; set; }
+    public double SourceOffsetFrames { get; set; }
+    public long LengthFrames { get; set; }     // 0 = to end of sample
+    public float Gain { get; set; } = 1.0f;
+    public float PitchSemitones { get; set; }  // varispeed transpose (v5)
+    public int WarpEnabled { get; set; }       // 0/1 (v5)
+    public int WarpMode { get; set; }          // WarpMode enum (v5)
+    public double WarpBeats { get; set; }      // full warped material length in beats (v5)
+    public List<WarpMarkerDto>? WarpMarkers { get; set; }  // source↔beat anchors (v6)
+    public AutomationPointDto[]? VolumeEnvelope { get; set; }  // clip volume envelope, clip-local beats (v8)
+    public AutomationPointDto[]? PanEnvelope { get; set; }     // clip pan envelope, clip-local beats (v9)
+    public double WarpPlayStart { get; set; }  // warped clip trim window start (beats, v11)
+    public double WarpPlayEnd { get; set; }    // warped clip trim window end (0 = full, v11)
+    public bool Reversed { get; set; }         // plays back-to-front (v19); default false
+    public ClipAdsrDto? Adsr { get; set; }     // ADSR amplitude shape (v20); null = identity
+    public int? TakeId { get; set; }           // the AudioTakeDto.Id this comp section came from (v29)
+    // Ends that play at full level where take sections meet: 1 head, 2 tail (v29, optional;
+    // absent = both fade). A flatten keeps such a join after its takes are gone.
+    public int? JoinedEdges { get; set; }
+    /// <summary>The file the clip's audio came from (spec 092, #581) — Locate opens it.
+    /// Optional; absent for recordings, renders and projects saved before it existed.</summary>
+    public string? Source { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>One pass of an Arrangement loop recording (v29, specs/067). `Id` is file-local:
+/// it only links comp sections (<see cref="AudioClipDto.TakeId"/>) to their take.</summary>
+public sealed class AudioTakeDto
+{
+    public int Id { get; set; }
+    public int Number { get; set; }            // "Take N" as shown on the lane
+    public int Group { get; set; }             // takes of one recording share a group
+    public string Sample { get; set; } = "";
+    /// <summary>The file the take's audio came from (spec 092); absent for a recording.</summary>
+    public string? Source { get; set; }
+    public double OriginBeat { get; set; }     // beat of the sample's frame 0
+    public double SourceOffsetFrames { get; set; }
+    public long LengthFrames { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>An audio clip's ADSR amplitude shape (v20): stage times in clip-local beats,
+/// sustain as linear gain 0..1.</summary>
+public sealed class ClipAdsrDto
+{
+    public double Attack { get; set; }
+    public double Decay { get; set; }
+    public float Sustain { get; set; } = 1f;
+    public double Release { get; set; }
+
+    public ClipAdsrDto() { }
+    public ClipAdsrDto(ClipAdsr a) { Attack = a.AttackBeats; Decay = a.DecayBeats; Sustain = a.Sustain; Release = a.ReleaseBeats; }
+    public ClipAdsr ToAdsr() => new() { AttackBeats = Attack, DecayBeats = Decay, Sustain = Sustain, ReleaseBeats = Release };
+}
+
+/// <summary>A warp marker: source-frame position tied to a musical beat (v6).</summary>
+public sealed class WarpMarkerDto
+{
+    public double Src { get; set; }
+    public double Beat { get; set; }
+}
+
+/// <summary>A built-in MIDI effect (e.g. the arpeggiator), captured by kind + generic
+/// param values. Persisted before the instrument in the chain.</summary>
+public sealed class MidiDeviceDto
+{
+    /// <summary>The preset it was loaded from (v26); null = none / Init.</summary>
+    public PresetTagDto? Preset { get; set; }
+    public int Kind { get; set; }        // 0 = Arpeggiator
+    public bool Bypassed { get; set; }
+    public bool Folded { get; set; }     // drawn as a strip in the Devices panel (v23, specs/022)
+    public float[] Params { get; set; } = System.Array.Empty<float>();
+    // Map/CC routing (arp): CC lane → an audio-device param on the same track.
+    public int CcDestDevice { get; set; } = -2;   // -2 = no routing
+    public int CcDestParam { get; set; } = -1;
+    // A CC target inside a rack (v25, specs/044): chain index + slot in the rack at CcDestDevice.
+    public int? CcDestChain { get; set; }
+    public int? CcDestSlot { get; set; }
+    public float CcDepth { get; set; } = 1.0f;
+    // Opaque state blob (v24, specs/040): the MIDI Effect Rack's chains, devices, zones and
+    // macros. Null for params-only MIDI effects.
+    public string? State { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class DeviceDto
+{
+    /// <summary>The preset it was loaded from (v26); null = none / Init.</summary>
+    public PresetTagDto? Preset { get; set; }
+    /// <summary>Built-in kind: 0=EQ, 1=Compressor, 2=Reverb, 3=Delay, 4=Utility; -1 = hosted plugin.</summary>
+    public int BuiltinKind { get; set; }
+    public bool Bypassed { get; set; }
+    /// <summary>Drawn as a narrow strip in the Devices panel (format v23, specs/022).</summary>
+    public bool Folded { get; set; }
+    public float[] Params { get; set; } = System.Array.Empty<float>();
+    /// <summary>Stable plugin identifier when BuiltinKind == -1 (M7-6c).</summary>
+    public string? PluginId { get; set; }
+    /// <summary>Relative path to the plugin's state blob in <c>plugin-states/</c>.</summary>
+    public string? State { get; set; }
+    /// <summary>Relative path to a JPEG of the plug-in's window, drawn behind its card (format
+    /// v27, specs/046); null = none.</summary>
+    public string? Preview { get; set; }
+    /// <summary>Sidechain source as a track INDEX in this document (-1 = none). Resolved to a
+    /// live track id on load, since ids are reassigned. Phase B (format v15).</summary>
+    public int SidechainSource { get; set; } = -1;
+    /// <summary>The part of the source track's instrument the key listens to — a Drum Rack pad,
+    /// an Instrument Rack chain or a Rhythm voice — as its index at save time; -1 = the whole
+    /// track (format v28, specs/050).</summary>
+    public int SidechainPart { get; set; } = -1;
+    /// <summary>Sidechain detector gain in dB (Phase D, format v16).</summary>
+    public float SidechainGain { get; set; }
+    /// <summary>Sidechain dry/wet, 0..1 (Phase D, format v16). Default 1 = fully wet.</summary>
+    public float SidechainMix { get; set; } = 1.0f;
+    /// <summary>Sidechain source tap: true = pre-FX pre-fader (Phase D, format v16).</summary>
+    public bool SidechainTapPre { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class MidiClipDto
+{
+    public string? Name { get; set; }
+    public bool Active { get; set; } = true;   // clip deactivate / key 0 (v17); default true = plays
+    public double StartBeat { get; set; }
+    public double LengthBeats { get; set; }
+    public NoteDto[] Notes { get; set; } = System.Array.Empty<NoteDto>();
+    public AutomationPointDto[]? VelocityEnvelope { get; set; }  // clip velocity envelope (v10)
+    public AutomationPointDto[]? VolumeEnvelope { get; set; }    // clip volume envelope (v10)
+    public ControllerCurveDto[]? Controllers { get; set; }       // MIDI controller curves (v22, specs/020)
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class SessionDto
+{
+    public double LaunchQuant { get; set; } = 4.0;
+    public bool Follow { get; set; } = true;
+    public double RecordLength { get; set; }
+    public List<SceneDto> Scenes { get; set; } = new();
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class SceneDto
+{
+    public int Index { get; set; }
+    public string? Name { get; set; }
+    public int Color { get; set; } = -1;
+    public double Tempo { get; set; }
+    public int SigNum { get; set; }
+    public int SigDen { get; set; }
+    public bool Follow { get; set; }
+    public double FollowBeats { get; set; } = 32.0;
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A Session slot's own next-take length (#503): Mode 1 = Open, 2 = Fixed (Bars + Beats).</summary>
+public sealed class SlotTakeLengthDto
+{
+    public int Scene { get; set; }
+    public int Mode { get; set; }
+    public int Bars { get; set; }
+    public int Beats { get; set; }
+}
+
+public sealed class SessionSlotDto
+{
+    public int Scene { get; set; }
+    public double LengthBeats { get; set; } = 4.0;
+    public NoteDto[] Notes { get; set; } = System.Array.Empty<NoteDto>();
+    public ControllerCurveDto[]? Controllers { get; set; }       // MIDI controller curves (v22, specs/020)
+    /// <summary>Set for audio-track slots (a captured take); Notes is empty then.</summary>
+    public AudioClipDto? Audio { get; set; }
+    // Clip properties (Session P0); defaults match a fresh clip.
+    public string? Name { get; set; }
+    public int Color { get; set; } = -1;
+    public int LaunchMode { get; set; }
+    public double Quant { get; set; } = -1.0;
+    public bool Legato { get; set; }
+    public bool Loop { get; set; } = true;
+    public float VelocityAmount { get; set; }
+    public int FollowA { get; set; }
+    public int FollowB { get; set; }
+    public int ChanceA { get; set; } = 100;
+    public int ChanceB { get; set; }
+    public double FollowBeats { get; set; }
+    public int JumpScene { get; set; }
+    public bool FollowBypass { get; set; }   // v35 (specs/103): follow actions held, settings kept
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class NoteDto
+{
+    public int Pitch { get; set; }
+    public double Start { get; set; }
+    public double Length { get; set; }
+    public float Velocity { get; set; } = 1.0f;
+
+    /// <summary>Recorded MPE, when the note has any (omitted otherwise).</summary>
+    public NoteMpeDto? Mpe { get; set; }
+
+    /// <summary>The note's articulation: an id in its track's articulation map (omitted = none). v30.</summary>
+    public int? Articulation { get; set; }
+
+    public NoteDto() { }
+    public NoteDto(NotaNote n)
+    {
+        Pitch = n.Pitch; Start = n.StartBeat; Length = n.LengthBeats; Velocity = n.Velocity;
+        Articulation = n.ArticulationId > 0 ? n.ArticulationId : null;
+    }
+    public NotaNote ToNote() => new(Pitch, Start, Length, Velocity) { ArticulationId = Articulation is > 0 ? Articulation.Value : 0 };
+}
+
+/// <summary>A note's recorded expression: per dimension a flat [beat, value, beat, value…] list,
+/// beats from the note's start (Bend in semitones, Pressure / Slide 0..1).</summary>
+public sealed class NoteMpeDto
+{
+    public float[]? Bend { get; set; }
+    public float[]? Pressure { get; set; }
+    public float[]? Slide { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+
+    public static NoteMpeDto? From(NotaExprPoint[] points)
+    {
+        if (points.Length == 0) return null;
+        float[]? Of(NoteExpressionDim d)
+        {
+            var list = new List<float>();
+            foreach (var p in points) if (p.Dim == d) { list.Add(p.Beat); list.Add(p.Value); }
+            return list.Count > 0 ? list.ToArray() : null;
+        }
+        return new NoteMpeDto { Bend = Of(NoteExpressionDim.Bend), Pressure = Of(NoteExpressionDim.Pressure), Slide = Of(NoteExpressionDim.Slide) };
+    }
+
+    public NotaExprPoint[] ToPoints()
+    {
+        var list = new List<NotaExprPoint>();
+        void Add(NoteExpressionDim d, float[]? flat)
+        {
+            if (flat is null) return;
+            for (int i = 0; i + 1 < flat.Length; i += 2) list.Add(new NotaExprPoint(d, flat[i], flat[i + 1]));
+        }
+        Add(NoteExpressionDim.Bend, Bend);
+        Add(NoteExpressionDim.Pressure, Pressure);
+        Add(NoteExpressionDim.Slide, Slide);
+        return list.ToArray();
+    }
+}

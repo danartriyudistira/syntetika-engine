@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// A performance wheel — the pitch-bend / modulation pair every hardware synth puts left of
+// the keys, drawn flat to the almanac: a sunken pill, a hairline border, tick marks and a
+// neutral bar at the value (accent while dragged). Nota Operator's card keeps both on screen on every tab.
+//
+// Interaction matches the knob contract: vertical drag (up increases) over the wheel's own
+// height, Shift/Ctrl/⌘ for fine, a click never jumps the value, double-click restores the
+// default, and a spring wheel (pitch bend) returns to its default when released.
+
+using System;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Media;
+
+namespace Nota.App;
+
+internal sealed class PerformWheel : Control
+{
+    private const double Travel = 140;   // px of drag for the full range — the knob's feel
+
+    private static readonly IBrush Well = NotaPalette.BgSunken;
+    private static readonly IBrush Face = NotaPalette.SurfaceRaised;
+    private static readonly IBrush Edge = NotaPalette.BorderDefault;
+    private static readonly IBrush Tick = NotaPalette.BorderStrong;
+    private static readonly IBrush Bar = NotaPalette.VizInk;
+    private static readonly IBrush BarOff = NotaPalette.TextTertiary;
+
+    private double _norm;
+    private bool _drag;
+    private double _startY, _startV;
+
+    /// <summary>Value restored on double-click, and sprung back to when <see cref="Spring"/>.</summary>
+    public double Default { get; init; } = 0;
+
+    /// <summary>True for a pitch wheel: it snaps back to <see cref="Default"/> on release.</summary>
+    public bool Spring { get; init; }
+
+    public bool Dragging => _drag;
+
+    public event Action<double>? ValueChanged;
+    public event Action? GestureBegin;
+    public event Action? GestureEnd;
+
+    public PerformWheel()
+    {
+        Width = 16;
+        Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
+        Focusable = false;
+    }
+
+    /// <summary>Follow an external write (automation, a preset) without raising ValueChanged.</summary>
+    public double Norm
+    {
+        get => _norm;
+        set { double v = Math.Clamp(value, 0, 1); if (Math.Abs(v - _norm) < 1e-6) return; _norm = v; InvalidateVisual(); }
+    }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        var pt = e.GetCurrentPoint(this);
+        if (!pt.Properties.IsLeftButtonPressed) return;   // right-click bubbles to the CV / learn menu
+        if ((e.ClickCount == 2 || (e.KeyModifiers & KeyModifiers.Alt) != 0)) { GestureBegin?.Invoke(); Write(Default); GestureEnd?.Invoke(); e.Handled = true; return; }
+        _drag = true; _startY = pt.Position.Y; _startV = _norm;
+        GestureBegin?.Invoke();
+        e.Pointer.Capture(this);
+        e.Handled = true;
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        if (!_drag) return;
+        double fine = e.KeyModifiers.HasFlag(KeyModifiers.Shift) || e.KeyModifiers.HasFlag(KeyModifiers.Control)
+                   || e.KeyModifiers.HasFlag(KeyModifiers.Meta) ? 0.25 : 1.0;
+        Write(_startV + (_startY - e.GetPosition(this).Y) / Travel * fine);
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        if (!_drag) return;
+        _drag = false; InvalidateVisual();
+        e.Pointer.Capture(null);
+        if (Spring) Write(Default);
+        GestureEnd?.Invoke();
+    }
+
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        // Capture taken away mid-drag (the window deactivates): spring back, end the gesture and drop the accent.
+        if (_drag)
+        {
+            _drag = false; InvalidateVisual();
+            if (Spring) Write(Default);
+            GestureEnd?.Invoke();
+        }
+        base.OnPointerCaptureLost(e);
+    }
+
+    /// <summary>The wheel as a typeable value (a held wheel — not a spring one, which would not stay put).</summary>
+    internal ValueField EntryField(string name, Func<double, string> fmt)
+        => new(name, () => _norm, fmt, Write, () => GestureBegin?.Invoke(), () => GestureEnd?.Invoke(), Default);
+
+    private void Write(double v)
+    {
+        v = Math.Clamp(v, 0, 1);
+        if (Math.Abs(v - _norm) < 1e-6) return;
+        _norm = v; InvalidateVisual(); ValueChanged?.Invoke(v);
+    }
+
+    public override void Render(DrawingContext ctx)
+    {
+        double w = Bounds.Width, h = Bounds.Height;
+        if (w <= 2 || h <= 6) return;
+        double r = w / 2;
+        var body = new Rect(0.5, 0.5, w - 1, h - 1);
+        ctx.DrawRectangle(Well, new Pen(Edge, 1), body, r, r);
+
+        // A short raised face — the part the thumb touches — that rides with the value, the
+        // way a real wheel's grip turns under the thumb. Its centre travels the well's free
+        // height, so at the ends it stops flush with the rim instead of wrapping.
+        double faceH = Math.Max(10, h * 0.34);
+        double top = 1.5, travel = Math.Max(0, h - 3 - faceH);
+        double faceY = top + (1 - _norm) * travel;
+        ctx.DrawRectangle(Face, null, new Rect(1.5, faceY, w - 3, faceH), r - 1, r - 1);
+
+        // Grip ticks over the face, evenly spaced — they move with it.
+        for (int i = 1; i <= 3; i++)
+        {
+            if (i == 2) continue;   // the middle one is the value bar
+            double ty = faceY + faceH * i / 4.0;
+            ctx.DrawLine(new Pen(Tick, 1), new Point(3, ty), new Point(w - 3, ty));
+        }
+
+        // The value bar, on the face's centreline. Pitch rests in the middle of the well.
+        double y = faceY + faceH / 2;
+        bool live = Math.Abs(_norm - Default) > 1e-3;
+        ctx.DrawRectangle(_drag ? NotaPalette.Accent : live ? Bar : BarOff, null, new Rect(1.5, y - 1, w - 3, 2), NotaSkin.MapRadius(1), NotaSkin.MapRadius(1));
+    }
+}

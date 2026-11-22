@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices — fallback body for a MIDI effect without a bespoke editor:
+// generic faders + readouts (up to 10 params).
+
+using System;
+using System.Globalization;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Layout;
+using Nota.Application;
+using static Nota.App.DeviceCardKit;
+
+namespace Nota.App;
+
+internal sealed class GenericMidiBody : IMidiDeviceBody
+{
+    public double Width => 190;
+
+    public Control Build(DeviceCardContext ctx, int index)
+    {
+        var engine = ctx.Engine;
+        int track = ctx.TrackId;
+        var panel = new StackPanel { Spacing = 7 };
+        int pc = Math.Min(10, engine.MidiEffectParamCount(track, index));
+        for (int i = 0; i < pc; i++)
+        {
+            int pi = i;
+            float min = engine.MidiEffectParamMin(track, index, i), max = engine.MidiEffectParamMax(track, index, i);
+            float v = engine.MidiEffectGetParam(track, index, i);
+            bool integral = max - min >= 2 && (max <= 24.5f);   // small integer ranges show as whole numbers
+            var value = new TextBlock { Text = FmtParam(v, integral), FontSize = 9, Foreground = TextPrimary, HorizontalAlignment = HorizontalAlignment.Right };
+            value.BindResource(TextBlock.FontFamilyProperty, "Font.Measure");
+            var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            top.Children.Add(new TextBlock { Text = NotaText.Label(engine.MidiEffectParamName(track, index, i)), FontSize = 9, Foreground = TextTertiary });
+            Grid.SetColumn(value, 1); top.Children.Add(value);
+            var bar = new Knob((v - min) / Math.Max(1e-6f, max - min), 1.0) { Accent = true, HorizontalAlignment = HorizontalAlignment.Center,
+                Default = (engine.MidiEffectParamDefault(track, index, pi) - min) / Math.Max(1e-6f, max - min) };
+            bar.ValueChanged += nv => { float nvv = (float)(min + nv * (max - min)); engine.MidiEffectSetParam(track, index, pi, nvv); value.Text = FmtParam(nvv, integral); };
+            // The touch makes a drag one undo step and lets automation record it (specs/016).
+            bar.GestureBegin += () => engine.BeginAutomationWrite(track, AutomationTarget.MidiDeviceParam, index, pi, "");
+            bar.GestureEnd += () => engine.EndAutomationWrite(track, AutomationTarget.MidiDeviceParam, index, pi, "");
+            MidiLearn.Bind(bar, MidiTarget.MidiDeviceParam(track, index, pi), engine.MidiEffectParamName(track, index, pi));
+            bar.Format = nv => FmtParam((float)(min + nv * (max - min)), integral);
+            ValueEntry.Attach(bar, engine.MidiEffectParamName(track, index, pi), value);
+            panel.Children.Add(new StackPanel { Spacing = 2, Children = { top, bar } });
+        }
+        return panel;
+    }
+
+    private static string FmtParam(float v, bool integral) => integral ? Math.Round(v).ToString("0", NotaNum.Culture) : v.ToString("0.00", NotaNum.Culture);
+}

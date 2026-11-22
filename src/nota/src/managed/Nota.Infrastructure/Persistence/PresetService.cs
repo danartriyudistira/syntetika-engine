@@ -1,0 +1,615 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// M7-4c: capture/save/list/load/apply device & instrument presets. Built on the
+// existing device param API (built-in devices) and plugin-state + stable
+// plugin-id API (AU/VST3), mirroring ProjectService's ownership model. Presets
+// are *.notapreset JSON files in an app-managed folder.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
+using Nota.Application.Localization;
+
+namespace Nota.Infrastructure;
+
+public static class PresetService
+{
+    public const string Extension = ".notapreset";
+    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+
+    /// <summary>Capture addresses a track's MIDI effect i as MidiEffectBase − i.</summary>
+    public const int MidiEffectBase = -1000;
+
+    /// <summary>Snapshot a track's device (deviceIndex &lt; 0 = its instrument) into a preset.
+    /// Returns null if the target has nothing capturable (e.g. a built-in synth).</summary>
+    public static PresetDocument? Capture(IAudioEngine engine, int trackId, int deviceIndex, string displayName)
+    {
+        if (deviceIndex <= MidiEffectBase) return CaptureMidiEffect(engine, trackId, MidiEffectBase - deviceIndex, displayName);
+        var doc = new PresetDocument { DisplayName = displayName, DeviceName = engine.DeviceName(trackId, deviceIndex) };
+        if (deviceIndex < 0)
+        {
+            int ik = engine.TrackInstrumentKind(trackId);
+            if (ik == -1)   // hosted plugin: opaque state blob
+            {
+                doc.Type = "plugin-instrument";
+                doc.PluginId = engine.TrackInstrumentPluginId(trackId);
+                doc.StateBase64 = Convert.ToBase64String(engine.GetPluginState(trackId, -1));
+                return string.IsNullOrEmpty(doc.PluginId) ? null : doc;
+            }
+            // Built-in instrument: capture the normalized plugin-params by id (+ a Mosaic's program). Skip kinds whose
+            // state isn't fully recallable from params alone — Grain (10) needs the sample and
+            // the Instrument/Drum racks (3/4) their chains. The Sampler (1) saves its sound —
+            // envelope, filter, pitch, loop, voices — and applying it keeps whatever sample is
+            // loaded (like its factory presets). Rhythm (12) saves its kit — every voice's
+            // sound, the groove and the bus — and applying it keeps the steps, the loaded
+            // samples and their regions. Everything else (Synth, Physical, Aurora, Volt, Bass,
+            // Pendulum, Operator, Flux, …) is a param-only synth and saves cleanly.
+            if (ik is 3 or 4 or 10) return null;
+            {
+                int pc = engine.PluginParamCount(trackId, -1);
+                if (pc <= 0) return null;
+                doc.Type = "builtin-instrument";
+                doc.BuiltinKind = ik;
+                doc.NamedParams = new Dictionary<string, float>(pc);
+                for (int i = 0; i < pc; i++)
+                {
+                    string id = engine.PluginParamId(trackId, -1, i);
+                    if (InstrumentView.IsViewParam(id)) continue;   // the card size is editor state, not sound
+                    doc.NamedParams[id] = engine.PluginParamGet(trackId, -1, i);
+                }
+                // Nota Mosaic: the zone map travels with the sound (its samples stay referenced).
+                if (ik == MosaicModel.Kind && engine.MosaicProgram(trackId) is { Length: > 0 } prog) doc.MosaicProgram = prog;
+                // Nota Aurora: its imported tables travel with the sound (specs/053).
+                if (ik == 5) doc.AuroraTables = CaptureAuroraTables(engine, trackId);
+                // Nota Twin: its sequencer patterns travel with the sound (a params-free state blob).
+                if (ik == Nota.Application.Twin.TwinMatrix.Kind && Nota.Application.Twin.TwinPatterns.FromState(engine.GetPluginState(trackId, -1)) is { } pats)
+                    doc.StateBase64 = Convert.ToBase64String(Nota.Application.Twin.TwinPatterns.StateWithPatterns(pats));
+                return doc;
+            }
+        }
+
+        int bk = engine.TrackDeviceBuiltinKind(trackId, deviceIndex);
+        if (bk >= 0)
+        {
+            doc.Type = "builtin-effect";
+            doc.BuiltinKind = bk;
+            int pc = engine.DeviceParamCount(trackId, deviceIndex);
+            doc.NamedParams = new Dictionary<string, float>(pc);
+            for (int i = 0; i < pc; i++)
+                if (engine.DeviceParamName(trackId, deviceIndex, i) is var pn && !DeviceView.IsViewParam(pn))   // the card size is editor state (#531)
+                    doc.NamedParams[pn] = engine.DeviceGetParam(trackId, deviceIndex, i);
+            if (bk == EqKind) doc.BandText = CaptureBandText(engine, trackId, deviceIndex);
+            return doc;
+        }
+
+        doc.Type = "plugin-effect";
+        doc.PluginId = engine.TrackDevicePluginId(trackId, deviceIndex);
+        doc.StateBase64 = Convert.ToBase64String(engine.GetPluginState(trackId, deviceIndex));
+        return string.IsNullOrEmpty(doc.PluginId) ? null : doc;
+    }
+
+    /// <summary>Snapshot a MIDI effect: its params by name, and its state blob when it has one
+    /// (the MIDI Effect Rack's chains, devices and macros, specs/040).</summary>
+    public static PresetDocument? CaptureMidiEffect(IAudioEngine engine, int trackId, int index, string displayName)
+    {
+        int kind = engine.MidiEffectKind(trackId, index);
+        if (kind < 0) return null;
+        var doc = new PresetDocument
+        {
+            DisplayName = displayName, DeviceName = engine.MidiEffectName(trackId, index),
+            Type = "builtin-midi-effect", BuiltinKind = kind,
+        };
+        int pc = engine.MidiEffectParamCount(trackId, index);
+        doc.NamedParams = new Dictionary<string, float>(pc);
+        for (int i = 0; i < pc; i++) doc.NamedParams[engine.MidiEffectParamName(trackId, index, i)] = engine.MidiEffectGetParam(trackId, index, i);
+        var state = engine.MidiEffectGetState(trackId, index);
+        if (state.Length > 0) doc.StateBase64 = Convert.ToBase64String(state);
+        return doc;
+    }
+
+    private static void ApplyMidiState(IAudioEngine engine, int trackId, int index, string base64, bool checkpoint)
+    {
+        if (string.IsNullOrEmpty(base64)) return;
+        try { engine.MidiEffectSetState(trackId, index, Convert.FromBase64String(base64), checkpoint); }
+        catch (FormatException) { /* a damaged preset keeps the params it had */ }
+    }
+
+    /// <summary>Snapshot a rack chain's instrument (only hosted plugins carry recallable
+    /// state) into a preset. Returns null for built-in chain instruments.</summary>
+    public static PresetDocument? CaptureRackChainInstrument(IAudioEngine engine, int trackId, int chain, string displayName)
+    {
+        if (engine.RackChainInstrumentKind(trackId, chain) != -1) return null; // -1 = plugin
+        var doc = new PresetDocument
+        {
+            DisplayName = displayName,
+            Type = "plugin-instrument",
+            DeviceName = engine.RackChainInstrumentName(trackId, chain),
+            PluginId = engine.RackChainInstrumentPluginId(trackId, chain),
+            StateBase64 = Convert.ToBase64String(engine.RackGetChainInstrumentState(trackId, chain)),
+        };
+        return string.IsNullOrEmpty(doc.PluginId) ? null : doc;
+    }
+
+    /// <summary>Writes the preset atomically; returns the file path.</summary>
+    public static string Save(PresetDocument doc, string presetsDir)
+    {
+        Directory.CreateDirectory(presetsDir);
+        string name = Sanitize(string.IsNullOrWhiteSpace(doc.DisplayName) ? "Preset" : doc.DisplayName);
+        string path = Path.Combine(presetsDir, name + Extension);
+        string tmp = path + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(doc, JsonOpts));
+        File.Move(tmp, path, overwrite: true);
+        return path;
+    }
+
+    /// <summary>All presets in the folder (path + parsed doc), name-sorted.</summary>
+    public static IEnumerable<(string Path, PresetDocument Doc)> List(string presetsDir)
+    {
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(presetsDir, "*" + Extension); }
+        catch { yield break; }
+        foreach (var path in files)
+        {
+            PresetDocument? doc = null;
+            try { doc = Load(path); } catch { /* skip corrupt */ }
+            if (doc is not null)
+            {
+                if (string.IsNullOrEmpty(doc.DisplayName))
+                    doc.DisplayName = Path.GetFileNameWithoutExtension(path);
+                yield return (path, doc);
+            }
+        }
+    }
+
+    public static PresetDocument Load(string path)
+        => JsonSerializer.Deserialize<PresetDocument>(File.ReadAllText(path))
+           ?? throw new InvalidDataException("empty preset");
+
+    /// <summary>Applies a preset. Effect presets add to <paramref name="targetTrackId"/> (must be &gt; 0);
+    /// instrument presets always create a new track. Returns "" on success or a user-facing warning.</summary>
+    // Nota EQ-3 (kind 16) appended Range, the fader law. A preset saved before it names no
+    // Range (or holds only the first 10 values) and was made in the Classic ±15 dB law.
+    /// <summary>Nota Chord (MIDI kind 1) before the almanac rework had no per-slot switches —
+    /// a slot was off when its offset was 0. Derive On 1..6 (params 16..21) from Voice 1..6.</summary>
+    public static void ChordLegacySwitches(IAudioEngine engine, int trackId, int index)
+    {
+        if (engine.MidiEffectParamCount(trackId, index) < 22) return;
+        for (int v = 0; v < 6; v++)
+            engine.MidiEffectSetParam(trackId, index, 16 + v, Math.Abs(engine.MidiEffectGetParam(trackId, index, v)) >= 0.5f ? 1f : 0f);
+    }
+
+    /// <summary>Nota Length (MIDI kind 3) before the almanac rework: four sync rates in Rate
+    /// (1/16 · 1/8 · 1/8D · 1/4) — now Division (8 values) — and a Key to Len where + made HIGH
+    /// notes longer (now + makes low notes longer). Maps both onto the new params.</summary>
+    public static void LengthLegacy(IAudioEngine engine, int trackId, int index)
+    {
+        if (engine.MidiEffectParamCount(trackId, index) < 12) return;
+        int[] rateToDivision = { 1, 2, 6, 3 };
+        int rate = Math.Clamp((int)Math.Round(engine.MidiEffectGetParam(trackId, index, 0)), 0, 3);
+        engine.MidiEffectSetParam(trackId, index, 11, rateToDivision[rate]);
+        engine.MidiEffectSetParam(trackId, index, 7, -engine.MidiEffectGetParam(trackId, index, 7));
+    }
+
+    /// <summary>Nota Velocity (MIDI kind 4) before the almanac rework had no Random switch — any
+    /// Random amount was live. Turns the switch on when the old amount was above zero.</summary>
+    public static void VelocityLegacy(IAudioEngine engine, int trackId, int index)
+    {
+        if (engine.MidiEffectParamCount(trackId, index) < 8) return;
+        engine.MidiEffectSetParam(trackId, index, 7, engine.MidiEffectGetParam(trackId, index, 3) > 0f ? 1f : 0f);
+    }
+
+    private const int LensKind = 22; // Nota Lens
+
+    // An effect preset's named params as today's device names them. Nota Lens called its graph
+    // "View" until the card got an S / L size (#531), which took that name: an older Lens
+    // preset's "View" is its graph, and it never sets the card size.
+    private static System.Collections.Generic.Dictionary<string, float>? EffectNamed(PresetDocument doc, int kind)
+    {
+        var named = doc.NamedParams;
+        if (kind != LensKind || named is null || named.ContainsKey("Graph") || !named.TryGetValue("View", out var graph)) return named;
+        var moved = new System.Collections.Generic.Dictionary<string, float>(named);
+        moved.Remove("View");
+        moved["Graph"] = graph;
+        return moved;
+    }
+
+    private static void LegacyRange(PresetDocument doc, IAudioEngine engine, int trackId, int deviceIndex)
+    {
+        if (doc.BuiltinKind != 16 || engine.DeviceParamCount(trackId, deviceIndex) <= 10) return;
+        bool legacy = doc.NamedParams is { Count: > 0 } named ? !named.ContainsKey("Range") : doc.Params.Length <= 10;
+        if (legacy) engine.DeviceSetParam(trackId, deviceIndex, 10, 0f);
+    }
+
+    public static string Apply(PresetDocument doc, IAudioEngine engine, int targetTrackId)
+    {
+        switch (doc.Type)
+        {
+            case "builtin-effect":
+            {
+                if (targetTrackId <= 0) return Loc.T("common.select_a_track_first");
+                int di = engine.AddBuiltinDevice(targetTrackId, doc.BuiltinKind);
+                if (di < 0) return Loc.T("persistence.preset.failed_to_add_device");
+                if (EffectNamed(doc, doc.BuiltinKind) is { Count: > 0 } named)
+                {
+                    int pc = engine.DeviceParamCount(targetTrackId, di);
+                    for (int i = 0; i < pc; i++)
+                        if (named.TryGetValue(engine.DeviceParamName(targetTrackId, di, i), out var v))
+                            engine.DeviceSetParam(targetTrackId, di, i, v);
+                }
+                else
+                    for (int i = 0; i < doc.Params.Length; i++)
+                        engine.DeviceSetParam(targetTrackId, di, i, doc.Params[i]);
+                LegacyRange(doc, engine, targetTrackId, di);
+                if (doc.BuiltinKind == EqKind) ApplyBandText(doc.BandText, engine, targetTrackId, di);
+                return "";
+            }
+            case "builtin-midi-effect":
+            {
+                if (targetTrackId <= 0) return Loc.T("common.select_a_track_first");
+                int mi = engine.AddMidiEffect(targetTrackId, doc.BuiltinKind);
+                if (mi < 0) return Loc.T("persistence.preset.failed_to_add_midi_effect");
+                if (doc.NamedParams is { Count: > 0 })
+                {
+                    int pc = engine.MidiEffectParamCount(targetTrackId, mi);
+                    for (int i = 0; i < pc; i++)
+                        if (doc.NamedParams.TryGetValue(engine.MidiEffectParamName(targetTrackId, mi, i), out var v))
+                            engine.MidiEffectSetParam(targetTrackId, mi, i, v);
+                    if (doc.BuiltinKind == 1 && !doc.NamedParams.ContainsKey("On 1")) ChordLegacySwitches(engine, targetTrackId, mi);
+                    if (doc.BuiltinKind == 3 && doc.NamedParams.ContainsKey("Rate") && !doc.NamedParams.ContainsKey("Division")) LengthLegacy(engine, targetTrackId, mi);
+                    if (doc.BuiltinKind == 4 && !doc.NamedParams.ContainsKey("Random On")) VelocityLegacy(engine, targetTrackId, mi);
+                }
+                ApplyMidiState(engine, targetTrackId, mi, doc.StateBase64, false);
+                return "";
+            }
+            case "builtin-instrument":
+            {
+                int t = doc.BuiltinKind switch
+                {
+                    1 => engine.AddSamplerInstrumentTrack(),
+                    2 => engine.AddPhysicalSynthTrack(),
+                    5 => engine.AddWavetableSynthTrack(),
+                    6 => engine.AddVoltSynthTrack(),
+                    7 => engine.AddBassSynthTrack(),
+                    8 => engine.AddPendulumSynthTrack(),
+                    9 => engine.AddOperatorSynthTrack(),
+                    10 => engine.AddGrainSynthTrack(),
+                    11 => engine.AddFluxSynthTrack(),
+                    12 => engine.AddRhythmTrack(),
+                    13 => engine.AddMonolithTrack(),
+                    14 => engine.AddPentadTrack(),
+                    15 => engine.AddConsortTrack(),
+                    16 => engine.AddKeysTrack(),
+                    17 => engine.AddMosaicTrack(),
+                    18 => engine.AddTwinTrack(),
+                    _ => engine.AddInstrumentTrack(),
+                };
+                if (t <= 0) return Loc.T("persistence.preset.failed_to_add_instrument");
+                if (doc.NamedParams is { Count: > 0 })
+                {
+                    int pc = engine.PluginParamCount(t, -1);
+                    for (int i = 0; i < pc; i++)
+                        if (engine.PluginParamId(t, -1, i) is var pid && !InstrumentView.IsViewParam(pid)
+                            && doc.NamedParams.TryGetValue(pid, out var v))
+                            engine.PluginParamSet(t, -1, i, v);
+                }
+                LoadTwinPatterns(doc, engine, t);
+                if (doc.BuiltinKind == 5) return LoadAuroraTables(doc, engine, t, undoable: false);
+                string mw = LoadMosaicProgram(doc, engine, t);
+                return mw.Length > 0 ? mw : LoadGrainSource(doc, engine, t);
+            }
+            case "plugin-effect":
+            {
+                if (targetTrackId <= 0) return Loc.T("common.select_a_track_first");
+                int idx = NotaEngine.PluginIndexOfId(doc.PluginId);
+                if (idx < 0) return Loc.F("persistence.preset.plugin_not_installed", doc.PluginId);
+                int di = engine.AddTrackEffectPlugin(targetTrackId, idx);
+                if (di < 0) return Loc.T("persistence.preset.failed_to_load_plugin");
+                ApplyState(engine, targetTrackId, di, doc.StateBase64);
+                return "";
+            }
+            case "plugin-instrument":
+            {
+                int idx = NotaEngine.PluginIndexOfId(doc.PluginId);
+                if (idx < 0) return Loc.F("persistence.preset.plugin_not_installed", doc.PluginId);
+                int t = engine.AddPluginInstrumentTrack(idx);
+                if (t <= 0) return Loc.T("persistence.preset.failed_to_load_instrument");
+                ApplyState(engine, t, -1, doc.StateBase64);
+                return "";
+            }
+            default:
+                return Loc.T("persistence.preset.unknown_preset_type");
+        }
+    }
+
+    // A Nota Grain factory preset plays its own source: render it on first use, then load it.
+    private static string LoadGrainSource(PresetDocument doc, IAudioEngine engine, int trackId)
+    {
+        if (doc.BuiltinKind != 10 || string.IsNullOrEmpty(doc.GrainSource)) return "";
+        var src = Grain.GrainSources.ById(doc.GrainSource);
+        var path = Grain.GrainSourceLibrary.Ensure(doc.GrainSource);
+        if (src is null || path is null) return Loc.F("persistence.preset.couldnt_prepare_the_sample", doc.GrainSource);
+        return engine.SetTrackGrainSample(trackId, path, src.Root) ? "" : Loc.F("persistence.preset.couldnt_load_the_sample", src.Name);
+    }
+
+    // A built-in instrument's parameters in place: the named ones, every other one back to its
+    // default (the card size excepted). The Aurora path above shares it.
+    private static void ApplyInstrumentParams(PresetDocument doc, IAudioEngine engine, int trackId)
+    {
+        int pc = engine.PluginParamCount(trackId, -1);
+        for (int i = 0; i < pc; i++)
+        {
+            string id = engine.PluginParamId(trackId, -1, i);
+            if (InstrumentView.IsViewParam(id)) continue;
+            bool named = doc.NamedParams is { Count: > 0 } && doc.NamedParams.ContainsKey(id);
+            engine.PluginParamSet(trackId, -1, i, named ? doc.NamedParams![id] : engine.InstrumentParamDefault(trackId, i));
+        }
+    }
+
+    // Nota Aurora's imported tables into a preset: the frames, as base64 float32.
+    private static List<PresetAuroraTable>? CaptureAuroraTables(IAudioEngine engine, int trackId)
+    {
+        List<PresetAuroraTable>? list = null;
+        for (int o = 0; o < 2; o++)
+        {
+            if (!engine.TryGetAuroraTableInfo(trackId, o, out var info) || !info.HasTable) continue;
+            var frames = engine.AuroraTableRead(trackId, o);
+            if (frames.Length == 0) continue;
+            var bytes = new byte[frames.Length * sizeof(float)];
+            Buffer.BlockCopy(frames, 0, bytes, 0, bytes.Length);
+            (list ??= new()).Add(new PresetAuroraTable
+            {
+                Osc = o, Name = info.Name, Origin = info.Origin, Frames = info.Frames, UseCustom = info.UseCustom,
+                Data = Convert.ToBase64String(bytes),
+            });
+        }
+        return list;
+    }
+
+    // A Nota Aurora preset sets exactly its tables: the ones it carries, and the built-in bank
+    // on every oscillator it does not name (so a factory preset clears an imported table).
+    private static string LoadAuroraTables(PresetDocument doc, IAudioEngine engine, int trackId, bool undoable)
+    {
+        string warn = "";
+        for (int o = 0; o < 2; o++)
+        {
+            var entry = doc.AuroraTables?.Find(x => x.Osc == o);
+            if (entry is null)
+            {
+                if (engine.TryGetAuroraTableInfo(trackId, o, out var cur))
+                {
+                    if (cur.HasTable) engine.AuroraClearTable(trackId, o);
+                    else if (cur.Missing) engine.AuroraSetMissing(trackId, o, "");
+                    if (cur.UseCustom) engine.AuroraSetSource(trackId, o, false, undoable && !cur.HasTable);
+                }
+                continue;
+            }
+            float[]? frames = null;
+            try
+            {
+                var bytes = Convert.FromBase64String(entry.Data);
+                if (entry.Frames is > 0 and <= 256 && bytes.Length == entry.Frames * 2048 * sizeof(float))
+                {
+                    frames = new float[bytes.Length / sizeof(float)];
+                    Buffer.BlockCopy(bytes, 0, frames, 0, bytes.Length);
+                }
+            }
+            catch (FormatException) { }
+            if (frames is null || engine.AuroraTableFromFrames(frames, entry.Frames, entry.Name, entry.Origin, out var h) != AuroraTableResult.Ok)
+            {
+                warn = $"The preset's Osc {o + 1} table \"{entry.Name}\" couldn't be read.";
+                continue;
+            }
+            try { engine.AuroraSetTable(trackId, o, h, undoable); }
+            finally { engine.AuroraTableFree(h); }
+            engine.AuroraSetSource(trackId, o, entry.UseCustom);
+        }
+        return warn;
+    }
+
+    // A Nota Mosaic preset loads its program: a factory multisample (rendered on first use) or
+    // the program text it carries. Loading itself runs in the background in the engine.
+    private static string LoadMosaicProgram(PresetDocument doc, IAudioEngine engine, int trackId)
+    {
+        if (doc.BuiltinKind != MosaicModel.Kind) return "";
+        if (!string.IsNullOrEmpty(doc.MosaicSource))
+        {
+            var prog = global::Nota.Infrastructure.Mosaic.MosaicSourceLibrary.Program(doc.MosaicSource);
+            if (prog is null) return Loc.F("persistence.preset.couldnt_prepare_the_multisample", doc.MosaicSource);
+            prog.Name = doc.DisplayName.Length > 0 ? doc.DisplayName : prog.Name;
+            engine.MosaicSetProgram(trackId, prog.Serialize());
+            return "";
+        }
+        if (!string.IsNullOrEmpty(doc.MosaicProgram)) engine.MosaicSetProgram(trackId, doc.MosaicProgram);
+        return "";
+    }
+
+    /// <summary>Init for a built-in device in place: every parameter back to its default, as on a
+    /// freshly added device (#57). An instrument goes through an empty preset, so it keeps its
+    /// card size, a loaded sample (and the Sampler's / Rhythm's sample regions) like any preset.</summary>
+    public static string ResetInPlace(IAudioEngine engine, int trackId, int deviceIndex, bool midiEffect)
+    {
+        if (trackId <= 0) return Loc.T("common.select_a_track_first");
+        if (deviceIndex < 0)
+        {
+            string warn = ApplyInPlace(new PresetDocument { Type = "builtin-instrument", NamedParams = new() }, engine, trackId, -1);
+            // Mosaic's sound is its program, not its params: Init empties it, as on a fresh Mosaic (#165).
+            if (warn.Length == 0 && engine.TrackInstrumentKind(trackId) == MosaicModel.Kind && engine.MosaicProgram(trackId).Length > 0)
+                engine.MosaicSetProgram(trackId, "");
+            return warn;
+        }
+        if (midiEffect)
+        {
+            int pc = engine.MidiEffectParamCount(trackId, deviceIndex);
+            for (int i = 0; i < pc; i++)
+                if (engine.MidiEffectParamName(trackId, deviceIndex, i) != "View")   // the card size
+                    engine.MidiEffectSetParam(trackId, deviceIndex, i, engine.MidiEffectParamDefault(trackId, deviceIndex, i));
+        }
+        else
+        {
+            int pc = engine.DeviceParamCount(trackId, deviceIndex);
+            for (int i = 0; i < pc; i++)
+                if (!DeviceView.IsViewParam(engine.DeviceParamName(trackId, deviceIndex, i)))   // the card size (S / L / XL) stays
+                    engine.DeviceSetParam(trackId, deviceIndex, i, engine.DeviceParamDefault(trackId, deviceIndex, i));
+            if (engine.TrackDeviceBuiltinKind(trackId, deviceIndex) == EqKind) ApplyBandText(null, engine, trackId, deviceIndex);
+        }
+        return "";
+    }
+
+    private const int EqKind = 0;   // Nota EQ-8
+
+    /// <summary>An EQ-8's band labels and notes for a preset (specs/049); null when it has none.</summary>
+    private static List<PresetBandText>? CaptureBandText(IAudioEngine engine, int trackId, int deviceIndex)
+    {
+        List<PresetBandText>? list = null;
+        for (int b = 0; b < 8; b++)
+        {
+            string label = engine.EqBandText(trackId, deviceIndex, b, 0), note = engine.EqBandText(trackId, deviceIndex, b, 1);
+            if (label.Length > 0 || note.Length > 0) (list ??= new()).Add(new PresetBandText { Band = b + 1, Label = label, Note = note });
+        }
+        return list;
+    }
+
+    /// <summary>Give an EQ-8 exactly the preset's band labels and notes (null clears them all).</summary>
+    private static void ApplyBandText(List<PresetBandText>? text, IAudioEngine engine, int trackId, int deviceIndex)
+    {
+        for (int b = 0; b < 8; b++)
+        {
+            var t = text?.Find(x => x.Band == b + 1);
+            engine.EqSetBandText(trackId, deviceIndex, b, t?.Label ?? "", t?.Note ?? "");
+        }
+    }
+
+    /// <summary>Applies a preset to an EXISTING instrument/device in place (no new track/
+    /// device is created) — for the in-header preset picker. Built-in instruments reset all
+    /// params to default first so the patch is clean; effects set the preset's named params.</summary>
+    // A Nota Twin preset's patterns (a params-free state blob): applied after its params; a preset
+    // without patterns leaves the track's own (a sound preset doesn't wipe a sequence). On a Twin
+    // already there (undoable) the old patterns come back with the old sound on undo.
+    private static void LoadTwinPatterns(PresetDocument doc, IAudioEngine engine, int trackId, bool undoable = false)
+    {
+        if (string.IsNullOrEmpty(doc.StateBase64)) return;
+        byte[] state;
+        try { state = Convert.FromBase64String(doc.StateBase64); }
+        catch (FormatException) { return; }
+        if (undoable) engine.SetInstrumentStateUndoable(trackId, state);
+        else engine.SetPluginState(trackId, -1, state);
+    }
+
+    public static string ApplyInPlace(PresetDocument doc, IAudioEngine engine, int trackId, int deviceIndex)
+    {
+        if (trackId <= 0) return Loc.T("common.select_a_track_first");
+        switch (doc.Type)
+        {
+            case "builtin-instrument" when engine.TrackInstrumentKind(trackId) == 5:
+            {
+                // Nota Aurora: the parameters and the imported tables are one undo step.
+                engine.BeginUndoGroup();
+                try
+                {
+                    var parms = new PresetDocument { Type = "builtin-instrument-params", NamedParams = doc.NamedParams };
+                    ApplyInstrumentParams(parms, engine, trackId);
+                    return LoadAuroraTables(doc, engine, trackId, undoable: true);
+                }
+                finally { engine.EndUndoGroup(); }
+            }
+            case "builtin-instrument":
+            {
+                int pc = engine.PluginParamCount(trackId, -1);
+                // The Sampler's trim and loop points belong to the loaded sample, not the
+                // sound: a preset that doesn't name them leaves them where they are. Likewise
+                // a Rhythm voice's sample region (v{n}_start / _length / _reverse).
+                int kind = engine.TrackInstrumentKind(trackId);
+                bool sampler = kind == 1, rhythm = kind == 12;
+                for (int i = 0; i < pc; i++)
+                {
+                    string id = engine.PluginParamId(trackId, -1, i);
+                    if (InstrumentView.IsViewParam(id)) continue;   // a preset keeps the card's S / L size
+                    bool named = doc.NamedParams is { Count: > 0 } && doc.NamedParams.ContainsKey(id);
+                    if (!named && sampler && id is "start" or "end" or "loopstart" or "loopend") continue;
+                    if (!named && rhythm && (id.EndsWith("_start") || id.EndsWith("_length") || id.EndsWith("_reverse"))) continue;
+                    float v = named ? doc.NamedParams![id] : engine.InstrumentParamDefault(trackId, i);
+                    engine.PluginParamSet(trackId, -1, i, v);
+                }
+                if (kind == Nota.Application.Twin.TwinMatrix.Kind) LoadTwinPatterns(doc, engine, trackId, undoable: true);
+                return kind == 10 ? LoadGrainSource(doc, engine, trackId)
+                     : kind == MosaicModel.Kind ? LoadMosaicProgram(doc, engine, trackId) : "";
+            }
+            case "builtin-effect":
+            {
+                if (deviceIndex < 0) return Loc.T("persistence.preset.not_an_effect");
+                int pc = engine.DeviceParamCount(trackId, deviceIndex);
+                if (EffectNamed(doc, engine.TrackDeviceBuiltinKind(trackId, deviceIndex)) is { Count: > 0 } named)
+                {
+                    // A param the preset doesn't name goes back to its default (like instruments),
+                    // so switching presets never inherits leftovers from the previous one.
+                    // The card size (View, #531) is editor state: the card keeps its S / L size.
+                    for (int i = 0; i < pc; i++)
+                        if (engine.DeviceParamName(trackId, deviceIndex, i) is var pn && !DeviceView.IsViewParam(pn))
+                            engine.DeviceSetParam(trackId, deviceIndex, i,
+                                named.TryGetValue(pn, out var v) ? v : engine.DeviceParamDefault(trackId, deviceIndex, i));
+                }
+                else
+                {
+                    for (int i = 0; i < doc.Params.Length && i < pc; i++)
+                        engine.DeviceSetParam(trackId, deviceIndex, i, doc.Params[i]);
+                }
+                LegacyRange(doc, engine, trackId, deviceIndex);
+                // The preset's band labels replace the device's (none for a factory preset).
+                if (engine.TrackDeviceBuiltinKind(trackId, deviceIndex) == EqKind) ApplyBandText(doc.BandText, engine, trackId, deviceIndex);
+                return "";
+            }
+            case "builtin-midi-effect":
+            {
+                if (deviceIndex < 0) return Loc.T("persistence.preset.not_a_midi_effect");
+                if (doc.NamedParams is { Count: > 0 })
+                {
+                    // Params the preset leaves out go back to their defaults, so switching presets
+                    // never inherits a previous one's steps. "View" (the card size) is editor
+                    // state and stays as it is.
+                    int pc = engine.MidiEffectParamCount(trackId, deviceIndex);
+                    for (int i = 0; i < pc; i++)
+                    {
+                        string pn = engine.MidiEffectParamName(trackId, deviceIndex, i);
+                        if (doc.NamedParams.TryGetValue(pn, out var v)) engine.MidiEffectSetParam(trackId, deviceIndex, i, v);
+                        else if (pn != "View") engine.MidiEffectSetParam(trackId, deviceIndex, i, engine.MidiEffectParamDefault(trackId, deviceIndex, i));
+                    }
+                    // A Nota Chord preset saved before its slots had switches: "0 semitones" meant off.
+                    if (engine.MidiEffectKind(trackId, deviceIndex) == 1 && !doc.NamedParams.ContainsKey("On 1"))
+                        ChordLegacySwitches(engine, trackId, deviceIndex);
+                    // A Nota Length preset from before Division: map its Rate (and Key to Len's old sign).
+                    if (engine.MidiEffectKind(trackId, deviceIndex) == 3 && doc.NamedParams.ContainsKey("Rate") && !doc.NamedParams.ContainsKey("Division"))
+                        LengthLegacy(engine, trackId, deviceIndex);
+                    // A Nota Velocity preset from before the Random switch: its amount was always live.
+                    if (engine.MidiEffectKind(trackId, deviceIndex) == 4 && !doc.NamedParams.ContainsKey("Random On"))
+                        VelocityLegacy(engine, trackId, deviceIndex);
+                }
+                ApplyMidiState(engine, trackId, deviceIndex, doc.StateBase64, true);
+                return "";
+            }
+            case "plugin-effect":
+                if (deviceIndex < 0) return Loc.T("persistence.preset.not_an_effect");
+                ApplyState(engine, trackId, deviceIndex, doc.StateBase64);
+                return "";
+            case "plugin-instrument":
+                ApplyState(engine, trackId, -1, doc.StateBase64);
+                return "";
+            default:
+                return Loc.T("persistence.preset.preset_cant_be_applied_in");
+        }
+    }
+
+    private static void ApplyState(IAudioEngine engine, int trackId, int deviceIndex, string base64)
+    {
+        if (string.IsNullOrEmpty(base64)) return;
+        try { engine.SetPluginState(trackId, deviceIndex, Convert.FromBase64String(base64)); }
+        catch { /* mismatched state — leave plugin at defaults */ }
+    }
+
+    private static string Sanitize(string name)
+    {
+        foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+        return name.Trim();
+    }
+}

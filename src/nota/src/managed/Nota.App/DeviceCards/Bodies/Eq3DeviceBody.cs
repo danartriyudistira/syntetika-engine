@@ -1,0 +1,337 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
+//
+// Detail · Devices — built-in Nota EQ-3 body (three-band isolator, device kind 16), a build of
+// the "Nota EQ-3" mockup (700 × 260) on the Crush / Dynamic EQ-8 frame: three band strips in the
+// right column (#531; LOW / MID / HIGH, each its span, a fader −24 … +6 dB — ±15 dB in the Classic range — its
+// value and a KILL), and the response window on the left — the crossover readouts, Output, Range
+// and Slope over it; inside, each band's curve in its hue, the brass sum, the output spectrum
+// behind, and the two crossovers as handles along the top that drag left / right (a drag
+// elsewhere rides the band under the pointer). S (260) is the response over the range and
+// Low, Mid, High and Output knobs. Every control is
+// a device param (normalized 0..1), so automation / MIDI learn / presets / A-B / persistence come
+// for free. FullBleed — the shared shell draws the header (name · preset · badge · bypass).
+
+using System;
+using System.Collections.Generic;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Nota.Application;
+using static Nota.App.DeviceCardKit;
+using Nota.Application.Localization;
+
+namespace Nota.App;
+
+internal sealed class Eq3DeviceBody : IDeviceBody
+{
+    // ── Parameter indices (must match Eq3.h) ─────────────────────────────────
+    private const int Low = 0, Mid = 1, High = 2, LowKill = 3, MidKill = 4, HighKill = 5,
+                      FreqLo = 6, FreqHi = 7, Slope = 8, Gain = 9, Range = 10;
+    // Scope layout (Eq3::S_* / kTele / kSpec).
+    private const int S_SampleRate = 5, S_Cpu = 6, S_Analysed = 7, S_Latency = 8,
+        kTele = 16, kSpec = 256, kScope = kTele + kSpec;
+
+    public double Width => 700;
+    public double WidthFor(IAudioEngine engine, int trackId, int deviceIndex) => CardLayout.WidthFor(engine, trackId, deviceIndex, Width);
+    public Control? HeaderAccessory(DeviceCardContext ctx, int deviceIndex) => CardLayout.SizeToggle(ctx, deviceIndex);
+    public bool FullBleed => true;
+    public string? Subtitle => "EQ";
+
+    public Control Build(DeviceCardContext ctx, int index)
+    {
+        var engine = ctx.Engine;
+        int track = ctx.TrackId, di = index;
+        int pc = engine.DeviceParamCount(track, di);
+        float P(int p) => p < pc ? engine.DeviceGetParam(track, di, p) : 0f;
+        void Begin(int p) => engine.BeginAutomationWrite(track, AutomationTarget.DeviceParam, di, p, "");
+        void End(int p) => engine.EndAutomationWrite(track, AutomationTarget.DeviceParam, di, p, "");
+        void Raw(int p, double v) { if (p < pc) engine.DeviceSetParam(track, di, p, (float)Math.Clamp(v, 0, 1)); }
+        // A discrete edit (a click) is one automation gesture, so it records while the transport does.
+        void SetP(int p, double v) { Begin(p); Raw(p, v); End(p); }
+        void Learn(Control c, int p) => MidiLearn.Bind(c, MidiTarget.DeviceParam(track, di, p), engine.DeviceParamName(track, di, p));
+
+        bool Iso() => pc <= Range || P(Range) >= 0.5f;
+        bool Killed(int b) => P(LowKill + b) >= 0.5f;
+        double BandDb(int b) => Eq3Math.GainDb(P(Low + b), Iso());
+        double F1() => Eq3Math.LoHz(P(FreqLo));
+        double F2() => Eq3Math.HiHz(P(FreqHi));
+        bool Lr8() => P(Slope) >= 0.5f;
+        static double OutDb(double v) => (v - 0.5) * 48;
+
+        var readouts = new List<Action>();
+        void RefreshAll() { for (int i = 0; i < readouts.Count; i++) readouts[i](); }
+        var scope = new float[kScope];
+        int scN = 0;
+        double Sc(int i) => scN > i ? scope[i] : 0;
+
+        // ---- small builders ---------------------------------------------------------
+        static TextBlock Caps(string t, IBrush? c = null, double fs = NotaType.KnobLabel) => new()
+        { Text = NotaText.Label(t), FontSize = fs, FontWeight = FontWeight.Medium, Foreground = c ?? TextTertiary, VerticalAlignment = VerticalAlignment.Center };
+        static TextBlock Mono(string t, double fs, IBrush c)
+        { var tb = new TextBlock { Text = t, FontSize = fs, Foreground = c, VerticalAlignment = VerticalAlignment.Center }; tb.BindResource(TextBlock.FontFamilyProperty, "Font.Measure"); return tb; }
+        static StackPanel Row(double sp, params Control[] cs)
+        { var s = new StackPanel { Orientation = Orientation.Horizontal, Spacing = sp, VerticalAlignment = VerticalAlignment.Center }; foreach (var c in cs) s.Children.Add(c); return s; }
+        static T Docked<T>(T c, Dock d) where T : Control { DockPanel.SetDock(c, d); return c; }
+
+        // Band edits in dB (the Range law decides the param value).
+        void GainRaw(int b, double db) => Raw(Low + b, Eq3Math.GainNorm(db, Iso()));
+        // Typeable values (⌥-click, specs/035): a band's gain (its reset also lifts the kill) and the
+        // crossovers (held an octave apart, as a drag holds them).
+        ValueField BandField(int b) => new(NotaText.Label(Eq3Math.Names[b]) + " gain", () => P(Low + b),
+            v => Eq3Math.Db(Eq3Math.GainDb(v, Iso())) + "\u2009dB", v => Raw(Low + b, v), () => Begin(Low + b), () => End(Low + b))
+        { Reset = () => ResetBand(b), After = RefreshAll };
+        ValueField XoverField(int w) => new(w == 0 ? Loc.T("device.eq3.low_mid_crossover") : Loc.T("device.eq3.mid_high_crossover"), () => P(w == 0 ? FreqLo : FreqHi),
+            v => Eq3Math.Hz(w == 0 ? Eq3Math.LoHz(v) : Eq3Math.HiHz(v)),
+            v => { if (w == 0) Raw(FreqLo, Eq3Math.LoNorm(Math.Min(Eq3Math.LoHz(v), F2() / 2))); else Raw(FreqHi, Eq3Math.HiNorm(Math.Max(Eq3Math.HiHz(v), F1() * 2))); },
+            () => Begin(w == 0 ? FreqLo : FreqHi), () => End(w == 0 ? FreqLo : FreqHi))
+        { Reset = () => XoverReset(w), After = RefreshAll };
+        void XoverReset(int w)
+        {
+            if (w == 0) SetP(FreqLo, Eq3Math.LoNorm(Math.Min(250, F2() / 2)));
+            else SetP(FreqHi, Eq3Math.HiNorm(Math.Max(2500, F1() * 2)));
+        }
+        void ResetBand(int b)
+        {
+            Begin(Low + b); GainRaw(b, 0); End(Low + b);
+            if (Killed(b)) SetP(LowKill + b, 0);
+            RefreshAll();
+        }
+
+        // ======================================================================
+        // Band strips
+        // ======================================================================
+        string Span(int b) => b switch
+        {
+            0 => "20 – " + Eq3Math.HzShort(F1()),
+            1 => Eq3Math.HzShort(F1()) + " – " + Eq3Math.HzShort(F2()),
+            _ => Eq3Math.HzShort(F2()) + " – 20k",
+        };
+
+        Control KillButton(int b)
+        {
+            var hue = Eq3Math.Hue(b);
+            var tb = new TextBlock { Text = "Kill", FontSize = 8, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            var btn = new Border
+            {
+                Width = 48, Height = 15, CornerRadius = NotaRadius.Cell, BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Center,
+                Cursor = new Cursor(StandardCursorType.Hand), Child = tb,
+            };
+            void Paint()
+            {
+                bool on = Killed(b);
+                btn.Background = on ? hue : Brushes.Transparent;
+                btn.BorderBrush = on ? hue : NotaPalette.BorderStrong;
+                tb.Foreground = on ? NotaPalette.InkOn(hue) : TextSecondary;
+            }
+            btn.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(btn).Properties.IsLeftButtonPressed) return;   // right-click bubbles (MIDI learn)
+                SetP(LowKill + b, Killed(b) ? 0 : 1); RefreshAll(); e.Handled = true;
+            };
+            ToolTip.SetTip(btn, Loc.F("device.eq3.kill_the_band_removes_it", Eq3Math.Names[b].ToLowerInvariant()));
+            Learn(btn, LowKill + b);
+            readouts.Add(Paint); Paint();
+            return btn;
+        }
+
+        Control Strip(int b)
+        {
+            var hue = Eq3Math.Hue(b);
+            var name = Caps(Eq3Math.Names[b], hue, 8); name.HorizontalAlignment = HorizontalAlignment.Center;
+            var span = Mono("", 7, TextTertiary); span.HorizontalAlignment = HorizontalAlignment.Center;
+            var val = Mono("", 9, TextPrimary); val.HorizontalAlignment = HorizontalAlignment.Center;
+            var fader = new Eq3Fader { Margin = new Thickness(0, 3, 0, 0) };
+            fader.GestureBegin += () => Begin(Low + b);
+            fader.GestureEnd += () => End(Low + b);
+            fader.Changed += db => { GainRaw(b, db); RefreshAll(); };
+            fader.ResetRequested += () => ResetBand(b);
+            ToolTip.SetTip(fader, MenuKit.Keys(Loc.T("device.eq3.drag_up_down_for_the")));
+            Learn(fader, Low + b);
+            ValueEntry.Attach(fader, BandField(b), val);
+            readouts.Add(() =>
+            {
+                bool k = Killed(b), iso = Iso();
+                double db = BandDb(b);
+                if (!fader.Dragging) fader.Set(db, k, Eq3Math.TopDb(iso), Eq3Math.BottomDb(iso), hue);
+                span.Text = Span(b);
+                val.Text = k ? "−∞" : Eq3Math.Db(db);
+                val.Foreground = k ? TextTertiary : Math.Abs(db) > 0.05 ? TextPrimary : TextSecondary;
+            });
+            var col = new DockPanel
+            {
+                LastChildFill = true, Margin = new Thickness(0, 4, 0, 6),
+                Children =
+                {
+                    Docked(name, Dock.Top), Docked(span, Dock.Top),
+                    Docked(new Border { Margin = new Thickness(0, 3, 0, 0), Child = KillButton(b) }, Dock.Bottom),
+                    Docked(new Border { Margin = new Thickness(0, 3, 0, 0), Child = val }, Dock.Bottom),
+                    fader,
+                },
+            };
+            var bar = new Border { Height = 2, Background = hue };   // square: the section under it has no corners
+            return new RuleSection
+            {
+                Width = 62, Margin = new Thickness(5, 0, 0, 0),
+                Child = new DockPanel { Children = { Docked(bar, Dock.Top), col } },
+            };
+        }
+
+        // ======================================================================
+        // Response window
+        // ======================================================================
+        var graph = new Eq3Graph();
+        graph.XoverBegin += w => Begin(w == 0 ? FreqLo : FreqHi);
+        graph.XoverEnd += w => End(w == 0 ? FreqLo : FreqHi);
+        graph.XoverChanged += (w, hz) => { if (w == 0) Raw(FreqLo, Eq3Math.LoNorm(hz)); else Raw(FreqHi, Eq3Math.HiNorm(hz)); RefreshAll(); };
+        graph.XoverReset += w => { XoverReset(w); RefreshAll(); };
+        graph.GainBegin += b => Begin(Low + b);
+        graph.GainEnd += b => End(Low + b);
+        graph.GainChanged += (b, db) => { GainRaw(b, db); RefreshAll(); };
+        graph.GainReset += ResetBand;
+        Learn(graph, FreqLo);
+        ValueEntry.AttachHandles(graph, [XoverField(0)], [XoverField(1)], [BandField(0)], [BandField(1)], [BandField(2)]);
+        ToolTip.SetTip(graph, MenuKit.Keys(Loc.T("device.eq3.each_band_in_its_colour")));
+
+        // Header: crossover readouts · Output · Range · Slope.
+        Control XRead(string label, Func<string> text)
+        {
+            var v = Mono("", 8, TextPrimary);
+            readouts.Add(() => v.Text = text());
+            return Row(4, new TextBlock { Text = label, FontSize = 7, Foreground = TextSecondary, VerticalAlignment = VerticalAlignment.Center }, v);
+        }
+
+        // Output: a mono readout that drags up / down, ±24 dB.
+        Control OutControl()
+        {
+            var v = Mono("", 8, TextPrimary);
+            var box = new Border { Background = Brushes.Transparent, Padding = new Thickness(2, 0), Cursor = new Cursor(StandardCursorType.SizeNorthSouth), Child = v, VerticalAlignment = VerticalAlignment.Center };
+            bool drag = false; double y0 = 0, v0 = 0;
+            box.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(box).Properties.IsLeftButtonPressed) return;
+                e.Handled = true;
+                if (e.ClickCount == 2 || (e.KeyModifiers & KeyModifiers.Alt) != 0) { SetP(Gain, 0.5); RefreshAll(); return; }
+                drag = true; y0 = e.GetPosition(box).Y; v0 = P(Gain);
+                e.Pointer.Capture(box); Begin(Gain);
+            };
+            box.PointerMoved += (_, e) =>
+            {
+                if (!drag) return;
+                bool fine = (e.KeyModifiers & (KeyModifiers.Shift | KeyModifiers.Control | KeyModifiers.Meta)) != 0;
+                double y = e.GetPosition(box).Y;
+                double db = Math.Round(OutDb(Math.Clamp(v0 + (y0 - y) / 140.0 * (fine ? 0.2 : 1), 0, 1)) * 10) / 10;   // 0.1 dB steps
+                y0 = y; v0 = 0.5 + db / 48;
+                Raw(Gain, v0); RefreshAll();
+            };
+            box.PointerReleased += (_, e) => { if (!drag) return; drag = false; e.Pointer.Capture(null); End(Gain); };
+            box.PointerCaptureLost += (_, _) => { if (!drag) return; drag = false; End(Gain); };
+            readouts.Add(() =>
+            {
+                double db = OutDb(P(Gain));
+                v.Text = Eq3Math.Db(db) + "\u2009dB";
+                v.Foreground = Math.Abs(db) > 0.05 ? TextPrimary : TextSecondary;
+            });
+            ToolTip.SetTip(box, MenuKit.Keys(Loc.T("device.eq3.output_gain_24_db_drag")));
+            Learn(box, Gain);
+            ValueEntry.Attach(box, new ValueField("Output", () => P(Gain), x => Eq3Math.Db(OutDb(x)) + "\u2009dB", x => Raw(Gain, x),
+                () => Begin(Gain), () => End(Gain), 0.5) { After = RefreshAll }, v);
+            return Row(4, Caps("OUT"), box);
+        }
+
+        Control RangeSeg()
+        {
+            var seg = Segments(new[] { "+6", "±15" }, () => Iso() ? 0 : 1, i =>
+            {
+                bool want = i == 0, iso = Iso();
+                if (want == iso || pc <= Range) return;
+                var dbs = new double[3];
+                for (int b = 0; b < 3; b++) dbs[b] = BandDb(b);
+                SetP(Range, want ? 1 : 0);
+                for (int b = 0; b < 3; b++) SetP(Low + b, Eq3Math.GainNorm(dbs[b], want));   // keep each band's dB
+                RefreshAll();
+            }, out var sync, padX: 4);
+            readouts.Add(sync);
+            Learn(seg, Range);
+            ToolTip.SetTip(seg, "Fader range — +6: −24 … +6\u2009dB, the isolator throw; ±15: −15 … +15\u2009dB, the classic EQ-3 range. The bands keep their dB.");
+            return Row(4, Caps("RANGE"), seg);
+        }
+
+        Control SlopeSeg()
+        {
+            var seg = Segments(new[] { "24\u2009dB", "48\u2009dB" }, () => Lr8() ? 1 : 0, i => { SetP(Slope, i); RefreshAll(); }, out var sync, padX: 4);
+            readouts.Add(sync);
+            Learn(seg, Slope);
+            ToolTip.SetTip(seg, Loc.T("device.eq3.crossover_slope_linkwitz_riley_24"));
+            return Row(4, Caps("SLOPE"), seg);
+        }
+
+        var headLeft = Row(8, Caps("CROSSOVER"),
+            XRead("low / mid", () => Eq3Math.Hz(F1())),
+            XRead("mid / high", () => Eq3Math.Hz(F2())));
+        var head = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8, Margin = new Thickness(8, 0) };
+        head.Children.Add(new Border { ClipToBounds = true, Child = headLeft });   // trims rather than runs under the controls
+        var headRight = Row(8, OutControl(), RangeSeg(), SlopeSeg());
+        Grid.SetColumn(headRight, 1); head.Children.Add(headRight);
+        var headBar = new Border { Height = 20, BorderBrush = BorderDef, BorderThickness = new Thickness(0, 0, 0, 1), Child = head };
+        // ---- L: the response window on the left, the three band faders on the right (the
+        // card's right column, #531) ------------------------------------------------------------
+        Control LargeBody()
+        {
+            var graphBox = new RuleSection
+            {
+                Child = new DockPanel { Children = { Docked(headBar, Dock.Top), new Border { Padding = new Thickness(5), Child = graph } } },
+            };
+            var bodyRow = new DockPanel { LastChildFill = true, Margin = new Thickness(5) };
+            for (int b = 2; b >= 0; b--) bodyRow.Children.Add(Docked(Strip(b), Dock.Right));
+            bodyRow.Children.Add(graphBox);
+            return new Border { Background = NotaPalette.SurfaceCard, Child = bodyRow };
+        }
+
+        // ---- S: the response over the range and Low · Mid · High · Output -----------------------
+        Control BandKnob(int b)
+        {
+            var val = Mono("", 7, TextPrimary);
+            var knob = new Knob(P(Low + b), 1.0) { Accent = true, Default = Eq3Math.GainNorm(0, Iso()), Width = 34, Height = 34 };
+            knob.ValueChanged += v => { Raw(Low + b, v); RefreshAll(); };
+            knob.GestureBegin += () => Begin(Low + b);
+            knob.GestureEnd += () => End(Low + b);
+            Learn(knob, Low + b);
+            readouts.Add(() =>
+            {
+                if (!knob.Dragging) { double c = P(Low + b); if (Math.Abs(c - knob.Value) > 1e-4) knob.Value = c; }
+                knob.IsDim = Killed(b);
+                val.Text = Killed(b) ? "−∞" : Eq3Math.Db(BandDb(b)) + "\u2009dB";
+            });
+            return KnobCell(Eq3Math.Names[b], knob, val, 56);
+        }
+        Control OutKnob()
+        {
+            var val = Mono("", 7, TextPrimary);
+            var knob = new Knob(P(Gain), 1.0) { Accent = true, Bipolar = true, Default = 0.5, Width = 34, Height = 34 };
+            knob.ValueChanged += v => { Raw(Gain, v); RefreshAll(); };
+            knob.GestureBegin += () => Begin(Gain);
+            knob.GestureEnd += () => End(Gain);
+            Learn(knob, Gain);
+            readouts.Add(() => { if (!knob.Dragging) { double c = P(Gain); if (Math.Abs(c - knob.Value) > 1e-4) knob.Value = c; } val.Text = Eq3Math.Db(OutDb(P(Gain))) + "\u2009dB"; });
+            return KnobCell(Loc.T("common.output"), knob, val, 56);
+        }
+        Control root = CardLayout.IsMini(ctx, di)
+            ? CardLayout.Mini(graph, RangeSeg(), BandKnob(0), BandKnob(1), BandKnob(2), OutKnob())
+            : LargeBody();
+
+        void Refresh()
+        {
+            scN = engine.DeviceScope(track, di, scope, kScope);
+            if (!graph.Dragging)
+                graph.Set(BandDb(0), BandDb(1), BandDb(2), Killed(0), Killed(1), Killed(2), F1(), F2(), Lr8(), Iso());
+            graph.SetSpectrum(scope, kTele, scN >= kScope ? kSpec : 0, Sc(S_Analysed) > 0.5);
+            RefreshAll();
+        }
+        ctx.AddDeviceRefresher(Refresh);
+        Refresh();
+        return root;
+    }
+}
