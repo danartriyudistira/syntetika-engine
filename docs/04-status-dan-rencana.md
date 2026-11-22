@@ -214,6 +214,18 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 
 ---
 
+## 7b. Bug hunt pra-rilis (23 Nov)
+
+| Bug | Perbaikan |
+|---|---|
+| Save saat quit bisa hilang karena child dibunuh sebelum `vizSave` selesai | `vizSaved` ack + tunggu 1,2 s sebelum stop |
+| Hash/copy media besar di UI thread | `Task.Run` saat memilih file |
+| Katalog kamera/Syphon kosong tanpa pesan | Pesan “no cameras/Syphon servers found” |
+| `ffmpeg_available()` men-spawn 2 proses tiap poll | Di-cache (`OnceLock`) |
+
+Uji ulang dari bundle: start bersih, image 720×720 + video 640×360 ter-decode, `save ack=True`,
+save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di log.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

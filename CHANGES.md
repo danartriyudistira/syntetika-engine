@@ -47,6 +47,14 @@ diffs are in `patches/`.
   paint; prewarm queue; slow-render diagnostics; stopped-transport PLL fix.
 - **Branding**: window title and wordmark “Syntetika Visual”; binary `syntetika-visual`.
 
+## Fixed before the first release
+
+- **Quit could lose the composition**: the visual process was killed before its `vizSave`
+  finished. The app now waits for the `vizSaved` acknowledgement (1.2 s) before stopping it.
+- **Large media froze the UI**: hashing/copying a picked file now runs off the UI thread.
+- **Empty camera/Syphon lists** showed a blank dialog; they now say what is missing.
+- The FFmpeg availability probe is cached, so it is not re-run on every state poll.
+
 ## Known limitations
 
 - macOS Apple Silicon is the only tested target.

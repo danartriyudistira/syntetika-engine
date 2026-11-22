@@ -12,6 +12,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -618,6 +619,12 @@ public sealed class VisualParamsView : UserControl
                 names.Add(item.Name);
             }
         }
+        if (names.Count == 0) names.Add(_catalogKind switch
+        {
+            "cameras" => "(no cameras found)",
+            "syphon" => "(no Syphon servers found — start one, e.g. in the visual engine)",
+            _ => "(nothing matches)",
+        });
         _catalogList.ItemsSource = names;
         _catalogItems.Clear();
         _catalogItems.AddRange(_catalogShown);
@@ -671,7 +678,8 @@ public sealed class VisualParamsView : UserControl
             if (files.Count == 0) return;
             string? source = files[0].TryGetLocalPath();
             if (source is null || !MediaFiles.IsMedia(source)) return;
-            string target = MediaFiles.Prepare(source, Bridge.ProjectDir);
+            // Hashing a large video must not freeze the UI.
+            string target = await Task.Run(() => MediaFiles.Prepare(source, Bridge.ProjectDir));
             Bridge.VizAssignMedia(_layer, _col, MediaFiles.KindOf(source), target);
             _catalog?.Close();
         }

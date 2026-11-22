@@ -249,9 +249,10 @@ public partial class App : Avalonia.Application
             {
                 var bridge = Services.GetService<VisualBridge>();
                 bridge?.SaveProject();   // visuals ride in the bundle sidecar
+                // Wait for the engine to confirm the write before killing it; otherwise a quit
+                // could lose the composition.
+                if (bridge is { Connected: true }) bridge.WaitForSave(1200);
                 Services.GetService<VisualEngineProcess>()?.Stop();
-                // Give the visual process a moment to write the file before the socket closes.
-                if (bridge is { Connected: true }) System.Threading.Thread.Sleep(150);
                 bridge?.Stop();
             };
 

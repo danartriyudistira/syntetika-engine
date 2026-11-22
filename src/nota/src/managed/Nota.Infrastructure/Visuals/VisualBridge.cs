@@ -42,6 +42,7 @@ public sealed class VisualBridge : IDisposable
     private readonly object _writeGate = new();
     /// <summary>Lines the visual engine sent back (vizState, vizCatalog). Drained on the UI thread.</summary>
     private readonly ConcurrentQueue<string> _inbox = new();
+    private readonly ManualResetEventSlim _saved = new(false);
     private long _seq;
 
     private TcpListener? _listener;
@@ -306,6 +307,7 @@ public sealed class VisualBridge : IDisposable
             AppLog("media test: save through the project path");
             SetProjectDir(bundle);
             SaveProject();
+            AppLog($"media test: save ack={WaitForSave(1500)}");
             Thread.Sleep(1500);
             AppLog("media test: clear then load the bundle");
             VizClear(0, 0);
@@ -468,6 +470,7 @@ public sealed class VisualBridge : IDisposable
             {
                 if (line.Length > 0)
                 {
+                    if (line.Contains("\"vizSaved\"", StringComparison.Ordinal)) _saved.Set();
                     LogIncoming(line);
                     _inbox.Enqueue(line);
                 }
@@ -583,6 +586,7 @@ public sealed class VisualBridge : IDisposable
     /// <summary>Saves the composition into a bundle; media paths become `media/<file>`.</summary>
     public void VizSave(string bundleDir)
     {
+        _saved.Reset();
         string staging = NotaPaths.SubDir("media-staging");
         string bundleMedia = Path.Combine(bundleDir, "visuals", "media");
         // Staged media becomes part of the bundle: the saved composition refers to
@@ -617,6 +621,9 @@ public sealed class VisualBridge : IDisposable
         path = Path.Combine(bundleDir, "visuals", "composition.json"),
         mediaDir = Path.Combine(bundleDir, "visuals", "media"),
     }));
+
+    /// <summary>Waits for the visual engine to confirm a save (used on quit).</summary>
+    public bool WaitForSave(int milliseconds) => _saved.Wait(milliseconds);
 
     /// <summary>Saves the current bundle's visuals (called on Save and on quit).</summary>
     public void SaveProject()
