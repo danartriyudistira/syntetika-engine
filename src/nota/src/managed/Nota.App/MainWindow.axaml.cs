@@ -524,6 +524,8 @@ public partial class MainWindow : Window
         _session.ShowInModularRequested += id => ShowInModular(id);   // specs/095
         _session.ItemDropped += OnSessionDrop;                        // browser drag & drop (M7-5)
         _session.VideoImportRequested += (t, s) => _ = ImportVideoToSlotAsync(t, s);   // Syntetika: video + its audio
+        if (Environment.GetEnvironmentVariable("NOTA_BROWSER_TEST") is { Length: > 0 })
+            Avalonia.Threading.DispatcherTimer.RunOnce(() => { if (_vm is not null) _ = _vm.Browser.RebuildSamplesAsync(); }, TimeSpan.FromSeconds(5));
         if (Environment.GetEnvironmentVariable("NOTA_VIDEO_TEST") is { Length: > 0 } videoTest)
             Avalonia.Threading.DispatcherTimer.RunOnce(() =>
             {

@@ -746,6 +746,21 @@ public sealed partial class BrowserViewModel : ObservableObject
             catch (OperationCanceledException) { return; }
         }
         if (cts.IsCancellationRequested) return;
+        if (Environment.GetEnvironmentVariable("NOTA_BROWSER_TEST") is { Length: > 0 })
+        {
+            int media = 0, audio = 0;
+            void Walk(List<BrowserItem> nodes)
+            {
+                foreach (var n in nodes)
+                {
+                    if (n.Kind is BrowserItemKind.VideoFile or BrowserItemKind.ImageFile) media++;
+                    else if (n.Kind == BrowserItemKind.Sample) audio++;
+                    Walk(n.Children);
+                }
+            }
+            Walk(built.Tree);
+            Console.Error.WriteLine($"[browser] tree: {audio} audio, {media} media");
+        }
         SamplesBuilding = false;   // before the swap: SamplesRebuilt handlers see a whole tree
         ApplySampleTree(built.Tree, built.Leaves);
     }
@@ -1164,7 +1179,12 @@ public sealed partial class BrowserViewModel : ObservableObject
     // Files rows the sample filter lets through: audio the index has analysed and that
     // matches; a MIDI file has no tempo or key, so any filter hides it.
     private bool PassesSampleFilter(BrowserItem leaf)
-        => leaf.Kind == BrowserItemKind.Sample ? _sampleFilter.Matches(leaf.Sample) : _sampleFilter.IsEmpty;
+    {
+        // Videos and images have no tempo/key to filter: they stay listed whatever sample
+        // chip is active, so a visual folder is never emptied by "Loops" or a BPM filter.
+        if (leaf.Kind is BrowserItemKind.VideoFile or BrowserItemKind.ImageFile) return true;
+        return leaf.Kind == BrowserItemKind.Sample ? _sampleFilter.Matches(leaf.Sample) : _sampleFilter.IsEmpty;
+    }
 
     // The rendered factory kits, as a browsable folder alongside the user's own samples.
     // They live in Nota's data folder rather than the user's samples folder (they are
@@ -1277,6 +1297,12 @@ public sealed partial class BrowserViewModel : ObservableObject
             rows = new List<BrowserItem>();
             Func<BrowserItem, bool>? leafOk = _sampleFilter.IsEmpty ? null : PassesSampleFilter;
             foreach (var node in _sampleTree) FlattenTree(node, q, ancestorMatched: false, rows, leafOk);
+        }
+        if (Environment.GetEnvironmentVariable("NOTA_BROWSER_TEST") is { Length: > 0 })
+        {
+            var media = rows.Where(r => r.Kind is BrowserItemKind.VideoFile or BrowserItemKind.ImageFile).ToList();
+            Console.Error.WriteLine($"[browser] {rows.Count} rows, {media.Count} media: "
+                + string.Join(", ", media.Take(6).Select(m => $"{m.Kind}:{m.Name}")));
         }
         if (onlyIfChanged && rows.SequenceEqual(Samples)) return;
         Samples.ReplaceAll(rows);

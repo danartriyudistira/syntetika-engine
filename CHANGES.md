@@ -34,8 +34,9 @@ diffs are in `patches/`.
   or drop a video from the library. Its sound is extracted with the bundled FFmpeg into the
   slot and its picture is assigned to the matching visual, beat-synced to the clip's length.
   Images drop the same way and become the visual only.
-- The browser's Files view lists videos and images (not only audio) and they are draggable
-  onto Session slots; the sample-folder tree lists them too.
+- The browser's Files view and sample-folder tree list videos and images (not only audio),
+  they are draggable onto Session slots, and the audio sample chips (Loops / One-shots / BPM /
+  key) no longer hide them.
 - **Media sources**: the assign dialog offers video/image files, cameras and Syphon servers.
   Picked files are copied content-addressed into `visuals/media/<sha256>.<ext>` (staged in the
   data folder until the project is saved), and `composition.json` stores `media/<file>` so a
