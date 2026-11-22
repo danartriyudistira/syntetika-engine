@@ -60,6 +60,7 @@ public partial class MainWindow
             VisualBridge.Current?.VizAssignMedia(layer, scene, "image", media);
             _session?.Refresh();
             _session?.SelectSlot(trackId, scene);
+            ShowVisualPanel(layer, scene);   // show the assigned visual straight away
             _vm.StatusText = $"Image on the visual layer: {Path.GetFileName(path)}";
         }
         catch (Exception ex)
@@ -127,6 +128,7 @@ public partial class MainWindow
                 $"[video] {name}: wav={wav is not null} audio={audio} length={length:0.###} layer={layer}");
             _session?.Refresh();
             _session?.SelectSlot(trackId, scene);
+            ShowVisualPanel(layer, scene);   // show the audio + visual pair
             if (audio)
             {
                 _vm.StatusText = length > 0

@@ -524,6 +524,31 @@ public partial class MainWindow : Window
         _session.ShowInModularRequested += id => ShowInModular(id);   // specs/095
         _session.ItemDropped += OnSessionDrop;                        // browser drag & drop (M7-5)
         _session.VideoImportRequested += (t, s) => _ = ImportVideoToSlotAsync(t, s);   // Syntetika: video + its audio
+        if (Environment.GetEnvironmentVariable("NOTA_DROP_TEST") is { Length: > 0 })
+            Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+            {
+                int audio = 0;
+                for (int i = 0; i < Engine.TrackCount; i++)
+                    if (Engine.TryGetTrackInfo(i, out var ti) && ti.Type == 0) { audio = ti.Id; break; }
+                if (audio <= 0) { Console.Error.WriteLine("[drop] no audio track"); return; }
+                var image = new Nota.Presentation.BrowserItem
+                {
+                    Name = "Syntetika_Icon.png", Kind = Nota.Presentation.BrowserItemKind.ImageFile,
+                    Path = "/Users/3day/Music/Nota Samples/Visuals/Syntetika_Icon.png",
+                };
+                Console.Error.WriteLine($"[drop] image -> track {audio}");
+                OnSessionDrop(image, audio, 0, false);
+                Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                {
+                    var video = new Nota.Presentation.BrowserItem
+                    {
+                        Name = "Sintel_Trailer.mp4", Kind = Nota.Presentation.BrowserItemKind.VideoFile,
+                        Path = "/Users/3day/Movies/Sintel_Trailer.mp4",
+                    };
+                    Console.Error.WriteLine($"[drop] video -> track {audio}");
+                    OnSessionDrop(video, audio, 1, false);
+                }, TimeSpan.FromSeconds(3));
+            }, TimeSpan.FromSeconds(7));
         if (Environment.GetEnvironmentVariable("NOTA_BROWSER_TEST") is { Length: > 0 })
             Avalonia.Threading.DispatcherTimer.RunOnce(() => { if (_vm is not null) _ = _vm.Browser.RebuildSamplesAsync(); }, TimeSpan.FromSeconds(5));
         if (Environment.GetEnvironmentVariable("NOTA_VIDEO_TEST") is { Length: > 0 } videoTest)
