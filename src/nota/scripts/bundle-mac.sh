@@ -60,6 +60,17 @@ else
   echo "   (visual engine not found at ${VISUAL_BIN}; the app will look for one at runtime)"
 fi
 
+# FFmpeg (decode-only, LGPL) sits next to the visual engine; `tool_path` finds it there.
+FFMPEG_SRC="${NOTA_FFMPEG_DIR:-$(pwd)/../openvj/target/ffmpeg}"
+if [ -x "${FFMPEG_SRC}/bin/ffmpeg" ]; then
+  cp "${FFMPEG_SRC}/bin/ffmpeg" "${FFMPEG_SRC}/bin/ffprobe" "${CONTENTS}/Helpers/"
+  chmod +x "${CONTENTS}/Helpers/ffmpeg" "${CONTENTS}/Helpers/ffprobe"
+  mkdir -p "${CONTENTS}/Resources/FFmpeg"
+  cp "${FFMPEG_SRC}"/licenses/* "${CONTENTS}/Resources/FFmpeg/" 2>/dev/null || true
+else
+  echo "   (FFmpeg not found; video clips need ffmpeg/ffprobe at runtime)"
+fi
+
 echo "==> Generating app icon (${APP_NAME}.icns)…"
 ICON_SRC="assets/icons/logo.png"
 ICONSET="$(mktemp -d)/${APP_NAME}.iconset"

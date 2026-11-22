@@ -1170,6 +1170,7 @@ impl App {
             }
             match result {
                 Ok(m) => {
+                    eprintln!("openVJ: media ready for {id:?} ({}x{})", m.frame.width, m.frame.height);
                     self.engine.set_media_frame(id, m.frame.width, m.frame.height, &m.frame.rgba);
                     // Playback modes need the video's length; the file knows it best.
                     if let Some(secs) = m.video.and_then(|v| v.duration).filter(|d| *d > 0.0) {

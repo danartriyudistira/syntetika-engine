@@ -29,8 +29,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 - **Selection mirroring** — selecting a clip in NotA selects and previews it in openVJ.
 - **OpenVJ tab** — the selected clip's visual parameters, transform and full effect chain,
   edited with Nota's own sliders; two-way with openVJ's UI.
-- **Media sources** — generators, ISF, images, video (FFmpeg), cameras and Syphon; media is
-  copied into the project bundle so it travels with the `.nota` file.
+- **Media sources** — generators, ISF, images, video (bundled decode-only FFmpeg), cameras and
+  Syphon; media is copied into the project bundle so it travels with the `.nota` file.
 - **Persistence** — visuals are stored in the project bundle (`visuals/composition.json`) and
   restored with the track identity map.
 - **Performance work** — static grid thumbnails, pipeline prewarm, and no GPU readback during

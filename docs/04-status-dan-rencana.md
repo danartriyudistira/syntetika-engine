@@ -171,10 +171,12 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 - [x] Media disalin content-addressed ke `visuals/media/<hash>.<ext>`; staging sebelum save.
 - [x] `composition.json` menyimpan `media/<file>` (portabel); load me-resolve ke bundle.
 - [x] Syphon.framework ikut di bundle + izin kamera di Info.plist.
+- [x] **FFmpeg decode-only (LGPL) dibundel** di `Contents/Helpers` + lisensi di
+  `Contents/Resources/FFmpeg`; video jalan tanpa install terpisah.
 - [ ] Thumbnail media di katalog.
-- [ ] **FFmpeg bundled** (video saat ini butuh `ffmpeg`/`ffprobe` di PATH atau di samping
-  helper); gambar tidak butuh FFmpeg.
-- Kriteria video belum bisa diuji di mesin ini karena FFmpeg belum tersedia.
+- [ ] GC media tak terpakai saat save.
+- Bukti: image 720×720 dan video 640×360 ter-decode dari bundle; save menyimpan
+  `media/<hash>.mp4`, load memulihkannya.
 
 ### P2 — Sinkronisasi A/V & reaktivitas audio (±5–7 hari)
 

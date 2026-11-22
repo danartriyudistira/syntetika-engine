@@ -293,6 +293,16 @@ public sealed class VisualBridge : IDisposable
             VizGet(0, 0);
             Thread.Sleep(800);
             string bundle = "/tmp/syntetika-media-test";
+            if (File.Exists("/tmp/syntetika-test.mp4"))
+            {
+                AppLog("media test: assign a video");
+                string video = MediaFiles.Prepare("/tmp/syntetika-test.mp4", null);
+                VizAssignMedia(0, 0, "video", video);
+                Thread.Sleep(1800);
+                VizGet(0, 0);
+                Thread.Sleep(900);
+            }
+
             AppLog("media test: save through the project path");
             SetProjectDir(bundle);
             SaveProject();

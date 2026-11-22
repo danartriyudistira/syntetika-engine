@@ -9,8 +9,15 @@ use openvj_core::{library, ClipId, EffectType};
 use openvj_core::{Clip, ClipSource, Composition, Effect, GeneratorKind};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// A short name for the clip's source, for the tab's header line.
+/// `ffmpeg_available()` starts two processes; cache it for the life of the engine.
+fn ffmpeg_ok() -> bool {
+    static OK: OnceLock<bool> = OnceLock::new();
+    *OK.get_or_init(openvj_media::ffmpeg_available)
+}
+
 fn source_name(clip: &Clip) -> (String, String) {
     match &clip.source {
         ClipSource::Generator { kind } => ("generator".into(), kind.name().to_string()),
@@ -109,7 +116,7 @@ pub fn state(comp: &Composition, layer: usize, col: usize) -> Value {
         return json!({ "has_visual": false, "layer": layer, "col": col });
     };
     let (kind, name) = source_name(clip);
-    let note = if matches!(clip.source, ClipSource::Video { .. }) && !openvj_media::ffmpeg_available() {
+    let note = if matches!(clip.source, ClipSource::Video { .. }) && !ffmpeg_ok() {
         "Video needs FFmpeg: install it, or put ffmpeg and ffprobe next to the visual engine."
     } else {
         ""
