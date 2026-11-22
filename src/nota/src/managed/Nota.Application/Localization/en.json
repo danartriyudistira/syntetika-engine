@@ -5,6 +5,12 @@
   "plural": "one_is_1",
   "notes": "The English reference: every interface text of Nota by key (spec 077). Change a text here; a new meaning or new placeholders get a new key.",
   "strings": {
+    "browser.video_file": "video",
+    "browser.image_file": "image",
+    "browser.drag_media_to_slot": "Drag this video or image onto a Session slot to use it.",
+    "main.dnd.drop_video_on_audio_slot": "Drop a video on a Session slot of an audio track (its sound plays there).",
+    "main.dnd.drop_media_on_session_slot": "Drop videos and images on a Session slot.",
+    "session.grid.import_video": "Import video (audio + visual)…",
     "visual.media_file": "Media file…",
     "visual.camera": "Camera",
     "visual.syphon": "Syphon",

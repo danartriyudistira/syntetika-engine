@@ -30,11 +30,18 @@ diffs are in `patches/`.
 - **Visual engine lifecycle**: the app starts the bundled `syntetika-visual` process (pointing
   it at the bridge), restarts it up to three times after a crash, and stops it on quit. The
   engine also exits by itself when NotA disappears, so no invisible orphan is left behind.
+- **Video as a clip**: right-click a Session slot (audio track) → **Import video (audio + visual)…**,
+  or drop a video from the library. Its sound is extracted with the bundled FFmpeg into the
+  slot and its picture is assigned to the matching visual, beat-synced to the clip's length.
+  Images drop the same way and become the visual only.
+- The browser's Files view lists videos and images (not only audio) and they are draggable
+  onto Session slots; the sample-folder tree lists them too.
 - **Media sources**: the assign dialog offers video/image files, cameras and Syphon servers.
   Picked files are copied content-addressed into `visuals/media/<sha256>.<ext>` (staged in the
   data folder until the project is saved), and `composition.json` stores `media/<file>` so a
   bundle stays portable. **FFmpeg (decode-only, LGPL) and its licence notices ship inside the
-  app**, next to the visual engine, so video plays without a separate install. The bundle also
+  app**, next to the visual engine, so video plays without a separate install. The bundled
+  build also enables the WAV muxer and `pcm_s16le` encoder used to extract a video's sound. The bundle also
   ships `Syphon.framework` and declares camera usage.
 - **Performance**: static grid thumbnails (no GPU readback during a show), pipeline prewarm,
   PLL clock smoothing, stopped-transport freeze.

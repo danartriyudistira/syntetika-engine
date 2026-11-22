@@ -214,6 +214,17 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 
 ---
 
+## 7a. Video dengan audio di Nota (23 Nov)
+
+- Menu slot (audio track): **Import video (audio + visual)…**; drag video dari browser/Finder
+  ke slot Session (audio) melakukan hal yang sama.
+- Audio diekstrak FFmpeg (`pcm_s16le`, 48 kHz stereo) ke `<data>/video-audio-staging`, lalu
+  `AddSessionAudioFile` menaruhnya di slot.
+- Video disalin ke `visuals/media`, di-assign ke layer slot, dan `syncBeats` = panjang audio.
+- Browser Files (dan tree sample folder) kini mendaftar video/gambar dan bisa di-drag.
+- Bukti: Sintel (51,9 s) → audio 103,85 beat, video `sync=103.85`, decode 854×480.
+- FFmpeg bundled ditambah muxer **wav** + encoder **pcm_s16le**.
+
 ## 7b. Bug hunt pra-rilis (23 Nov)
 
 | Bug | Perbaikan |

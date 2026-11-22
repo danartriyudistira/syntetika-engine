@@ -81,6 +81,12 @@ public sealed partial class BrowserView : UserControl
     private static readonly HashSet<string> AudioExts = new(StringComparer.OrdinalIgnoreCase)
     { ".wav", ".wave", ".aif", ".aiff", ".flac", ".mp3", ".ogg", ".m4a", ".aac" };
 
+    private static readonly HashSet<string> VideoExts = new(StringComparer.OrdinalIgnoreCase)
+    { ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".mxf", ".mpg", ".mpeg" };
+
+    private static readonly HashSet<string> ImageExts = new(StringComparer.OrdinalIgnoreCase)
+    { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp" };
+
     /// <summary>A drag a sample target should light up for: an internal browser row,
     /// or an external drag that carries file(s). Lenient by design — used in DragOver,
     /// where some backends don't expose the file list yet; the drop re-checks.</summary>
@@ -127,8 +133,12 @@ public sealed partial class BrowserView : UserControl
     /// <summary>Local paths of the audio / MIDI files carried by an external drag (empty
     /// if none / not a file drag).</summary>
     private static List<string> ExternalFiles(DragEventArgs e)
-        => ExternalPaths(e).Where(p => AudioExts.Contains(System.IO.Path.GetExtension(p))
-                                       || Nota.Application.Midi.MidiFileReader.IsMidiFile(p)).ToList();
+    {
+        static string Ext(string p) => System.IO.Path.GetExtension(p);
+        return ExternalPaths(e).Where(p =>
+            AudioExts.Contains(Ext(p)) || VideoExts.Contains(Ext(p)) || ImageExts.Contains(Ext(p))
+            || Nota.Application.Midi.MidiFileReader.IsMidiFile(p)).ToList();
+    }
 
     /// <summary>The items a drop should load: the internal browser item (any kind), or
     /// one synthesized Sample / MidiFile item per external file. Empty when there's nothing
@@ -142,7 +152,10 @@ public sealed partial class BrowserView : UserControl
             list.Add(new BrowserItem
             {
                 Name = System.IO.Path.GetFileNameWithoutExtension(p),
-                Kind = Nota.Application.Midi.MidiFileReader.IsMidiFile(p) ? BrowserItemKind.MidiFile : BrowserItemKind.Sample,
+                Kind = Nota.Application.Midi.MidiFileReader.IsMidiFile(p) ? BrowserItemKind.MidiFile
+                     : VideoExts.Contains(System.IO.Path.GetExtension(p)) ? BrowserItemKind.VideoFile
+                     : ImageExts.Contains(System.IO.Path.GetExtension(p)) ? BrowserItemKind.ImageFile
+                     : BrowserItemKind.Sample,
                 Path = p,
             });
         return list;
@@ -919,6 +932,8 @@ public sealed partial class BrowserView : UserControl
                          BrowserItemKind.Folder => GlyphKind.Folder,
                          BrowserItemKind.Sample => GlyphKind.AudioFile,
                          BrowserItemKind.MidiFile => GlyphKind.Midi,
+                         BrowserItemKind.VideoFile => GlyphKind.Play,
+                         BrowserItemKind.ImageFile => GlyphKind.Doc,
                          _ => GlyphKind.Doc,
                      };
             icon = RailIcon(kind, 14, item.Kind switch
@@ -1319,6 +1334,11 @@ public sealed partial class BrowserView : UserControl
         {
             if (list.SelectedItem is not BrowserItem { IsGroup: false } item) return;
             if (item.Kind == BrowserItemKind.OtherFile) return;   // listed, but nothing Nota can open
+            if (item.Kind is BrowserItemKind.VideoFile or BrowserItemKind.ImageFile)
+            {
+                StatusMessage?.Invoke(Loc.T("browser.drag_media_to_slot"));
+                return;
+            }
             // Folders (sample dirs, preset categories) are navigation: double-click opens them.
             // In Browse a single click already opened it; a second open would go one deeper.
             if (item.Kind == BrowserItemKind.Folder && list == _pages[FilesTab] && BrowseOn) return;
@@ -1745,6 +1765,8 @@ public sealed partial class BrowserView : UserControl
         BrowserItemKind.Preset => Loc.T("browser.preset"),
         BrowserItemKind.Folder => Loc.T("browser.folder"),
         BrowserItemKind.OtherFile => Loc.T("browser.file"),
+        BrowserItemKind.VideoFile => Loc.T("browser.video_file"),
+        BrowserItemKind.ImageFile => Loc.T("browser.image_file"),
         BrowserItemKind.ModularNode => Loc.T("browser.modular_node"),
         _ => "",
     };
@@ -1817,6 +1839,8 @@ public sealed partial class BrowserView : UserControl
             }
             case BrowserItemKind.Sample:
             case BrowserItemKind.MidiFile:
+            case BrowserItemKind.VideoFile:
+            case BrowserItemKind.ImageFile:
             case BrowserItemKind.OtherFile:
             {
                 var reveal = new MenuItem { Header = MenuKit.RevealLabel };

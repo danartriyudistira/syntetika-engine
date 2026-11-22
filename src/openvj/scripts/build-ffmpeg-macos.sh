@@ -53,8 +53,8 @@ configure_flags=(
   --enable-static --disable-shared
   --disable-autodetect --enable-videotoolbox --enable-zlib --enable-libvpx
   --disable-ffplay --disable-doc --disable-network --disable-debug
-  --disable-encoders --enable-encoder=rawvideo,wrapped_avframe
-  --disable-muxers --enable-muxer=rawvideo,null
+  --disable-encoders --enable-encoder=rawvideo,wrapped_avframe,pcm_s16le
+  --disable-muxers --enable-muxer=rawvideo,null,wav
   --pkg-config-flags=--static
   --extra-cflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
   --extra-ldflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"

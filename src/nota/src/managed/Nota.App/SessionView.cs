@@ -94,6 +94,8 @@ public sealed partial class SessionView : UserControl
     /// <summary>Raised when the selection lands on another slot, or on a Return / Master column
     /// (trackId, scene).</summary>
     public event Action<int, int>? SlotSelected;
+    /// <summary>Import a video into this slot: extract its audio and assign the visual.</summary>
+    public event Action<int, int>? VideoImportRequested;
     /// <summary>Set by the main window: what an audio take's Locate submenu does (spec 092).</summary>
     internal LocateHooks? Locate { get; set; }
     /// <summary>Raised after slots are copied / moved into the arrangement (M5-6) or a track is renamed.</summary>

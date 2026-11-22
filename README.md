@@ -31,6 +31,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   edited with Nota's own sliders; two-way with openVJ's UI.
 - **Media sources** — generators, ISF, images, video (bundled decode-only FFmpeg), cameras and
   Syphon; media is copied into the project bundle so it travels with the `.nota` file.
+- **Video clips with sound in Nota** — drop a video on an audio Session slot: its audio is
+  extracted into the slot and its picture becomes the slot's visual, beat-synced to the clip.
 - **Persistence** — visuals are stored in the project bundle (`visuals/composition.json`) and
   restored with the track identity map.
 - **Performance work** — static grid thumbnails, pipeline prewarm, and no GPU readback during

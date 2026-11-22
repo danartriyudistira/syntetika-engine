@@ -18,6 +18,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
 using Nota.Application;
+using Nota.Infrastructure.Visuals;
 using Nota.Application.Editing;
 using Nota.Presentation;
 using System.Runtime.InteropServices;
@@ -522,6 +523,19 @@ public partial class MainWindow : Window
         _session.SlotEditRequested += (t, s) => OpenSessionClipEditor(t, s);
         _session.ShowInModularRequested += id => ShowInModular(id);   // specs/095
         _session.ItemDropped += OnSessionDrop;                        // browser drag & drop (M7-5)
+        _session.VideoImportRequested += (t, s) => _ = ImportVideoToSlotAsync(t, s);   // Syntetika: video + its audio
+        if (Environment.GetEnvironmentVariable("NOTA_VIDEO_TEST") is { Length: > 0 } videoTest)
+            Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+            {
+                string file = System.IO.File.Exists(videoTest) ? videoTest : "/tmp/syntetika-test.mp4";
+                Console.Error.WriteLine($"[video] test hook: {file} available={VideoAudio.Available} ffmpeg={VideoAudio.FfmpegPath}");
+                for (int i = 0; i < Engine.TrackCount; i++)
+                    if (Engine.TryGetTrackInfo(i, out var ti) && ti.Type == 0)
+                    {
+                        _ = ImportVideoAsync(file, ti.Id, 0);
+                        break;
+                    }
+            }, TimeSpan.FromSeconds(8));
         HookSessionDeviceMoves(_session);                             // a device card dropped on a column (specs/043)
         _session.ArrangementChanged += () => Timeline.Refresh();      // M5-6
         _session.Status += msg => vm.StatusText = msg;

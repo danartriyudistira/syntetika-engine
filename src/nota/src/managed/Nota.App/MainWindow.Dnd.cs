@@ -43,6 +43,10 @@ public partial class MainWindow
                 case BrowserItemKind.MidiFile:
                     landed = ImportMidiFileToArrangement(item, trackId, beat);
                     break;
+                case BrowserItemKind.VideoFile:
+                case BrowserItemKind.ImageFile:
+                    _vm.StatusText = Loc.T("main.dnd.drop_media_on_session_slot");
+                    break;
                 default:   // instruments replace / start a track; effects + presets target the track
                     var r = Insertion.DropOnArrangement(item, trackId, beat);
                     ApplyInsertResult(r, revealDevices: item.Kind is not (BrowserItemKind.BuiltinInstrument or BrowserItemKind.PluginInstrument));
@@ -68,6 +72,11 @@ public partial class MainWindow
                 _vm.StatusText = Loc.T("main.dnd.drop_samples_and_midi_files");
                 return;
             }
+            if (scene < 0 && item.Kind is BrowserItemKind.VideoFile or BrowserItemKind.ImageFile)
+            {
+                _vm.StatusText = Loc.T("main.dnd.drop_media_on_session_slot");
+                return;
+            }
             switch (item.Kind)
             {
                 case BrowserItemKind.Sample:
@@ -77,6 +86,15 @@ public partial class MainWindow
                         _vm.StatusText = Loc.F("main.added_to_slot", item.Name);
                         landed = true;
                     }
+                    break;
+                case BrowserItemKind.VideoFile:
+                    if (instrumentTrack) { _vm.StatusText = Loc.T("main.dnd.drop_video_on_audio_slot"); break; }
+                    _ = ImportVideoAsync(item.Path, trackId, scene);
+                    landed = true;
+                    break;
+                case BrowserItemKind.ImageFile:
+                    _ = ImportImageAsync(item.Path, trackId, scene);
+                    landed = true;
                     break;
                 case BrowserItemKind.MidiFile:
                     landed = instrumentTrack;

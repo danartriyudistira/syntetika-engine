@@ -995,6 +995,7 @@ public sealed partial class SessionView
                         ? MenuKit.Item(Loc.T("session.grid.cancel_launch"), GlyphKind.Close, () => CancelSlotLaunch(c.TrackId, scene)) : null,
                     MenuKit.Item(Loc.T("common.edit"), GlyphKind.Edit, () => SlotEditRequested?.Invoke(c.TrackId, scene)),
                     MenuKit.Item(Loc.T("common.rename"), GlyphKind.Edit, () => RenameSelection(), new KeyGesture(Key.F2)),
+                    c.IsAudio ? MenuKit.Item(Loc.T("session.grid.import_video"), GlyphKind.Play, () => VideoImportRequested?.Invoke(c.TrackId, scene)) : null,
                 }.OfType<Control>().ToArray(),
                 new Control[] { FollowBypassItem(c.TrackId, scene) },
                 LocateItems(c.TrackId, scene),
@@ -1007,6 +1008,7 @@ public sealed partial class SessionView
         {
             var create = new List<Control>();
             if (c.IsInstrument) create.Add(MenuKit.Item(Loc.T("session.insert_midi_clip"), GlyphKind.Plus, () => InsertMidiClip(c.TrackId, scene)));
+            if (c.IsAudio) create.Add(MenuKit.Item(Loc.T("session.grid.import_video"), GlyphKind.Play, () => VideoImportRequested?.Invoke(c.TrackId, scene)));
             create.Add(MenuKit.Item(Loc.T("session.record_here"), GlyphKind.Record, () => { _engine.RecordSessionSlot(c.TrackId, scene); Refresh(); }));
             bool stop = _engine.GetSessionSlotStopButton(c.TrackId, scene);
             create.Add(MenuKit.Item(stop ? Loc.T("session.grid.remove_stop_button") : Loc.T("session.grid.add_stop_button"), GlyphKind.Stop, () => { _engine.SetSessionSlotStopButton(c.TrackId, scene, !stop); RefreshSlot(c.TrackId, scene); }));

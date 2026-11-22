@@ -27,6 +27,10 @@ public enum BrowserItemKind
     /// <summary>A file the Files browse view lists but Nota can't add (spec 092): shown
     /// faded, never dragged, opened or auditioned.</summary>
     OtherFile,
+    /// <summary>A video the Files tab lists and a Session slot takes as a visual (+ its audio).</summary>
+    VideoFile,
+    /// <summary>An image the Files tab lists and a Session slot takes as a visual.</summary>
+    ImageFile,
     /// <summary>A Modular-only node (LFO, Envelope Follower, …; spec 095): the browser's
     /// Modular tab lists them and only the Modular canvas takes one.</summary>
     ModularNode,
@@ -829,7 +833,7 @@ public sealed partial class BrowserViewModel : ObservableObject
             // Folder nodes keyed by absolute directory path (reused while placing files).
             var nodes = new Dictionary<string, BrowserItem>(StringComparer.OrdinalIgnoreCase);
             foreach (var path in EnumerateFilesSafe(f.Path)
-                         .Where(IsSampleOrMidi)
+                         .Where(p => IsSampleOrMidi(p) || IsVideo(p) || IsImage(p))
                          .Take(MaxSamples)
                          .OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
             {
@@ -839,7 +843,10 @@ public sealed partial class BrowserViewModel : ObservableObject
                 var leaf = new BrowserItem
                 {
                     Name = Path.GetFileName(path),
-                    Kind = Nota.Application.Midi.MidiFileReader.IsMidiFile(path) ? BrowserItemKind.MidiFile : BrowserItemKind.Sample,
+                    Kind = Nota.Application.Midi.MidiFileReader.IsMidiFile(path) ? BrowserItemKind.MidiFile
+                         : IsSampleOrMidi(path) ? BrowserItemKind.Sample
+                         : IsVideo(path) ? BrowserItemKind.VideoFile
+                         : BrowserItemKind.ImageFile,
                     Sub = "",
                     Path = path,
                     Depth = depth,
@@ -894,6 +901,15 @@ public sealed partial class BrowserViewModel : ObservableObject
         if (!places) SortSampleTree(tree);
         return tree;
     }
+
+    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
+    { ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".mxf", ".mpg", ".mpeg" };
+
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp" };
+
+    private static bool IsVideo(string path) => VideoExtensions.Contains(Path.GetExtension(path));
+    private static bool IsImage(string path) => ImageExtensions.Contains(Path.GetExtension(path));
 
     private static bool IsSampleOrMidi(string p)
         => SampleExts.Contains(Path.GetExtension(p).ToLowerInvariant()) || Nota.Application.Midi.MidiFileReader.IsMidiFile(p);
@@ -1099,8 +1115,11 @@ public sealed partial class BrowserViewModel : ObservableObject
                 rows.Add(new BrowserItem
                 {
                     Name = Path.GetFileName(f),
-                    Kind = !IsSampleOrMidi(f) ? BrowserItemKind.OtherFile
-                         : Nota.Application.Midi.MidiFileReader.IsMidiFile(f) ? BrowserItemKind.MidiFile : BrowserItemKind.Sample,
+                    Kind = Nota.Application.Midi.MidiFileReader.IsMidiFile(f) ? BrowserItemKind.MidiFile
+                         : IsSampleOrMidi(f) ? BrowserItemKind.Sample
+                         : IsVideo(f) ? BrowserItemKind.VideoFile
+                         : IsImage(f) ? BrowserItemKind.ImageFile
+                         : BrowserItemKind.OtherFile,
                     Sub = "",
                     Path = f,
                     Depth = 0,
