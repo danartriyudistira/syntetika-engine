@@ -36,15 +36,13 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 ## Run it
 
 ```bash
-# 1. Visual engine
-OPENVJ_NOTA=127.0.0.1:47810 ./src/openvj/target/release/syntetika-visual
-
-# 2. App
 open "./src/nota/dist/Syntetika Engine.app"
 ```
 
-Then open **Session View**, select a clip, and use the **OpenVJ** tab to assign a visual.
-Build instructions live in [docs/02-m0-setup.md](docs/02-m0-setup.md).
+The app starts its bundled visual engine (`Contents/Helpers/syntetika-visual`), restarts it if
+it crashes, and stops it on quit. Then open **Session View**, select a clip, and use the
+**OpenVJ** tab to assign a visual. Build instructions live in
+[docs/02-m0-setup.md](docs/02-m0-setup.md).
 
 ## Repository layout
 

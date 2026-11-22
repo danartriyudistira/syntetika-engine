@@ -49,6 +49,7 @@ public partial class App : Avalonia.Application
         services.AddSingleton<IAudioEngine>(sp => sp.GetRequiredService<NotaEngine>());
         // Syntetika Engine: master clock + launch commands for the separate visual process.
         services.AddSingleton<VisualBridge>();
+        services.AddSingleton<VisualEngineProcess>();
         services.AddSingleton(new EngineBuildInfo(NotaEngine.Version));
         // Application ports → Infrastructure implementations.
         services.AddSingleton<ILogSink, LogSink>();
@@ -112,7 +113,14 @@ public partial class App : Avalonia.Application
         var log = Services.GetRequiredService<ILogSink>();
         log.Info($"App started · v{AppInfo.Version}");
         // Visual bridge: harmless when no visual engine connects (loopback listener only).
-        try { Services.GetRequiredService<VisualBridge>().Start(); }
+        try
+        {
+            var bridge = Services.GetRequiredService<VisualBridge>();
+            bridge.Start();
+            // NotA owns the visual engine: start it unless one is already connected.
+            var visual = Services.GetRequiredService<VisualEngineProcess>();
+            if (visual.AutoStart) visual.Start();
+        }
         catch (Exception ex) { log.Error("Visual bridge could not start", ex); }
         // Structural sync is polled on the UI thread (track list reads are not thread-safe).
         _visualLayout = new Avalonia.Threading.DispatcherTimer(
@@ -241,6 +249,7 @@ public partial class App : Avalonia.Application
             {
                 var bridge = Services.GetService<VisualBridge>();
                 bridge?.SaveProject();   // visuals ride in the bundle sidecar
+                Services.GetService<VisualEngineProcess>()?.Stop();
                 // Give the visual process a moment to write the file before the socket closes.
                 if (bridge is { Connected: true }) System.Threading.Thread.Sleep(150);
                 bridge?.Stop();

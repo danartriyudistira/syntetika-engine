@@ -239,6 +239,18 @@ Bukti: sesudah sync 4 beat lalu Speed 2×, state menunjukkan `speed=2.00 sync=4`
 
 Belum termasuk: pemilih media/kamera, undo, mapping audio di tab.
 
+## Lifecycle visual engine
+
+- NotA men-start `syntetika-visual` sendiri: binary dari `Contents/Helpers` (bundle) atau
+  `src/openvj/target/release` (dev), dengan `OPENVJ_NOTA=127.0.0.1:<port>` dan
+  `SYNTETIKA_EXIT_ON_DISCONNECT=1`.
+- Output engine ditulis ke `<data>/logs/visual-engine.log`.
+- Crash → restart otomatis maksimal 3× (jeda 1,5 s).
+- Quit NotA → child dihentikan; kalau NotA mati mendadak, child keluar sendiri setelah
+  ±3 detik tanpa koneksi.
+- Kalau sudah ada engine yang dijalankan manual (bridge connected), NotA tidak men-spawn
+  dan tidak mematikannya.
+
 ## Berikutnya
 
 1. Sidecar: Nota meluncurkan `openvj` sendiri (port ephemeral, argumen `--nota`).

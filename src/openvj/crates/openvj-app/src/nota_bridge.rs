@@ -111,6 +111,10 @@ impl NotaBridge {
 }
 
 fn run(addr: &str, tx: Sender<Command>, clock: Arc<Mutex<Option<ClockSample>>>, writer: Arc<Mutex<Option<TcpStream>>>) {
+    // When NotA started this process, a long disconnect means NotA is gone: exit instead of
+    // lingering as an invisible second app. A hand-started engine keeps retrying.
+    let exit_on_disconnect = std::env::var_os("SYNTETIKA_EXIT_ON_DISCONNECT").is_some();
+    let mut failed_attempts = 0u32;
     // Clock-quality stats: packet rate, implied BPM spread and largest beat jump. A steppy
     // source shows up here before anyone sees a stutter on screen.
     let mut stat_packets = 0u32;
@@ -122,6 +126,7 @@ fn run(addr: &str, tx: Sender<Command>, clock: Arc<Mutex<Option<ClockSample>>>, 
     loop {
         match TcpStream::connect(addr) {
             Ok(stream) => {
+                failed_attempts = 0;
                 stream.set_nodelay(true).ok();
                 if let Ok(mut w) = writer.lock() {
                     *w = stream.try_clone().ok();
@@ -168,6 +173,13 @@ fn run(addr: &str, tx: Sender<Command>, clock: Arc<Mutex<Option<ClockSample>>>, 
                 eprintln!("openVJ: Nota bridge disconnected; waiting for Nota");
             }
             Err(_) => { /* Nota isn't up yet; retry quietly. */ }
+        }
+        if exit_on_disconnect {
+            failed_attempts += 1;
+            if failed_attempts >= 3 {
+                eprintln!("openVJ: Nota is gone; exiting the visual engine");
+                std::process::exit(0);
+            }
         }
         std::thread::sleep(Duration::from_millis(1000));
     }

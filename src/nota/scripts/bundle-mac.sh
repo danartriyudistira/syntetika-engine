@@ -50,6 +50,16 @@ mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 cp -R "${PUBDIR}/." "${CONTENTS}/MacOS/"
 chmod +x "${CONTENTS}/MacOS/${APP_EXE}" "${CONTENTS}/MacOS/nota-scanworker" 2>/dev/null || true
 
+# Syntetika Engine: the visual process rides inside the bundle, started by the app.
+VISUAL_BIN="${NOTA_VISUAL_BIN:-$(pwd)/../openvj/target/release/syntetika-visual}"
+mkdir -p "${CONTENTS}/Helpers"
+if [ -f "${VISUAL_BIN}" ]; then
+  cp "${VISUAL_BIN}" "${CONTENTS}/Helpers/syntetika-visual"
+  chmod +x "${CONTENTS}/Helpers/syntetika-visual"
+else
+  echo "   (visual engine not found at ${VISUAL_BIN}; the app will look for one at runtime)"
+fi
+
 echo "==> Generating app icon (${APP_NAME}.icns)…"
 ICON_SRC="assets/icons/logo.png"
 ICONSET="$(mktemp -d)/${APP_NAME}.iconset"

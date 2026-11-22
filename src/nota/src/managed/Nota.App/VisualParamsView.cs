@@ -129,6 +129,12 @@ public sealed class VisualParamsView : UserControl
     {
         _root.Children.Clear();
         _root.Children.Add(Text(Loc.T("visual.offline"), NotaPalette.TextSecondary, 12));
+        if (Nota.Infrastructure.Visuals.VisualEngineProcess.Current is { IsAvailable: true } engine)
+        {
+            var start = new Button { Content = Loc.T("visual.start_engine"), Margin = new Thickness(0, 6, 0, 0) };
+            start.Click += (_, _) => engine.Start();
+            _root.Children.Add(start);
+        }
     }
 
     private void ApplyState(JsonElement v)

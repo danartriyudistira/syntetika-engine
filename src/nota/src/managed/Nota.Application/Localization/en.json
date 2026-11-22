@@ -5,6 +5,7 @@
   "plural": "one_is_1",
   "notes": "The English reference: every interface text of Nota by key (spec 077). Change a text here; a new meaning or new placeholders get a new key.",
   "strings": {
+    "visual.start_engine": "Start visual engine",
     "common.product_version": "Syntetika Engine {0}",
     "about.built_on": "Built on Nota (AGPL-3.0) by Egor Khindikaynen and openVJ (GPL-3.0) by its contributors. Not affiliated with or endorsed by either project.",
     "visual.mix": "Mix",

@@ -27,6 +27,9 @@ diffs are in `patches/`.
   with openVJ.
 - **Persistence**: visuals are written to `visuals/composition.json` in the project bundle on
   save/quit and restored on open, together with the layer→track uid map.
+- **Visual engine lifecycle**: the app starts the bundled `syntetika-visual` process (pointing
+  it at the bridge), restarts it up to three times after a crash, and stops it on quit. The
+  engine also exits by itself when NotA disappears, so no invisible orphan is left behind.
 - **Performance**: static grid thumbnails (no GPU readback during a show), pipeline prewarm,
   PLL clock smoothing, stopped-transport freeze.
 
