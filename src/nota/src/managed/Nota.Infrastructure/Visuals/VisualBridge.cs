@@ -16,6 +16,8 @@
 //                    {"t":"slot","layer":0,"col":3,"atBeat":4}
 //                    {"t":"stopLayer","layer":0}
 //                    {"t":"stopAll"}
+//                    {"t":"vizOutput","show":true}
+//   visual -> Nota : {"t":"vizOut","open":true}
 //
 // No audio ever crosses this channel; only musical time and commands.
 
@@ -63,6 +65,16 @@ public sealed class VisualBridge : IDisposable
     private int _sentEpoch = -1;
     /// <summary>Current .nota bundle, for the `visuals/layout.json` sidecar (null = unsaved).</summary>
     private string? _projectDir;
+    /// <summary>openVJ reported that its output window is on screen (`vizOut`).</summary>
+    private volatile bool _outputOpen;
+    /// <summary>Last show/hide Nota asked for; replayed when the visual engine reconnects.</summary>
+    private volatile bool _outputWanted;
+
+    /// <summary>Whether the visual engine's output window is open, as it last reported.</summary>
+    public bool OutputOpen => _outputOpen;
+
+    /// <summary>Raised on a bridge thread when the output window opens or closes.</summary>
+    public event Action<bool>? OutputOpenChanged;
 
     public VisualBridge(NotaEngine engine) => _engine = engine;
 
@@ -450,6 +462,10 @@ public sealed class VisualBridge : IDisposable
             _layoutDirty = true;
             _clientEpoch++;
             Send("{\"t\":\"hello\",\"v\":2}");
+            // A fresh engine starts with its output window hidden. Restore the state the user
+            // asked for, so "View ▸ Visual Output" survives an engine restart.
+            SetOutputOpen(false);
+            if (_outputWanted) Send("{\"t\":\"vizOutput\",\"show\":true}");
             var reader = new Thread(() => ReadLoop(client)) { IsBackground = true, Name = "visual-bridge-read" };
             reader.Start();
             if (!_loggedFirstClient)
@@ -470,6 +486,7 @@ public sealed class VisualBridge : IDisposable
             {
                 if (line.Length > 0)
                 {
+                    if (HandleControlMessage(line)) continue;
                     if (line.Contains("\"vizSaved\"", StringComparison.Ordinal)) _saved.Set();
                     LogIncoming(line);
                     _inbox.Enqueue(line);
@@ -509,6 +526,39 @@ public sealed class VisualBridge : IDisposable
 
     /// <summary>One line from the visual engine, or null. UI thread only.</summary>
     public string? TakeMessage() => _inbox.TryDequeue(out var line) ? line : null;
+
+    /// <summary>Shows or hides openVJ's output window; replayed if the engine reconnects.</summary>
+    public void VizOutput(bool show)
+    {
+        _outputWanted = show;
+        Send($"{{\"t\":\"vizOutput\",\"show\":{(show ? "true" : "false")}}}");
+    }
+
+    /// <summary>Handles messages about the engine itself; true when consumed here.</summary>
+    private bool HandleControlMessage(string line)
+    {
+        if (!line.Contains("\"vizOut\"", StringComparison.Ordinal)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var v = doc.RootElement;
+            if (!v.TryGetProperty("t", out var t) || t.GetString() != "vizOut") return false;
+            bool open = v.TryGetProperty("open", out var o) && o.ValueKind == JsonValueKind.True;
+            _outputWanted = open;
+            SetOutputOpen(open);
+            AppLog($"[viz<-] vizOut open={open}");
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private void SetOutputOpen(bool open)
+    {
+        if (_outputOpen == open) return;
+        _outputOpen = open;
+        try { OutputOpenChanged?.Invoke(open); }
+        catch (Exception ex) { AppLog("output state handler failed: " + ex.Message); }
+    }
 
     private long NextSeq() => Interlocked.Increment(ref _seq);
 
@@ -695,6 +745,7 @@ public sealed class VisualBridge : IDisposable
         try { _client?.Close(); } catch { }
         _stream = null;
         _client = null;
+        SetOutputOpen(false);
     }
 
     private static void AppLog(string text) => Console.Error.WriteLine("[visual-bridge] " + text);

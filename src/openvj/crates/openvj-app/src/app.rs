@@ -631,7 +631,7 @@ impl App {
 
     /// Drain bridge commands, then apply the ones whose beat has arrived. Launches are
     /// scheduled by absolute beat, so packet jitter never moves the cut.
-    fn nota_tick(&mut self, now: f64, beat: f64) {
+    fn nota_tick(&mut self, now: f64, beat: f64, out: &OutputWindow) {
         // Structural and selection messages are not musical events: apply them on arrival so
         // they never wait on (or get stuck behind) a transport beat.
         let commands = self.nota.as_ref().map(|b| b.poll()).unwrap_or_default();
@@ -700,6 +700,7 @@ impl App {
                     let col = self.selected.filter(|(l, _)| *l == layer).map_or(0, |(_, c)| c);
                     self.send_viz_state(layer, col, 0);
                 }
+                NotaCommand::VizOutput { show } => self.show_output_window(out, show),
                 NotaCommand::VizCatalog { kind, query, seq } => {
                     let body = crate::viz::catalog(&kind, &query);
                     let line = serde_json::json!({
@@ -1402,7 +1403,7 @@ impl App {
         let dt = (now - self.last_frame).clamp(0.0, 0.25) as f32;
         self.last_frame = now;
         let beat = self.update_tempo(now, dt as f64);
-        self.nota_tick(now, beat);
+        self.nota_tick(now, beat, out);
         self.viz_poll(now);
         let live = self.comp.live_clip_ids();
         self.comp.tick(now, beat);
@@ -4120,10 +4121,31 @@ impl App {
         }
     }
 
+    /// Shows or hides the output window when Nota drives it (View ▸ Visual Output).
+    fn show_output_window(&mut self, out: &OutputWindow, show: bool) {
+        if show {
+            let _ = out.show();
+        } else {
+            out.window().set_fullscreen(false);
+            let _ = out.hide();
+        }
+        self.output_shown(show);
+    }
+
     pub fn output_shown(&mut self, open: bool) {
+        let changed = self.output_open != open;
         self.output_open = open;
         self.grid_dirty = true;
         self.mapping_dirty = true;
+        if !changed {
+            return;
+        }
+        eprintln!("openVJ: output window {}", if open { "shown" } else { "hidden" });
+        // Keep Nota's View ▸ Visual Output checkmark in step, including when the window is
+        // closed here with its X button.
+        if let Some(bridge) = &self.nota {
+            bridge.send(&format!("{{\"t\":\"vizOut\",\"open\":{open}}}"));
+        }
     }
 
     pub fn import_mapping(&mut self, path: &Path) {

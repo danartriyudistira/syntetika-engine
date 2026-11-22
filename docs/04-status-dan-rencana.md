@@ -242,6 +242,18 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 Uji ulang dari bundle: start bersih, image 720×720 + video 640×360 ter-decode, `save ack=True`,
 save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di log.
 
+## 7c. Menu View → Visual Output (23 Nov)
+
+- Menu **View → Visual Output** (checkbox) membuka jendela output openVJ; jendela itu
+  **always on top** di atas DAW dan aplikasi lain, cocok untuk proyektor/layar kedua.
+- Klik lagi menyembunyikan; tombol X di openVJ juga mematikan centang lewat pesan balik
+  `vizOut`.
+- Permintaan terakhir disimpan di bridge dan dikirim ulang saat engine reconnect, jadi klik
+  sebelum engine siap tidak hilang.
+- Perintah yang sama tersedia di Command Palette.
+- Bukti uji: `vizOut open=true`, log engine `output window shown`, window “Syntetika Visual
+  Output” muncul; toggle kedua menghasilkan `open=false`.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

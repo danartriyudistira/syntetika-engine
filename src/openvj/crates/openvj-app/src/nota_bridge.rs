@@ -12,6 +12,7 @@
 //!   {"t":"slot","layer":0,"col":3,"atBeat":16}
 //!   {"t":"stopLayer","layer":0}
 //!   {"t":"stopAll"}
+//!   {"t":"vizOutput","show":true}
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -60,6 +61,8 @@ pub enum Command {
     VizSave { path: String, uids: Vec<String>, media_dirs: Vec<String> },
     VizLoad { path: String, media_dir: String },
     VizLayer { layer: usize, opacity: Option<f32>, blend: Option<String>, bypass: Option<bool> },
+    /// Show or hide the output window (Nota's View ▸ Visual Output).
+    VizOutput { show: bool },
 }
 
 pub struct NotaBridge {
@@ -302,6 +305,11 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
             let blend = v.get("blend").and_then(|x| x.as_str()).map(str::to_owned);
             let bypass = v.get("bypass").and_then(|x| x.as_bool());
             let _ = tx.send(Command::VizLayer { layer, opacity, blend, bypass });
+        }
+        Some("vizOutput") => {
+            // Missing field means "show": a bare request should not hide the window.
+            let show = v.get("show").and_then(|x| x.as_bool()).unwrap_or(true);
+            let _ = tx.send(Command::VizOutput { show });
         }
         Some("vizCatalog") => {
             let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("generators").to_owned();

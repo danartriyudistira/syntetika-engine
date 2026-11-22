@@ -33,6 +33,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   Syphon; media is copied into the project bundle so it travels with the `.nota` file.
 - **Video clips with sound in Nota** — drop a video on an audio Session slot: its audio is
   extracted into the slot and its picture becomes the slot's visual, beat-synced to the clip.
+- **Always-on-top visual output** — View → Visual Output opens openVJ's output window above
+  every other app, ready for a projector or second screen.
 - **Persistence** — visuals are stored in the project bundle (`visuals/composition.json`) and
   restored with the track identity map.
 - **Performance work** — static grid thumbnails, pipeline prewarm, and no GPU readback during

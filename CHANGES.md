@@ -37,6 +37,9 @@ diffs are in `patches/`.
 - The browser's Files view and sample-folder tree list videos and images (not only audio),
   they are draggable onto Session slots, and the audio sample chips (Loops / One-shots / BPM /
   key) no longer hide them.
+- **Visual output window**: View → **Visual Output** toggles openVJ's output window, kept
+  always on top for a projector or second screen; its checkmark follows the engine's `vizOut`
+  reports, and the last request is replayed when the engine reconnects.
 - **Media sources**: the assign dialog offers video/image files, cameras and Syphon servers.
   Picked files are copied content-addressed into `visuals/media/<sha256>.<ext>` (staged in the
   data folder until the project is saved), and `composition.json` stores `media/<file>` so a
@@ -54,6 +57,8 @@ diffs are in `patches/`.
 - **Performance**: `set_live_thumbnails(false)` in performance mode with a one-shot static
   paint; prewarm queue; slow-render diagnostics; stopped-transport PLL fix.
 - **Branding**: window title and wordmark “Syntetika Visual”; binary `syntetika-visual`.
+- **Output window**: always on top, and Nota can show/hide it over the bridge (`vizOutput`),
+  with `vizOut` reports keeping the menu checkmark in step.
 
 ## Fixed before the first release
 
