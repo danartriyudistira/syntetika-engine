@@ -5,6 +5,7 @@
 Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an openVJ visual on every clip. Launch a clip and its visual starts on the same musical beat — one performance surface for sound and picture.
 
 > Status: **alpha (0.1.0)**. macOS Apple Silicon first. Expect rough edges.
+> What works, known limits and the roadmap: [docs/04-status-dan-rencana.md](docs/04-status-dan-rencana.md).
 
 ## Built on two excellent open-source projects
 
