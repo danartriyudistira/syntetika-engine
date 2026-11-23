@@ -78,8 +78,8 @@ fn restore_output_geometry(
                 out.window().set_size(PhysicalSize::new(width, height));
                 out.window().set_position(PhysicalPosition::new(x, y));
             }
-            // Never seen windowed (maximized right after opening): use the design size.
-            None => out.window().set_size(LogicalSize::new(960.0, 540.0)),
+            // Never seen windowed (maximized right after opening): use the 480p design size.
+            None => out.window().set_size(LogicalSize::new(854.0, 480.0)),
         }
         keep_output_on_top(&out);
         let restoring = Rc::clone(&restoring);

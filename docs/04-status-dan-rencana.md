@@ -268,6 +268,8 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   Tombol ditangani di level winit window, jadi tetap bekerja walau tidak ada kontrol fokus.
 - Bukti uji: zoom → `1920×1080` (`maximize -> fullscreen`); Esc → kembali `960×568` di posisi
   semula (`fullscreen off`), layer always-on-top 3, tanpa masuk fullscreen lagi.
+- Window output default sekarang **854×480 (480p)** agar tidak menutupi area kerja Nota;
+  restore setelah fullscreen memakai ukuran windowed terakhir.
 - State dikirim dua arah: `vizUi` dari Nota, `vizUiState` dari openVJ; centang menu ikut
   berubah walau window ditutup dari openVJ.
 - **Optimalisasi**: saat editor, output, dan mapping tersembunyi (tidak ada klien Syphon),

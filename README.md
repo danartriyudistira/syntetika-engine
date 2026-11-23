@@ -36,7 +36,7 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   Trimming the audio's start/end or looping it retimes and trims the video with it, with
   launches and stops on the same quantum (and phase-corrected) as the audio.
 - **Always-on-top visual output** — View → Visual Output opens openVJ's output window above
-  every other app; maximizing it means fullscreen, and Esc returns to the windowed output.
+  every other app at 480p; maximizing it means fullscreen, and Esc returns to the windowed output.
 - **Projection mapping** — View → Projection Mapping opens openVJ's mapping editor for
   projector warping, slicing and masking, from inside Nota.
 - **Clip copy/paste carries the visual** — copying, cutting, duplicating or dragging a Session

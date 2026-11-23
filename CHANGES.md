@@ -60,9 +60,10 @@ diffs are in `patches/`.
   key) no longer hide them.
 - **Visual output window**: View → **Visual Output** toggles openVJ's output window, kept
   always on top for a projector or second screen; its checkmark follows the engine's `vizOut`
-  reports, and the last request is replayed when the engine reconnects. Maximizing the output
-  window (green zoom button or title-bar double-click) means real fullscreen; **Esc** or **F**
-  returns to the previous windowed frame, still on top.
+  reports, and the last request is replayed when the engine reconnects. It opens at **480p
+  (854×480)** so it leaves the DAW workspace visible. Maximizing the output window (green zoom
+  button or title-bar double-click) means real fullscreen; **Esc** or **F** returns to the
+  previous windowed frame, still on top.
 - **Background engine**: Nota starts openVJ with its editor hidden, and View → **OpenVJ**
   shows or hides that window. Showing activates and raises it once (it is not kept above
   other apps), and closing the editor hides it instead of quitting the engine.
