@@ -573,8 +573,16 @@ public partial class MainWindow : Window
                     if (Engine.TryGetTrackInfo(i, out var ti) && ti.Type == 0) { audio = ti.Id; break; }
                 if (audio <= 0) { Console.Error.WriteLine("[sync] no audio track"); return; }
                 double before = Engine.SessionSlotLength(audio, 0);
-                Engine.SetSessionSlotLength(audio, 0, 8);
-                Console.Error.WriteLine($"[sync] trim {before:0.###} -> 8 beats");
+                if (Engine.TryGetSessionAudioSlot(audio, 0, out var slot)
+                    && Engine.TryGetSampleInfo(slot.SampleId, out var si)
+                    && si.SampleRate > 0)
+                {
+                    long off = (long)(10 * si.SampleRate);
+                    long len = (long)(10 * si.SampleRate);
+                    Engine.SetClipSourceRegion(audio, Nota.Application.SessionClip.Index(0), off, len);
+                    Console.Error.WriteLine("[sync] region start=10s len=10s");
+                }
+                Console.Error.WriteLine($"[sync] length {before:0.###} -> {Engine.SessionSlotLength(audio, 0):0.###} beats");
                 VisualBridge.Current?.PublishSlotTiming(force: true);
                 Avalonia.Threading.DispatcherTimer.RunOnce(() =>
                 {

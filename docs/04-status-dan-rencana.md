@@ -306,9 +306,11 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Loop audio **off** → video `Play once & hold`; loop on → `Loop`.
 - Timing dikirim ulang saat engine reconnect, setelah project load, dan setelah video
   di-assign ke slot yang sudah punya audio.
-- Bukti uji (Sintel 51,93 dtk, 120 BPM): impor `sync=103.85 trim=full`; trim audio ke 8 beat
-  → `sync=8 trim=4s mode=Loop`; loop off → `mode=Play once & clear`. Unit test
-  `a_trimmed_audio_loop_trims_the_video_at_normal_speed` lulus.
+- Bukti uji (Sintel 51,93 dtk, 120 BPM): impor `sync=103.85 trim=full in=0s`; region audio
+  dipotong **10s–20s** → `sync=20 trim=10s in=10s` (video memutar 10–20 dtk, loop tiap 20
+  beat); loop off → `mode=Play once & clear`. Unit test
+  `a_trimmed_audio_loop_trims_the_video_at_normal_speed` dan
+  `a_trimmed_audio_start_moves_the_video_in_point` lulus.
 
 ## 7g. Start/finish visual = audio (23 Nov)
 

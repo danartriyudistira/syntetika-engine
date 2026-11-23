@@ -675,14 +675,14 @@ impl App {
     /// Aligns the playing video's phase with the audio slot's local beats. Corrects a launch
     /// that landed a frame late or a legato hand-off, which otherwise shifts start and seam.
     fn apply_slot_phase(&mut self, layer: usize, col: usize, phase: f32, sample_beat: Option<f64>, beat: f64) {
-        let Some((clip_id, video, sync_beats)) = self
+        let Some((clip_id, video, period)) = self
             .comp
             .clip(layer, col)
-            .map(|c| (c.id, matches!(c.source, ClipSource::Video { .. }), c.sync_beats))
+            .map(|c| (c.id, matches!(c.source, ClipSource::Video { .. }), c.beat_period()))
         else {
             return;
         };
-        let Some(sync_beats) = sync_beats.filter(|b| *b > 0.0) else { return };
+        let Some(period) = period.filter(|b| *b > 0.0) else { return };
         if !video || !phase.is_finite() || phase < 0.0 {
             return;
         }
@@ -696,7 +696,7 @@ impl App {
         let elapsed = sample_beat
             .filter(|b| b.is_finite())
             .map_or(0.0, |b| (beat - b).clamp(-0.25, 0.25));
-        let len = sync_beats as f64;
+        let len = period;
         let target = (phase as f64 + elapsed).rem_euclid(len);
         let current = (beat - active.started_beat).rem_euclid(len);
         let mut error = (current - target).rem_euclid(len);
@@ -802,16 +802,17 @@ impl App {
                 NotaCommand::VizOutput { show } => self.show_output_window(out, show),
                 NotaCommand::VizUi { show } => self.show_ui_window(ui, show),
                 NotaCommand::VizMapping { show } => self.show_mapping_window(show),
-                NotaCommand::VizSlotTiming { layer, col, beats, bpm, looped } => {
+                NotaCommand::VizSlotTiming { layer, col, beats, bpm, looped, start } => {
                     if beats > 0.0
                         && let Some(clip) = self.comp.clip_mut(layer, col)
                         && matches!(clip.source, ClipSource::Video { .. })
                     {
                         // The audio loop is the timing source: a shorter loop trims the video
-                        // (normal speed), and the pass ends on the audio's beat length.
+                        // (normal speed), and a trimmed start picks the same point in the video.
                         let loop_secs = (beats as f64) * 60.0 / bpm.max(1.0) as f64;
                         clip.sync_beats = Some(beats.clamp(0.25, 256.0));
                         clip.sync_secs = Some((loop_secs as f32).clamp(0.01, 36_000.0));
+                        clip.sync_start = Some(start.max(0.0));
                         clip.play_mode = if looped { PlayMode::Loop } else { PlayMode::OnceClear };
                         self.grid_dirty = true;
                         self.send_viz_state(layer, col, 0);
@@ -855,8 +856,15 @@ impl App {
                         eprintln!("openVJ: NOTA scene col={col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
                     }
                     NotaCommand::Slot { layer, col, .. } => {
-                        self.comp.trigger(layer, col, now);
-                        eprintln!("openVJ: NOTA clip {layer}:{col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
+                        if self.comp.clip(layer, col).is_some() {
+                            self.comp.trigger(layer, col, now);
+                            eprintln!("openVJ: NOTA clip {layer}:{col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
+                        } else {
+                            // The audio slot has no visual: the previous visual on this layer
+                            // must end with it, not keep showing into the next clip.
+                            self.comp.clear_layer(layer, now);
+                            eprintln!("openVJ: NOTA clip {layer}:{col} at={at_beat:.3} has no visual; cleared layer");
+                        }
                     }
                     NotaCommand::StopLayer { layer, .. } => {
                         self.comp.clear_layer(layer, now);

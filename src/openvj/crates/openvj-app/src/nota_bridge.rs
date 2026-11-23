@@ -72,7 +72,7 @@ pub enum Command {
     /// Show or hide the output mapping window (Nota's View ▸ Projection Mapping).
     VizMapping { show: bool },
     /// The audio clip's loop length/state changed: retime the visual in that slot.
-    VizSlotTiming { layer: usize, col: usize, beats: f32, bpm: f32, looped: bool },
+    VizSlotTiming { layer: usize, col: usize, beats: f32, bpm: f32, looped: bool, start: f32 },
     /// The audio slot's local beat phase, so the video's start/loop seam follows it.
     VizSlotPhase { layer: usize, col: usize, phase: f32, sample_beat: Option<f64> },
 }
@@ -344,7 +344,8 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
             let beats = v.get("beats").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
             let bpm = v.get("bpm").and_then(|x| x.as_f64()).filter(|b| *b > 0.0).unwrap_or(120.0) as f32;
             let looped = v.get("loop").and_then(|x| x.as_bool()).unwrap_or(true);
-            let _ = tx.send(Command::VizSlotTiming { layer, col, beats, bpm, looped });
+            let start = v.get("start").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+            let _ = tx.send(Command::VizSlotTiming { layer, col, beats, bpm, looped, start });
         }
         Some("vizSlotPhase") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;

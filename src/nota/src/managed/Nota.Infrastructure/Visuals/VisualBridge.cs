@@ -19,7 +19,7 @@
 //                    {"t":"vizOutput","show":true}
 //                    {"t":"vizUi","show":true}
 //                    {"t":"vizMapping","show":true}
-//                    {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"bpm":120,"loop":true}
+//                    {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"bpm":120,"loop":true,"start":10}
 //                    {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5,"beat":12.25}
 //   visual -> Nota : {"t":"vizOut","open":true}
 //                    {"t":"vizUiState","open":true}
@@ -71,8 +71,8 @@ public sealed class VisualBridge : IDisposable
     private int _sentEpoch = -1;
     /// <summary>Current .nota bundle, for the `visuals/layout.json` sidecar (null = unsaved).</summary>
     private string? _projectDir;
-    /// <summary>Last audio slot length/loop/tempo sent per (track, scene), so only edits travel.</summary>
-    private readonly Dictionary<(int TrackId, int Scene), (double Beats, double Bpm, bool Loop)> _slotTiming = new();
+    /// <summary>Last audio slot length/loop/tempo/trim sent per (track, scene), so only edits travel.</summary>
+    private readonly Dictionary<(int TrackId, int Scene), (double Beats, double Bpm, bool Loop, double Start)> _slotTiming = new();
     /// <summary>A new engine connected: forget what was sent so every slot syncs again.</summary>
     private volatile bool _slotTimingDirty;
     private long _slotTimingAt;
@@ -306,15 +306,22 @@ public sealed class VisualBridge : IDisposable
                     double beats = _engine.SessionSlotLength(ti.Id, scene);
                     if (beats <= 0) continue;
                     bool loop = !_engine.TryGetSessionClipProps(ti.Id, scene, out var props) || props.Loop != 0;
+                    // A trimmed audio clip starts inside its source: the video must start there too.
+                    double start = 0;
+                    if (_engine.TryGetSessionAudioSlot(ti.Id, scene, out var audioSlot)
+                        && _engine.TryGetSampleInfo(audioSlot.SampleId, out var sampleInfo)
+                        && sampleInfo.SampleRate > 0)
+                        start = Math.Max(0, audioSlot.SourceOffsetFrames / sampleInfo.SampleRate);
                     var key = (ti.Id, scene);
                     seen.Add(key);
                     if (_slotTiming.TryGetValue(key, out var prev)
                         && Math.Abs(prev.Beats - beats) < 1e-6
                         && Math.Abs(prev.Bpm - bpm) < 0.05
+                        && Math.Abs(prev.Start - start) < 1e-4
                         && prev.Loop == loop) continue;
-                    _slotTiming[key] = (beats, bpm, loop);
-                    Send($"{{\"t\":\"vizSlotTiming\",\"layer\":{layer},\"col\":{scene},\"beats\":{Num(beats)},\"bpm\":{Num(bpm)},\"loop\":{(loop ? "true" : "false")}}}");
-                    AppLog($"[sync] slot {ti.Id}:{scene} layer={layer} beats={beats:0.###} bpm={bpm:0.##} loop={loop}");
+                    _slotTiming[key] = (beats, bpm, loop, start);
+                    Send($"{{\"t\":\"vizSlotTiming\",\"layer\":{layer},\"col\":{scene},\"beats\":{Num(beats)},\"bpm\":{Num(bpm)},\"loop\":{(loop ? "true" : "false")},\"start\":{Num(start)}}}");
+                    AppLog($"[sync] slot {ti.Id}:{scene} layer={layer} beats={beats:0.###} bpm={bpm:0.##} loop={loop} start={start:0.###}s");
                 }
             }
             // Forget cleared slots, so a later clip in the same place is sent again.
@@ -659,6 +666,7 @@ public sealed class VisualBridge : IDisposable
             if (v.TryGetProperty("playback", out var pl) && pl.ValueKind == JsonValueKind.Object)
                 extra += $" speed={pl.GetProperty("speed").GetDouble():0.00} sync={(pl.TryGetProperty("sync_beats", out var sy) && sy.ValueKind == JsonValueKind.Number ? sy.GetDouble().ToString("0.##") : "off")}"
                        + $" trim={(pl.TryGetProperty("sync_secs", out var ss) && ss.ValueKind == JsonValueKind.Number ? ss.GetDouble().ToString("0.##") + "s" : "full")}"
+                       + $" in={(pl.TryGetProperty("sync_start", out var st) && st.ValueKind == JsonValueKind.Number ? st.GetDouble().ToString("0.##") + "s" : "0s")}"
                        + $" mode={(pl.TryGetProperty("play_mode", out var pm) ? pm.GetString() : "?")}";
             AppLog($"[viz<-] {t} L{layer} C{col} seq={seq} visual={has}{extra} ({line.Length} bytes)");
         }
