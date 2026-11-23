@@ -21,6 +21,7 @@
 //                    {"t":"vizMapping","show":true}
 //                    {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"bpm":120,"loop":true,"start":10}
 //                    {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5,"beat":12.25}
+//                    {"t":"vizCopy","fromLayer":0,"fromCol":0,"toLayer":0,"toCol":1,"move":false}
 //   visual -> Nota : {"t":"vizOut","open":true}
 //                    {"t":"vizUiState","open":true}
 //                    {"t":"vizMappingState","open":true}
@@ -699,6 +700,10 @@ public sealed class VisualBridge : IDisposable
         _mappingWanted = show;
         Send($"{{\"t\":\"vizMapping\",\"show\":{(show ? "true" : "false")}}}");
     }
+
+    /// <summary>Copy or move a slot's visual with its Session clip (copy/paste, duplicate, drag).</summary>
+    public void VizCopy(int fromLayer, int fromCol, int toLayer, int toCol, bool move)
+        => Send($"{{\"t\":\"vizCopy\",\"fromLayer\":{fromLayer.ToString(CultureInfo.InvariantCulture)},\"fromCol\":{fromCol.ToString(CultureInfo.InvariantCulture)},\"toLayer\":{toLayer.ToString(CultureInfo.InvariantCulture)},\"toCol\":{toCol.ToString(CultureInfo.InvariantCulture)},\"move\":{(move ? "true" : "false")}}}");
 
     /// <summary>Handles messages about the engine itself; true when consumed here.</summary>
     private bool HandleControlMessage(string line)

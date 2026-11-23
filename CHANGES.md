@@ -40,6 +40,9 @@ diffs are in `patches/`.
   video 10–20 s), turning the audio's loop off makes the video play once and clear, and the
   timing is refreshed after a project load or when a video is assigned to a slot that already
   has audio.
+- **Copy/paste carries the visual**: copying, cutting, duplicating or drag-copying a Session
+  clip also copies or moves its openVJ visual (source, effects, playback, trim), including the
+  media behind the new clip id.
 - **Start/finish match**: visual launches use each clip's own Quantize, scene launches are
   scheduled per layer, stops (stop button, Stop All, Toggle, Gate/Repeat release) land on the
   same quantum as the audio, and the playing slot's local beat phase corrects the video's

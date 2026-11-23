@@ -821,6 +821,37 @@ impl App {
                 NotaCommand::VizSlotPhase { layer, col, phase, sample_beat } => {
                     self.apply_slot_phase(layer, col, phase, sample_beat, beat);
                 }
+                NotaCommand::VizCopy { from_layer, from_col, to_layer, to_col, moving } => {
+                    if (from_layer, from_col) != (to_layer, to_col) {
+                        let source = self.comp.clip(from_layer, from_col).cloned();
+                        let copied = match &source {
+                            Some(_) if moving =>
+                                self.comp.move_clip_over((from_layer, from_col), (to_layer, to_col)),
+                            Some(_) => self.comp.copy_clip_to((from_layer, from_col), (to_layer, to_col)),
+                            None => {
+                                // The source audio had no visual: the target must end up empty.
+                                self.comp.remove_clip(to_layer, to_col);
+                                None
+                            }
+                        };
+                        if let (Some(from), Some(id)) = (source.as_ref(), copied) {
+                            // A copied clip needs its own media behind the new id.
+                            match &from.source {
+                                ClipSource::Video { path } => self.start_load(id, path.clone(), true),
+                                ClipSource::Image { path } => self.start_load(id, path.clone(), false),
+                                _ => {}
+                            }
+                            self.selected = Some((to_layer, to_col));
+                            self.selected_layer = to_layer;
+                            eprintln!(
+                                "openVJ: NOTA {} visual {from_layer}:{from_col} -> {to_layer}:{to_col}",
+                                if moving { "move" } else { "copy" }
+                            );
+                        }
+                        self.grid_dirty = true;
+                        self.send_viz_state(to_layer, to_col, 0);
+                    }
+                }
                 NotaCommand::VizCatalog { kind, query, seq } => {
                     let body = crate::viz::catalog(&kind, &query);
                     let line = serde_json::json!({

@@ -39,6 +39,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   every other app; maximizing it means fullscreen, and Esc returns to the windowed output.
 - **Projection mapping** — View → Projection Mapping opens openVJ's mapping editor for
   projector warping, slicing and masking, from inside Nota.
+- **Clip copy/paste carries the visual** — copying, cutting, duplicating or dragging a Session
+  clip also copies or moves its openVJ visual and media.
 - **Background visual engine** — openVJ runs hidden by default; View → OpenVJ raises its
   editor once (not always-on-top), and while nothing is on screen it stops GPU rendering and
   slows its tick.

@@ -1233,6 +1233,32 @@ impl Composition {
         self.layers[from.0].clips[from.1] = b;
     }
 
+    /// Copies a clip (its source, parameters, effects, playback) to another slot, replacing
+    /// what was there. The copy gets a fresh id; its media must be loaded for that id.
+    pub fn copy_clip_to(&mut self, from: (usize, usize), to: (usize, usize)) -> Option<ClipId> {
+        if to.0 >= self.layers.len() || to.1 >= self.columns.len() {
+            return None;
+        }
+        if from == to {
+            return self.clip(from.0, from.1).map(|c| c.id);
+        }
+        let mut clip = self.clip(from.0, from.1)?.clone();
+        let id = self.next_clip_id();
+        clip.id = id;
+        self.remove_clip(to.0, to.1);
+        self.layers[to.0].clips[to.1] = Some(clip);
+        Some(id)
+    }
+
+    /// Moves a clip to another slot, replacing the target (not swapping like [`move_clip`]).
+    pub fn move_clip_over(&mut self, from: (usize, usize), to: (usize, usize)) -> Option<ClipId> {
+        let id = self.copy_clip_to(from, to)?;
+        if from != to {
+            self.remove_clip(from.0, from.1);
+        }
+        Some(id)
+    }
+
     /// The tempo clock's beat at `now`, extrapolated from the last [`Composition::tick`].
     pub fn beat_at(&self, now: f64) -> f64 {
         let (secs, beat) = self.clock;
@@ -1776,6 +1802,30 @@ mod tests {
         // The audio loop end (beat 20) wraps back to the trimmed in-point, 10 s.
         let t = c.layers[0].frame(20.0, 120.0).unwrap().incoming.unwrap().1;
         assert!((t - 10.0).abs() < 1e-6, "got {t}");
+    }
+
+    #[test]
+    fn copying_a_visual_keeps_its_settings_and_gives_it_a_new_id() {
+        let mut c = Composition::new(640, 360, 1, 2);
+        let a = c.set_clip(0, 0, video()).unwrap();
+        let clip = c.clip_mut(0, 0).unwrap();
+        clip.media_secs = Some(51.93);
+        clip.sync_beats = Some(20.0);
+        clip.sync_secs = Some(10.0);
+        clip.sync_start = Some(10.0);
+        clip.play_mode = PlayMode::OnceClear;
+        let b = c.copy_clip_to((0, 0), (0, 1)).unwrap();
+        assert_ne!(a, b);
+        let target = c.clip(0, 1).unwrap();
+        assert_eq!(target.id, b);
+        assert_eq!(target.sync_start, Some(10.0));
+        assert_eq!(target.sync_secs, Some(10.0));
+        assert_eq!(target.play_mode, PlayMode::OnceClear);
+        assert!(c.clip(0, 0).is_some(), "a copy leaves the source in place");
+        // A move copies and then removes the source.
+        let moved = c.move_clip_over((0, 1), (0, 0)).unwrap();
+        assert_eq!(c.clip(0, 0).unwrap().id, moved);
+        assert!(c.clip(0, 1).is_none());
     }
 
     #[test]

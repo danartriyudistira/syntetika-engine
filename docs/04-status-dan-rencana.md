@@ -323,7 +323,20 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   loop seam mengikuti audio walau launch meleset beberapa frame.
 - **One-shot**: loop audio off → video `Play once & clear` (hilang saat audio selesai).
 - Bukti uji: phase terkorreksi sekali setelah launch (`corrected≈0.215 beat`), lalu tidak
-  berulang; `sync=8 trim=4s mode=Play once & clear`.
+  berulang; `sync=20 trim=10s in=10s mode=Play once & clear`.
+
+## 7h. Copy/paste clip ikut menyalin visual (23 Nov)
+
+- Semua jalur copy/paste/duplicate/drag lewat `SessionView.MoveOrCopySlot`; sekarang method itu
+  mengirim `vizCopy` ke openVJ setelah audio berhasil disalin.
+- openVJ meng-clone clip visual (source, parameter, efek, play mode, sync/trim) dengan **ID
+  baru**, memuat ulang media untuk ID itu, dan mengganti visual tujuan. `move` menghapus visual
+  sumber; sumber tanpa visual mengosongkan visual tujuan.
+- Bukti uji: Sintel di slot 0 di-copy ke slot 1 →
+  `NOTA copy visual 0:0 -> 0:1`, `media ready for ClipId(14)`, `vizState L0 C1 visual=True
+  sync=103.85 trim=51.93s`; unit test copy/move lulus.
+- Catatan: undo Nota belum mengembalikan salinan visual; paste dari Arrangement tidak membuat
+  visual baru (tidak ada visual sumber).
 
 ## 8. Risiko
 

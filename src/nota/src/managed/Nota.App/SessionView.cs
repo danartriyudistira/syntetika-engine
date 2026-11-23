@@ -671,6 +671,9 @@ public sealed partial class SessionView : UserControl
         }
         finally { _engine.EndUndoGroup(); }
         if (!ok) return false;
+        // The clip's visual travels with it: copy/paste, duplicate and drag all land here.
+        if (VisualBridge.Current is { } bridge)
+            bridge.VizCopy(VisualLayer(fromTrack), fromScene, VisualLayer(toTrack), toScene, move);
         if (move) RefreshSlot(fromTrack, fromScene);
         RefreshSlot(toTrack, toScene);
         return true;
