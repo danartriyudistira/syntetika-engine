@@ -82,6 +82,7 @@
             <NativeMenuItem Header="{app:T 'main.mixer_in_its_own_window'}" app:Commands.Id="view.mixerFloat" ToggleType="CheckBox"/>
             <NativeMenuItem Header="{app:T 'common.openvj'}" app:Commands.Id="view.openvj" ToggleType="CheckBox"/>
             <NativeMenuItem Header="{app:T 'main.visual_output'}" app:Commands.Id="view.visualOutput" ToggleType="CheckBox"/>
+            <NativeMenuItem Header="{app:T 'main.mapping'}" app:Commands.Id="view.mapping" ToggleType="CheckBox"/>
             <NativeMenuItem Header="{app:T 'main.connect_phone'}" app:Commands.Id="view.connectPhone"/>
             <NativeMenuItem Header="{app:T 'main.articulation_maps'}" app:Commands.Id="view.articulationMaps"/>
             <NativeMenuItemSeparator/>

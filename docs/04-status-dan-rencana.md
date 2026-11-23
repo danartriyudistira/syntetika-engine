@@ -282,6 +282,19 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Syphon discovery tetap hidup saat hidden: server dibuat ringan, dan render otomatis
   berjalan begitu ada klien yang menerima.
 
+## 7e. Menu View → Projection Mapping (23 Nov)
+
+- Menu **View → Projection Mapping** (checkbox) membuka window **openVJ Output mapping**:
+  pilih input, atur transformasi output, slice/warp/mask untuk proyektor.
+- State dua arah: `vizMapping` dari Nota, `vizMappingState` dari openVJ; centang menu ikut
+  berubah saat window ditutup lewat X, dan permintaan terakhir dikirim ulang saat engine
+  reconnect.
+- Window mapping langsung di-raise dan mendapat fokus saat dibuka.
+- Render otomatis aktif selama window mapping terbuka (kebutuhan canvas/preview);
+  saat ditutup dan editor/output juga hidden, engine kembali hemat.
+- Bukti uji: menu → window “openVJ Output mapping” + centang ✓; X → tertutup + centang mati;
+  kill engine → mapping terbuka lagi otomatis; log `mapping window shown/hidden`.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

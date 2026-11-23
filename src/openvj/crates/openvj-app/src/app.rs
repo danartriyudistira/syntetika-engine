@@ -754,6 +754,7 @@ impl App {
                 }
                 NotaCommand::VizOutput { show } => self.show_output_window(out, show),
                 NotaCommand::VizUi { show } => self.show_ui_window(ui, show),
+                NotaCommand::VizMapping { show } => self.show_mapping_window(show),
                 NotaCommand::VizCatalog { kind, query, seq } => {
                     let body = crate::viz::catalog(&kind, &query);
                     let line = serde_json::json!({

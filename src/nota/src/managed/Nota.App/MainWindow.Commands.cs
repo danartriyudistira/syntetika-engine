@@ -78,6 +78,7 @@ public partial class MainWindow
         B("view.mixerFloat", () => SetMixerFloating(!MixerFloating));
         B("view.openvj", ToggleOpenVjWindow);
         B("view.visualOutput", ToggleVisualOutput);
+        B("view.mapping", ToggleMapping);
         B("view.connectPhone", ShowConnectPhone);
         B("view.articulationMaps", ShowArticulationMaps);
         B("view.toggleBrowser", () => OnMenuToggleBrowser(this, e));

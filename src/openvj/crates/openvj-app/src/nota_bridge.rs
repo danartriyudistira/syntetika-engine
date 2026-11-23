@@ -14,6 +14,7 @@
 //!   {"t":"stopAll"}
 //!   {"t":"vizOutput","show":true}
 //!   {"t":"vizUi","show":true}
+//!   {"t":"vizMapping","show":true}
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -66,6 +67,8 @@ pub enum Command {
     VizOutput { show: bool },
     /// Show or hide the editor window (Nota's View ▸ OpenVJ).
     VizUi { show: bool },
+    /// Show or hide the output mapping window (Nota's View ▸ Projection Mapping).
+    VizMapping { show: bool },
 }
 
 pub struct NotaBridge {
@@ -322,6 +325,10 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
         Some("vizUi") => {
             let show = v.get("show").and_then(|x| x.as_bool()).unwrap_or(true);
             let _ = tx.send(Command::VizUi { show });
+        }
+        Some("vizMapping") => {
+            let show = v.get("show").and_then(|x| x.as_bool()).unwrap_or(true);
+            let _ = tx.send(Command::VizMapping { show });
         }
         Some("vizCatalog") => {
             let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("generators").to_owned();

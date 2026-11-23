@@ -69,6 +69,7 @@ impl App {
 
     /// The mapping window was opened or closed.
     pub fn mapping_shown(&mut self, open: bool) {
+        let changed = self.mapping_window_open != open;
         self.mapping_window_open = open;
         if open {
             self.ensure_setup();
@@ -78,6 +79,25 @@ impl App {
             self.mapping.editor.release();
         }
         self.mapping_view_dirty = true;
+        if changed {
+            eprintln!("openVJ: mapping window {}", if open { "shown" } else { "hidden" });
+            // Nota's View ▸ Projection Mapping menu mirrors this, including a close from here.
+            if let Some(bridge) = &self.nota {
+                bridge.send(&format!("{{\"t\":\"vizMappingState\",\"open\":{open}}}"));
+            }
+        }
+    }
+
+    /// Shows or hides the mapping window when Nota drives it.
+    pub fn show_mapping_window(&mut self, show: bool) {
+        let Some(win) = self.mapping_ui.upgrade() else { return };
+        if show {
+            let _ = win.show();
+            win.window().with_winit_window(|w| w.focus_window());
+        } else {
+            let _ = win.hide();
+        }
+        self.mapping_shown(show);
     }
 
     /// Editing starts from a passthrough screen when nothing is mapped yet, with the inputs laid out

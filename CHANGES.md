@@ -45,6 +45,9 @@ diffs are in `patches/`.
 - **Background engine**: Nota starts openVJ with its editor hidden, and View → **OpenVJ**
   shows or hides that window. Showing activates and raises it once (it is not kept above
   other apps), and closing the editor hides it instead of quitting the engine.
+- **Projection mapping**: View → **Projection Mapping** opens openVJ's mapping window
+  (input selection, output transformation, warp/slice/mask). Its checkmark follows the
+  engine's `vizMappingState` reports and the request is replayed on reconnect.
 - **Idle cost**: while the editor, output and mapping windows are hidden (and no Syphon client
   is receiving), openVJ skips the GPU frame, the UI sync and the redraw work, and drops its
   tick to 10 fps. Sharing the screen (output or editor) returns to 60 fps immediately.

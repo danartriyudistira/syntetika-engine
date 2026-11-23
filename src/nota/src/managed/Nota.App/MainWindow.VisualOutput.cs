@@ -18,6 +18,7 @@ public partial class MainWindow
 {
     private bool _visualOutputShown;
     private bool _openVjShown;
+    private bool _mappingShown;
     private bool _visualOutputAttached;
 
     private void ToggleVisualOutput()
@@ -73,6 +74,31 @@ public partial class MainWindow
         if (MenuItemFor("view.openvj") is { } mi) mi.IsChecked = _openVjShown;
     }
 
+    private void ToggleMapping()
+    {
+        if (VisualBridge.Current is not { } bridge)
+        {
+            if (_vm is not null) _vm.StatusText = Loc.T("main.visual_output_offline");
+            return;
+        }
+        if (!bridge.Connected && VisualEngineProcess.Current is not { IsAvailable: true })
+        {
+            if (_vm is not null) _vm.StatusText = Loc.T("main.visual_output_offline");
+            return;
+        }
+        _mappingShown = !_mappingShown;
+        bridge.VizMapping(_mappingShown);
+        SyncMappingMenu();
+        if (_vm is not null)
+            _vm.StatusText = Loc.T(_mappingShown ? "main.mapping_shown" : "main.mapping_hidden");
+        if (_mappingShown && !bridge.Connected) VisualEngineProcess.Current?.Start();
+    }
+
+    private void SyncMappingMenu()
+    {
+        if (MenuItemFor("view.mapping") is { } mi) mi.IsChecked = _mappingShown;
+    }
+
     /// <summary>Wires the menu checkmarks to the engine's reports and applies the test hooks.</summary>
     private void AttachVisualOutputState()
     {
@@ -82,6 +108,7 @@ public partial class MainWindow
         {
             _visualOutputShown = bridge.OutputOpen;
             _openVjShown = bridge.UiOpen;
+            _mappingShown = bridge.MappingOpen;
             bridge.OutputOpenChanged += open => Dispatcher.UIThread.Post(() =>
             {
                 _visualOutputShown = open;
@@ -92,9 +119,15 @@ public partial class MainWindow
                 _openVjShown = open;
                 SyncOpenVjMenu();
             });
+            bridge.MappingOpenChanged += open => Dispatcher.UIThread.Post(() =>
+            {
+                _mappingShown = open;
+                SyncMappingMenu();
+            });
         }
         SyncVisualOutputMenu();
         SyncOpenVjMenu();
+        SyncMappingMenu();
 
         if (Environment.GetEnvironmentVariable("NOTA_VISUAL_OUTPUT_TEST") is { Length: > 0 } mode)
         {
@@ -107,6 +140,12 @@ public partial class MainWindow
             DispatcherTimer.RunOnce(ToggleOpenVjWindow, TimeSpan.FromSeconds(6));
             if (uiMode != "1")
                 DispatcherTimer.RunOnce(ToggleOpenVjWindow, TimeSpan.FromSeconds(9));
+        }
+        if (Environment.GetEnvironmentVariable("NOTA_MAPPING_TEST") is { Length: > 0 } mappingMode)
+        {
+            DispatcherTimer.RunOnce(ToggleMapping, TimeSpan.FromSeconds(6));
+            if (mappingMode != "1")
+                DispatcherTimer.RunOnce(ToggleMapping, TimeSpan.FromSeconds(9));
         }
     }
 }

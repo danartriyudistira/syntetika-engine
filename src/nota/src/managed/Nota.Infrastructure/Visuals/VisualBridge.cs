@@ -18,8 +18,10 @@
 //                    {"t":"stopAll"}
 //                    {"t":"vizOutput","show":true}
 //                    {"t":"vizUi","show":true}
+//                    {"t":"vizMapping","show":true}
 //   visual -> Nota : {"t":"vizOut","open":true}
 //                    {"t":"vizUiState","open":true}
+//                    {"t":"vizMappingState","open":true}
 //
 // No audio ever crosses this channel; only musical time and commands.
 
@@ -75,6 +77,10 @@ public sealed class VisualBridge : IDisposable
     private volatile bool _uiOpen;
     /// <summary>Last editor show/hide Nota asked for; replayed on reconnect.</summary>
     private volatile bool _uiWanted;
+    /// <summary>openVJ reported that its projection-mapping window is on screen (`vizMappingState`).</summary>
+    private volatile bool _mappingOpen;
+    /// <summary>Last mapping show/hide Nota asked for; replayed on reconnect.</summary>
+    private volatile bool _mappingWanted;
 
     /// <summary>Whether the visual engine's output window is open, as it last reported.</summary>
     public bool OutputOpen => _outputOpen;
@@ -82,11 +88,17 @@ public sealed class VisualBridge : IDisposable
     /// <summary>Whether openVJ's editor window is open, as it last reported.</summary>
     public bool UiOpen => _uiOpen;
 
+    /// <summary>Whether openVJ's projection-mapping window is open, as it last reported.</summary>
+    public bool MappingOpen => _mappingOpen;
+
     /// <summary>Raised on a bridge thread when the output window opens or closes.</summary>
     public event Action<bool>? OutputOpenChanged;
 
     /// <summary>Raised on a bridge thread when openVJ's editor window opens or closes.</summary>
     public event Action<bool>? UiOpenChanged;
+
+    /// <summary>Raised on a bridge thread when the mapping window opens or closes.</summary>
+    public event Action<bool>? MappingOpenChanged;
 
     public VisualBridge(NotaEngine engine) => _engine = engine;
 
@@ -479,6 +491,7 @@ public sealed class VisualBridge : IDisposable
             SetOutputOpen(false);
             if (_outputWanted) Send("{\"t\":\"vizOutput\",\"show\":true}");
             if (_uiWanted) Send("{\"t\":\"vizUi\",\"show\":true}");
+            if (_mappingWanted) Send("{\"t\":\"vizMapping\",\"show\":true}");
             var reader = new Thread(() => ReadLoop(client)) { IsBackground = true, Name = "visual-bridge-read" };
             reader.Start();
             if (!_loggedFirstClient)
@@ -554,12 +567,20 @@ public sealed class VisualBridge : IDisposable
         Send($"{{\"t\":\"vizUi\",\"show\":{(show ? "true" : "false")}}}");
     }
 
+    /// <summary>Shows or hides openVJ's projection-mapping window; replayed on reconnect.</summary>
+    public void VizMapping(bool show)
+    {
+        _mappingWanted = show;
+        Send($"{{\"t\":\"vizMapping\",\"show\":{(show ? "true" : "false")}}}");
+    }
+
     /// <summary>Handles messages about the engine itself; true when consumed here.</summary>
     private bool HandleControlMessage(string line)
     {
         bool maybeOutput = line.Contains("\"vizOut\"", StringComparison.Ordinal);
         bool maybeUi = line.Contains("\"vizUiState\"", StringComparison.Ordinal);
-        if (!maybeOutput && !maybeUi) return false;
+        bool maybeMapping = line.Contains("\"vizMappingState\"", StringComparison.Ordinal);
+        if (!maybeOutput && !maybeUi && !maybeMapping) return false;
         try
         {
             using var doc = JsonDocument.Parse(line);
@@ -581,6 +602,13 @@ public sealed class VisualBridge : IDisposable
                 AppLog($"[viz<-] vizUiState open={open}");
                 return true;
             }
+            if (kind == "vizMappingState")
+            {
+                _mappingWanted = open;
+                SetMappingOpen(open);
+                AppLog($"[viz<-] vizMappingState open={open}");
+                return true;
+            }
             return false;
         }
         catch (JsonException) { return false; }
@@ -600,6 +628,14 @@ public sealed class VisualBridge : IDisposable
         _uiOpen = open;
         try { UiOpenChanged?.Invoke(open); }
         catch (Exception ex) { AppLog("editor state handler failed: " + ex.Message); }
+    }
+
+    private void SetMappingOpen(bool open)
+    {
+        if (_mappingOpen == open) return;
+        _mappingOpen = open;
+        try { MappingOpenChanged?.Invoke(open); }
+        catch (Exception ex) { AppLog("mapping state handler failed: " + ex.Message); }
     }
 
     private long NextSeq() => Interlocked.Increment(ref _seq);
@@ -789,6 +825,7 @@ public sealed class VisualBridge : IDisposable
         _client = null;
         SetOutputOpen(false);
         SetUiOpen(false);
+        SetMappingOpen(false);
     }
 
     private static void AppLog(string text) => Console.Error.WriteLine("[visual-bridge] " + text);
