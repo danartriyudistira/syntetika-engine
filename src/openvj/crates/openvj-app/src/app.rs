@@ -24,6 +24,7 @@ use openvj_media::hap::{self, HapDecoder, HapFormat, HapFrame};
 use openvj_media::live::{self, CameraDevice, LiveSource, LiveStatus, LiveStream, SyphonServer};
 use openvj_media::{LoadedMedia, VideoDecoder, VideoInfo};
 use openvj_render::{BcFrame, BcLayout, Engine, THUMB_SIZE};
+use slint::winit_030::WinitWindowAccessor;
 use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use crate::browser::{self, Entry};
@@ -644,6 +645,9 @@ impl App {
     fn show_ui_window(&mut self, ui: &MainWindow, show: bool) {
         if show {
             let _ = ui.show();
+            // Raise and activate the window once, so checking View ▸ OpenVJ visibly pops it
+            // up instead of leaving it behind Nota. It is not always-on-top afterwards.
+            ui.window().with_winit_window(|w| w.focus_window());
             ui.invoke_focus_keys();
         } else {
             ui.window().set_fullscreen(false);

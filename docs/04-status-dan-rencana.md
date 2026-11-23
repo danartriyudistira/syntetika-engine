@@ -258,7 +258,9 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 
 - Nota menjalankan `syntetika-visual` dengan `SYNTETIKA_UI_HIDDEN=1`; window editor tidak
   tampil saat start.
-- **View → OpenVJ** menampilkan/menyembunyikan editor; tombol X hanya menyembunyikan selama
+- **View → OpenVJ** menampilkan/menyembunyikan editor; saat ditampilkan, window
+  **di-raise dan diaktifkan sekali** sehingga langsung terlihat, tetapi **tidak** selalu
+  di atas aplikasi lain (tidak selalu-on-top). Tombol X hanya menyembunyikan selama
   dijalankan Nota, engine tetap hidup dan bridge tetap tersambung.
 - State dikirim dua arah: `vizUi` dari Nota, `vizUiState` dari openVJ; centang menu ikut
   berubah walau window ditutup dari openVJ.

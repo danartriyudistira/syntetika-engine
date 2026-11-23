@@ -35,8 +35,9 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   extracted into the slot and its picture becomes the slot's visual, beat-synced to the clip.
 - **Always-on-top visual output** — View → Visual Output opens openVJ's output window above
   every other app, ready for a projector or second screen.
-- **Background visual engine** — openVJ runs hidden by default; View → OpenVJ shows or hides
-  its editor, and while nothing is on screen it stops GPU rendering and slows its tick.
+- **Background visual engine** — openVJ runs hidden by default; View → OpenVJ raises its
+  editor once (not always-on-top), and while nothing is on screen it stops GPU rendering and
+  slows its tick.
 - **Persistence** — visuals are stored in the project bundle (`visuals/composition.json`) and
   restored with the track identity map.
 - **Performance work** — static grid thumbnails, pipeline prewarm, and no GPU readback during
