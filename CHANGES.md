@@ -83,8 +83,12 @@ diffs are in `patches/`.
   PLL clock smoothing, stopped-transport freeze.
 - **Measured performance**: hidden editor/output ≈2–3% CPU (folder watchers at 5 s, 10 fps
   tick), output-only ≈24% at 60 fps, editor+output ≈48% (the editor window's renderer
-  dominates; engine render stays <2 ms). The output-only path skips the editor model sync, and
-  editor property sync is capped at 30 fps.
+  dominates; engine render stays <2 ms). The output-only path skips the editor model sync and
+  preview target, and editor property sync is capped at 30 fps.
+- **Visual performance profiles**: View → Visual Performance offers Eco (30 fps, preview 15),
+  Balanced (45/30) and Quality (60/60). The profile is saved in Nota and applied live to the
+  visual engine; a hidden editor renders no preview at all. Measured on M1: output-only
+  Quality ~24% CPU, Eco ~6.5%; editor+output Quality ~48%, Eco ~9.3% (30 fps, drops 0).
 
 ## openVJ fork
 

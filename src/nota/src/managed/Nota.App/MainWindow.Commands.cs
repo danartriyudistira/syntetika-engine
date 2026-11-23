@@ -79,6 +79,9 @@ public partial class MainWindow
         B("view.openvj", ToggleOpenVjWindow);
         B("view.visualOutput", ToggleVisualOutput);
         B("view.mapping", ToggleMapping);
+        B("view.visualEco", () => SetVisualPerformance(0));
+        B("view.visualBalanced", () => SetVisualPerformance(1));
+        B("view.visualQuality", () => SetVisualPerformance(2));
         B("view.connectPhone", ShowConnectPhone);
         B("view.articulationMaps", ShowArticulationMaps);
         B("view.toggleBrowser", () => OnMenuToggleBrowser(this, e));

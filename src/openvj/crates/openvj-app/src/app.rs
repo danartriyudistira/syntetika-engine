@@ -4,6 +4,7 @@
 //! calls [`App::frame`] to advance playback, feed video frames and render on the GPU.
 //! Decoding and media loading happen on background threads.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -45,6 +46,32 @@ mod mapping_ui;
 pub use mapping_ui::ScreenOutputs;
 
 const _: () = assert!(BAND_COUNT == openvj_audio::BAND_COUNT, "core and audio band counts differ");
+
+/// FPS and preview cadence of the three performance profiles.
+fn performance_fps(mode: i32) -> u32 {
+    match mode {
+        0 => 30,
+        1 => 45,
+        _ => 60,
+    }
+}
+
+fn performance_preview_secs(mode: i32) -> f64 {
+    match mode {
+        0 => 1.0 / 15.0,
+        1 => 1.0 / 30.0,
+        _ => 0.0,
+    }
+}
+
+/// `SYNTHETIKA_FPS` opts into a profile; macOS defaults to Quality (60).
+fn default_performance_mode() -> i32 {
+    match std::env::var("SYNTHETIKA_FPS").ok().and_then(|v| v.parse::<u32>().ok()) {
+        Some(30) => 0,
+        Some(45) => 1,
+        _ => 2,
+    }
+}
 
 /// Where a parameter lives; must match `Scope` in state.slint. Parameters are addressed
 /// as (scope, owner, index): the owner is an effect index for the fx scopes and a layer
@@ -353,6 +380,12 @@ pub struct App {
     /// The output frame was already sent while the editor was hidden; push the textures to
     /// the UI on the first frame after it opens.
     ui_images_pending: bool,
+    /// 0 Eco (30 fps / preview 15), 1 Balanced (45 / 30), 2 Quality (60 / 60).
+    performance_mode: i32,
+    /// The render timer reads this for its target interval (Nota can change it live).
+    target_fps: Rc<Cell<u32>>,
+    /// Frames over 1.5× the target interval, logged and reset once per second.
+    dropped_frames: u32,
     /// The output window's picture must be fetched again after the next mapped frame.
     mapping_dirty: bool,
     /// The output mapping (screens, slices, masks) the output window shows.
@@ -392,9 +425,31 @@ pub struct App {
 }
 
 impl App {
+    /// The render timer reads this for its visible-window target interval.
+    pub fn fps_target(&self) -> Rc<Cell<u32>> {
+        Rc::clone(&self.target_fps)
+    }
+
+    /// Nota's Visual Performance menu: Eco (30/15), Balanced (45/30), Quality (60/60).
+    pub fn performance_mode_picked(&mut self, mode: i32) {
+        self.performance_mode = mode.clamp(0, 2);
+        self.target_fps.set(performance_fps(self.performance_mode));
+        self.engine.set_preview_interval(performance_preview_secs(self.performance_mode));
+        eprintln!(
+            "openVJ: performance mode {} ({} fps, preview {} fps)",
+            self.performance_mode,
+            performance_fps(self.performance_mode),
+            match self.performance_mode { 0 => 15, 1 => 30, _ => 60 }
+        );
+    }
+
     pub fn new(engine: Engine, comp: Composition) -> Self {
         let (load_tx, load_rx) = mpsc::channel();
         let browser_dir = browser::default_dir();
+        let mut engine = engine;
+        let performance_mode = default_performance_mode();
+        engine.set_preview_interval(performance_preview_secs(performance_mode));
+        let target_fps = Rc::new(Cell::new(performance_fps(performance_mode)));
         let syphon_out = SyphonOutput::new(engine.device(), engine.queue());
         let mut app = Self {
             comp: Composition::default(),
@@ -504,6 +559,9 @@ impl App {
             browser_dirty: true,
             images_dirty: true,
             ui_images_pending: false,
+            performance_mode,
+            target_fps,
+            dropped_frames: 0,
             frames: 0,
             fps_since: Instant::now(),
             dbg_max_dt: 0.0,
@@ -814,6 +872,7 @@ impl App {
                 NotaCommand::VizOutput { show } => self.show_output_window(out, show),
                 NotaCommand::VizUi { show } => self.show_ui_window(ui, show),
                 NotaCommand::VizMapping { show } => self.show_mapping_window(show),
+                NotaCommand::VizPerf { mode } => self.performance_mode_picked(mode),
                 NotaCommand::VizSlotTiming { layer, col, beats, bpm, looped, start } => {
                     if beats > 0.0
                         && let Some(clip) = self.comp.clip_mut(layer, col)
@@ -1687,16 +1746,25 @@ impl App {
         for clip in self.comp.layers.iter_mut().flat_map(|l| l.clips.iter_mut().flatten().chain(l.held.iter_mut())) {
             clip.apply_macros(&inputs);
         }
-        let preview = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id);
-        // Keep the Syphon server discoverable while hidden; a receiving client then forces
-        // rendering again instead of leaving it with a frozen frame.
-        self.syphon_out.before_render(&mut self.engine);
         let ui_visible = self.ui_open && !ui.window().is_minimized();
         // `output_open` also drives the extra mapped screens, so a minimized main output
         // window must not stop rendering for a fullscreen output on another display.
         let output_visible = self.output_open;
+        // The preview monitor only exists in the editor: do not render it when the editor is
+        // hidden (the output-only path).
+        let preview = if ui_visible {
+            self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id)
+        } else {
+            None
+        };
+        // Keep the Syphon server discoverable while hidden; a receiving client then forces
+        // rendering again instead of leaving it with a frozen frame.
+        self.syphon_out.before_render(&mut self.engine);
         let render_needed =
             ui_visible || output_visible || self.mapping_window_open || self.syphon_out.is_receiving();
+        if render_needed && dt as f64 > 1.5 / self.target_fps.get().max(15) as f64 {
+            self.dropped_frames = self.dropped_frames.saturating_add(1);
+        }
 
         // Automix and its own composition keep advancing while nothing is on screen; only the
         // GPU frame is skipped.
@@ -1787,8 +1855,9 @@ impl App {
         if elapsed >= 1.0 {
             let fps = self.frames as f64 / elapsed;
             eprintln!(
-                "openVJ: fps={fps:.1} max_dt={:.1}ms max_render={:.1}ms bridge={} render={} slew={:.4} beat",
-                self.dbg_max_dt, self.dbg_max_render_ms, self.nota.is_some(),
+                "openVJ: fps={fps:.1} max_dt={:.1}ms max_render={:.1}ms passes={} drops={} bridge={} render={} slew={:.4} beat",
+                self.dbg_max_dt, self.dbg_max_render_ms, self.engine.last_pass_count(),
+                self.dropped_frames, self.nota.is_some(),
                 if render_needed { "on" } else { "off" }, self.nota_slew_max
             );
             if ui_visible {
@@ -1798,6 +1867,7 @@ impl App {
             self.fps_since = Instant::now();
             self.dbg_max_dt = 0.0;
             self.dbg_max_render_ms = 0.0;
+            self.dropped_frames = 0;
             self.nota_slew_max = 0.0;
         }
         // The output renders at 60 fps; the editor's models and redraws only need 30 fps. The

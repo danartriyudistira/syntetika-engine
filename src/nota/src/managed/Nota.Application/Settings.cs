@@ -97,6 +97,9 @@ public sealed class Settings
     /// window, true = its own window. Toggled from the panel / window and View → Mixer in its
     /// own window.</summary>
     public bool MixerFloating { get; set; }
+    /// <summary>openVJ render profile: 0 Eco (30 fps, preview 15), 1 Balanced (45/30), 2 Quality
+    /// (60/60). Controlled by View → Visual Performance.</summary>
+    public int VisualPerformanceMode { get; set; } = 2;
     /// <summary>The Mixer was shown when the user last showed or hid it; restored on launch
     /// (specs/054). Quitting the app does not count as hiding it.</summary>
     public bool MixerShown { get; set; }

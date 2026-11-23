@@ -15,6 +15,7 @@
 //!   {"t":"vizOutput","show":true}
 //!   {"t":"vizUi","show":true}
 //!   {"t":"vizMapping","show":true}
+//!   {"t":"vizPerf","mode":2}
 //!   {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"loop":true}
 //!   {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5}
 //!   {"t":"vizCopy","fromLayer":0,"fromCol":0,"toLayer":0,"toCol":1,"move":false}
@@ -73,6 +74,8 @@ pub enum Command {
     VizUi { show: bool },
     /// Show or hide the output mapping window (Nota's View ▸ Projection Mapping).
     VizMapping { show: bool },
+    /// Performance profile from Nota: 0 Eco 30, 1 Balanced 45, 2 Quality 60.
+    VizPerf { mode: i32 },
     /// The audio clip's loop length/state changed: retime the visual in that slot.
     VizSlotTiming { layer: usize, col: usize, beats: f32, bpm: f32, looped: bool, start: f32 },
     /// The audio slot's local beat phase, so the video's start/loop seam follows it.
@@ -346,6 +349,10 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
         Some("vizMapping") => {
             let show = v.get("show").and_then(|x| x.as_bool()).unwrap_or(true);
             let _ = tx.send(Command::VizMapping { show });
+        }
+        Some("vizPerf") => {
+            let mode = v.get("mode").and_then(|x| x.as_i64()).unwrap_or(2) as i32;
+            let _ = tx.send(Command::VizPerf { mode });
         }
         Some("vizSlotTiming") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;

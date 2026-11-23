@@ -200,6 +200,7 @@ fn main() -> Result<()> {
     if let Ok(addr) = std::env::var("OPENVJ_NOTA") {
         app.borrow_mut().set_nota_bridge(nota_bridge::NotaBridge::connect(&addr));
     }
+    let fps_target = app.borrow().fps_target();
 
     #[cfg(target_os = "macos")]
     let ui = titlebar::hidden(MainWindow::new)?;
@@ -925,6 +926,7 @@ fn main() -> Result<()> {
     {
         let (app, w, o) = (app.clone(), w.clone(), o.clone());
         let ticker = Rc::clone(&timer);
+        let fps_target = Rc::clone(&fps_target);
         let snapshot = std::env::var_os("OPENVJ_SNAPSHOT").map(PathBuf::from);
         let mut frame_count = 0u32;
         let mut interval_ms = 16u64;
@@ -974,8 +976,8 @@ fn main() -> Result<()> {
                 }
             }
             // Nothing on screen (editor and output hidden, no Syphon receiver): 10 fps is
-            // plenty for the clock and the bridge. A shown window returns to 60 fps at once.
-            let want = if visible { 16 } else { 100 };
+            // plenty for the clock and the bridge. A shown window uses the chosen profile.
+            let want = if visible { (1000 / fps_target.get().max(15)) as u64 } else { 100 };
             if want != interval_ms {
                 ticker.set_interval(Duration::from_millis(want));
                 interval_ms = want;

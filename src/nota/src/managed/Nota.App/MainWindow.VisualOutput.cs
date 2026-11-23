@@ -99,6 +99,32 @@ public partial class MainWindow
         if (MenuItemFor("view.mapping") is { } mi) mi.IsChecked = _mappingShown;
     }
 
+    private void SetVisualPerformance(int mode)
+    {
+        mode = Math.Clamp(mode, 0, 2);
+        if (_vm is not null)
+        {
+            _vm.Settings.Current.VisualPerformanceMode = mode;
+            _vm.Settings.Save();
+            _vm.StatusText = Loc.T(mode switch
+            {
+                0 => "main.visual_eco",
+                1 => "main.visual_balanced",
+                _ => "main.visual_quality",
+            });
+        }
+        VisualBridge.Current?.VizPerf(mode);
+        SyncVisualPerformanceMenu();
+    }
+
+    private void SyncVisualPerformanceMenu()
+    {
+        int mode = _vm?.Settings.Current.VisualPerformanceMode ?? 2;
+        if (MenuItemFor("view.visualEco") is { } eco) eco.IsChecked = mode == 0;
+        if (MenuItemFor("view.visualBalanced") is { } balanced) balanced.IsChecked = mode == 1;
+        if (MenuItemFor("view.visualQuality") is { } quality) quality.IsChecked = mode == 2;
+    }
+
     /// <summary>After a track reorder/add/remove, point the OpenVJ tab at the same slot's new layer.</summary>
     private void RefreshVisualTab()
     {
@@ -142,6 +168,8 @@ public partial class MainWindow
         SyncVisualOutputMenu();
         SyncOpenVjMenu();
         SyncMappingMenu();
+        SyncVisualPerformanceMenu();
+        VisualBridge.Current?.VizPerf(_vm?.Settings.Current.VisualPerformanceMode ?? 2);
 
         if (Environment.GetEnvironmentVariable("NOTA_VISUAL_OUTPUT_TEST") is { Length: > 0 } mode)
         {

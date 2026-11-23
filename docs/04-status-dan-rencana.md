@@ -381,6 +381,20 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Optimasi lanjutan yang masih terbuka: render direct texture ke output window (hindari pass
   FemtoVG kedua), dan menurunkan render editor saat output tampil.
 
+## 7l. Visual Performance profiles (23 Nov)
+
+- Menu **View → Visual Performance**: Eco (30 fps / preview 15), Balanced (45/30), Quality
+  (60/60). Pilihan disimpan di `settings.json` Nota dan dikirim ke engine lewat `vizPerf`.
+- Engine memakai target FPS dinamis untuk timer window terlihat; saat hidden tetap 10 fps.
+- Preview monitor hanya dirender jika editor terlihat; saat editor visible, preview mengikuti
+  interval profile. Pass preview tidak lagi menyala saat output-only.
+- Telemetry log per detik: `fps`, `max_dt`, `max_render`, `passes`, `drops`.
+- Bukti uji yang akan diukur: Quality vs Eco pada output-only dan editor; profil harus
+  bertahan setelah restart dan tetap selaras dengan phase/trim.
+- Hasil ukur (M1): Quality output-only ~24,3%, editor+output ~48,5%; **Eco output-only 6,5%**,
+  **Eco editor+output 9,3%**; fps 29–30, `max_render` ~1 ms, `passes=2`, `drops=0`. Profil Eco
+  bertahan setelah restart (`VisualPerformanceMode` di settings.json).
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

@@ -82,6 +82,15 @@
             <NativeMenuItem Header="{app:T 'main.mixer_in_its_own_window'}" app:Commands.Id="view.mixerFloat" ToggleType="CheckBox"/>
             <NativeMenuItem Header="{app:T 'common.openvj'}" app:Commands.Id="view.openvj" ToggleType="CheckBox"/>
             <NativeMenuItem Header="{app:T 'main.visual_output'}" app:Commands.Id="view.visualOutput" ToggleType="CheckBox"/>
+            <NativeMenuItem Header="{app:T 'main.visual_performance'}">
+              <NativeMenuItem.Menu>
+                <NativeMenu>
+                  <NativeMenuItem Header="{app:T 'main.visual_eco'}" app:Commands.Id="view.visualEco" ToggleType="CheckBox"/>
+                  <NativeMenuItem Header="{app:T 'main.visual_balanced'}" app:Commands.Id="view.visualBalanced" ToggleType="CheckBox"/>
+                  <NativeMenuItem Header="{app:T 'main.visual_quality'}" app:Commands.Id="view.visualQuality" ToggleType="CheckBox"/>
+                </NativeMenu>
+              </NativeMenuItem.Menu>
+            </NativeMenuItem>
             <NativeMenuItem Header="{app:T 'main.mapping'}" app:Commands.Id="view.mapping" ToggleType="CheckBox"/>
             <NativeMenuItem Header="{app:T 'main.connect_phone'}" app:Commands.Id="view.connectPhone"/>
             <NativeMenuItem Header="{app:T 'main.articulation_maps'}" app:Commands.Id="view.articulationMaps"/>

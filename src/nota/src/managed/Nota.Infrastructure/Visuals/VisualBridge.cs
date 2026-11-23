@@ -19,6 +19,7 @@
 //                    {"t":"vizOutput","show":true}
 //                    {"t":"vizUi","show":true}
 //                    {"t":"vizMapping","show":true}
+//                    {"t":"vizPerf","mode":2}
 //                    {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"bpm":120,"loop":true,"start":10}
 //                    {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5,"beat":12.25}
 //                    {"t":"vizCopy","fromLayer":0,"fromCol":0,"toLayer":0,"toCol":1,"move":false}
@@ -85,6 +86,8 @@ public sealed class VisualBridge : IDisposable
     private volatile bool _slotTimingDirty;
     /// <summary>A new engine connected while audio may be playing: launch its visuals again.</summary>
     private volatile bool _resumePending;
+    /// <summary>Last visual performance profile (0 Eco, 1 Balanced, 2 Quality); replayed on connect.</summary>
+    private volatile int _perfMode = 2;
     private long _slotTimingAt;
     /// <summary>openVJ reported that its output window is on screen (`vizOut`).</summary>
     private volatile bool _outputOpen;
@@ -665,6 +668,7 @@ public sealed class VisualBridge : IDisposable
             _slotTimingDirty = true;
             _resumePending = true;
             Send("{\"t\":\"hello\",\"v\":2}");
+            Send($"{{\"t\":\"vizPerf\",\"mode\":{_perfMode}}}");
             // A fresh engine starts with its output window hidden. Restore the state the user
             // asked for, so "View ▸ Visual Output" survives an engine restart.
             SetOutputOpen(false);
@@ -757,6 +761,13 @@ public sealed class VisualBridge : IDisposable
     {
         _mappingWanted = show;
         Send($"{{\"t\":\"vizMapping\",\"show\":{(show ? "true" : "false")}}}");
+    }
+
+    /// <summary>openVJ performance profile: 0 Eco 30, 1 Balanced 45, 2 Quality 60.</summary>
+    public void VizPerf(int mode)
+    {
+        _perfMode = Math.Clamp(mode, 0, 2);
+        Send($"{{\"t\":\"vizPerf\",\"mode\":{_perfMode.ToString(CultureInfo.InvariantCulture)}}}");
     }
 
     /// <summary>Copy or move a slot's visual with its Session clip (copy/paste, duplicate, drag).</summary>
