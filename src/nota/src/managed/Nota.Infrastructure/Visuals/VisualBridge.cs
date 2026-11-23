@@ -83,6 +83,8 @@ public sealed class VisualBridge : IDisposable
     private readonly Dictionary<(int TrackId, int Scene), (double Beats, double Bpm, bool Loop, double Start)> _slotTiming = new();
     /// <summary>A new engine connected: forget what was sent so every slot syncs again.</summary>
     private volatile bool _slotTimingDirty;
+    /// <summary>A new engine connected while audio may be playing: launch its visuals again.</summary>
+    private volatile bool _resumePending;
     private long _slotTimingAt;
     /// <summary>openVJ reported that its output window is on screen (`vizOut`).</summary>
     private volatile bool _outputOpen;
@@ -302,6 +304,34 @@ public sealed class VisualBridge : IDisposable
             }
         }
         catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>After a (re)connect, launches the visual of every Session slot whose audio is
+    /// already playing. Without this a restarted engine stays blank until the next launch.</summary>
+    public void ResumePlayingVisuals()
+    {
+        if (!_resumePending || !Connected) return;
+        _resumePending = false;
+        try
+        {
+            var uids = CurrentLayoutUids();
+            var layerOf = new Dictionary<string, int>(uids.Count, StringComparer.Ordinal);
+            for (int i = 0; i < uids.Count; i++) layerOf[uids[i]] = i;
+            double at = Math.Round(_engine.PositionBeats, 6);
+            for (int i = 0; i < _engine.TrackCount; i++)
+            {
+                if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type is not (0 or 1)) continue;
+                if (!layerOf.TryGetValue(Nota.Application.TrackUids.UidFor(ti.Id), out int layer)) continue;
+                for (int scene = 0; scene < _engine.SceneCount; scene++)
+                    if (_engine.SessionSlotState(ti.Id, scene) == 3)
+                    {
+                        Send($"{{\"t\":\"slot\",\"layer\":{layer},\"col\":{scene},\"atBeat\":{Num(at)}}}");
+                        AppLog($"[resume] slot {ti.Id}:{scene} layer={layer}");
+                        break;
+                    }
+            }
+        }
+        catch (ObjectDisposedException) { _resumePending = true; }
     }
 
     /// <summary>Audio loop length and loop state of every non-empty audio slot, so a video's
@@ -633,10 +663,14 @@ public sealed class VisualBridge : IDisposable
             _layoutDirty = true;
             _clientEpoch++;
             _slotTimingDirty = true;
+            _resumePending = true;
             Send("{\"t\":\"hello\",\"v\":2}");
             // A fresh engine starts with its output window hidden. Restore the state the user
             // asked for, so "View ▸ Visual Output" survives an engine restart.
             SetOutputOpen(false);
+            // A restarted visual engine starts with an empty/demo composition. Reload the saved
+            // visuals for the open project before layout/timing/resume reach it.
+            if (_projectDir is { Length: > 0 } dir) VizLoad(dir);
             if (_outputWanted) Send("{\"t\":\"vizOutput\",\"show\":true}");
             if (_uiWanted) Send("{\"t\":\"vizUi\",\"show\":true}");
             if (_mappingWanted) Send("{\"t\":\"vizMapping\",\"show\":true}");
@@ -924,8 +958,11 @@ public sealed class VisualBridge : IDisposable
         if (_projectDir is { Length: > 0 } dir) VizSave(dir);
     }
 
-    public void VizClear(int layer, int scene)
-        => Send($"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{scene}}}");
+    /// <summary>Clears a slot's visual; with atBeat, waits for that beat (audio stop).</summary>
+    public void VizClear(int layer, int scene, double? atBeat = null)
+        => Send(atBeat is { } b
+            ? $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{scene},\"atBeat\":{Num(b)}}}"
+            : $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{scene}}}");
 
     public void VizCatalog(string kind, string query, long tag)
         => Send($"{{\"t\":\"vizCatalog\",\"kind\":{JsonSerializer.Serialize(kind)},\"query\":{JsonSerializer.Serialize(query)},\"seq\":{tag}}}");

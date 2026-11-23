@@ -62,7 +62,7 @@ pub enum Command {
     VizPlayback { layer: usize, col: usize, speed: Option<f32>, sync: Option<Option<f32>>, play_mode: Option<String>, trigger: Option<String> },
     VizFx { layer: usize, col: usize, op: String, a: usize, b: usize, id: String, value: f32 },
     VizAssign { layer: usize, col: usize, kind: String, id: String, path: String, app: String, server: String },
-    VizClear { layer: usize, col: usize },
+    VizClear { layer: usize, col: usize, at_beat: Option<f64> },
     VizCatalog { kind: String, query: String, seq: u64 },
     VizSave { path: String, uids: Vec<String>, media_dirs: Vec<String> },
     VizLoad { path: String, media_dir: String },
@@ -305,7 +305,8 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
         Some("vizClear") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-            let _ = tx.send(Command::VizClear { layer, col });
+            let at_beat = v.get("atBeat").and_then(|x| x.as_f64());
+            let _ = tx.send(Command::VizClear { layer, col, at_beat });
         }
         Some("vizSave") => {
             let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_owned();

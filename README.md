@@ -43,6 +43,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   clip also copies or moves its openVJ visual and media.
 - **Scenes stay aligned** — inserting, removing, moving or duplicating scenes moves/copies the
   visual columns, and track reorders re-sync the selected slot.
+- **Reconnect recovery** — a restarted visual engine reloads the project, then resumes the
+  visuals of Session clips that are still playing.
 - **Background visual engine** — openVJ runs hidden by default; View → OpenVJ raises its
   editor once (not always-on-top), and while nothing is on screen it stops GPU rendering and
   slows its tick.

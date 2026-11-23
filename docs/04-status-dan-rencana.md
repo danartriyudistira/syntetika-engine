@@ -353,6 +353,17 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Batasan: operasi scene dari Remote/MCP/undo yang tidak lewat `SessionView` belum
   menyesuaikan kolom; solusi penuh perlu scene UID.
 
+## 7j. Reconnect & hapus clip visual (23 Nov)
+
+- Saat engine visual restart, bridge memuat ulang `visuals/composition.json` project sebelum
+  layout/timing dikirim (kalau project sudah disimpan), lalu `ResumePlayingVisuals()` mengirim
+  `slot` untuk setiap track yang audio-nya masih playing.
+- Hapus clip yang playing/queued mengirim `vizClear` dengan `atBeat` quantum global, jadi
+  visual berhenti bersamaan dengan audio; clip diam langsung dibersihkan.
+- Bukti: log `[resume] slot ...` dan `NOTA clear visual ... at=...` (diuji lewat jalur yang
+  sama dengan stop/gate).
+- Batasan: project yang belum disimpan tetap kehilangan komposisi visual saat engine restart.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

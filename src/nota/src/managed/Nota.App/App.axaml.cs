@@ -131,6 +131,7 @@ public partial class App : Avalonia.Application
                 bridge?.PublishLayout();
                 bridge?.PublishSlotTiming();   // video follows audio trim/loop (throttled)
                 bridge?.PublishSlotPhase();    // and its playing phase
+                bridge?.ResumePlayingVisuals();
             });
         _visualLayout.Start();
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>

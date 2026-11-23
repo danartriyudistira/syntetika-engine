@@ -47,6 +47,10 @@ diffs are in `patches/`.
   or copies the matching visual columns (duplicate copies each layer's visual), and the
   selected slot is re-sent by track UID after a layout change, so a track reorder cannot leave
   openVJ pointing at another layer.
+- **Reconnect recovery**: a restarted visual engine reloads the saved project composition,
+  then gets the layout, slot timing and a relaunch of every Session slot whose audio is still
+  playing. Deleting a playing/queued clip clears its visual on the same quantum as the audio
+  stop.
 - **Start/finish match**: visual launches use each clip's own Quantize, scene launches are
   scheduled per layer, stops (stop button, Stop All, Toggle, Gate/Repeat release) land on the
   same quantum as the audio, and the playing slot's local beat phase corrects the video's

@@ -759,7 +759,15 @@ public sealed partial class SessionView : UserControl
             Say(Loc.T("session.deleted_scene"));
             return true;
         }
-        if (_sel.Kind != SelKind.Slot || !_engine.ClearSessionSlot(_sel.TrackId, _sel.Scene)) return false;
+        if (_sel.Kind != SelKind.Slot) return false;
+        int state = _engine.SessionSlotState(_sel.TrackId, _sel.Scene);
+        if (!_engine.ClearSessionSlot(_sel.TrackId, _sel.Scene)) return false;
+        if (VisualBridge.Current is { } bridge)
+        {
+            int layer = VisualLayer(_sel.TrackId);
+            // Playing/queued audio stops on the global quantum; remove the visual there too.
+            bridge.VizClear(layer, _sel.Scene, state is 2 or 3 ? bridge.NextQuantumBeat() : null);
+        }
         RefreshSlot(_sel.TrackId, _sel.Scene);
         Say(Loc.T("session.deleted_clip"));
         return true;    }

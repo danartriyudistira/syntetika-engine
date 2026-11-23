@@ -782,9 +782,15 @@ impl App {
                     }
                     self.send_viz_state(layer, col, 0);
                 }
-                NotaCommand::VizClear { layer, col } => {
-                    crate::viz::clear(&mut self.comp, layer, col);
-                    self.send_viz_state(layer, col, 0);
+                NotaCommand::VizClear { layer, col, at_beat } => {
+                    if at_beat.is_some_and(|b| b.is_finite() && b > beat + 1e-9) {
+                        self.nota_queue.push((at_beat.unwrap(), NotaCommand::VizClear { layer, col, at_beat: None }));
+                    } else {
+                        crate::viz::clear(&mut self.comp, layer, col);
+                        self.grid_dirty = true;
+                        self.send_viz_state(layer, col, 0);
+                        eprintln!("openVJ: NOTA clear visual {layer}:{col}");
+                    }
                 }
                 NotaCommand::VizSave { path, uids, media_dirs } => self.viz_save(&path, uids, &media_dirs),
                 NotaCommand::VizLoad { path, media_dir } => self.viz_load(&path, &media_dir),
@@ -928,6 +934,11 @@ impl App {
                     NotaCommand::StopAll { .. } => {
                         self.comp.clear_all(now);
                         eprintln!("openVJ: NOTA stop all at={at_beat:.3} drift={drift_ms:.2}ms");
+                    }
+                    NotaCommand::VizClear { layer, col, .. } => {
+                        crate::viz::clear(&mut self.comp, layer, col);
+                        self.send_viz_state(layer, col, 0);
+                        eprintln!("openVJ: NOTA clear visual {layer}:{col} at={at_beat:.3} drift={drift_ms:.2}ms");
                     }
                     // Only launches and stops are queued by beat; the rest arrive applied.
                     _ => {}
