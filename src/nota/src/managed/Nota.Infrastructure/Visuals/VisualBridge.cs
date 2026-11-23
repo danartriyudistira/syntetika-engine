@@ -19,6 +19,7 @@
 //                    {"t":"vizOutput","show":true}
 //                    {"t":"vizUi","show":true}
 //                    {"t":"vizMapping","show":true}
+//                    {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"bpm":120,"loop":true}
 //   visual -> Nota : {"t":"vizOut","open":true}
 //                    {"t":"vizUiState","open":true}
 //                    {"t":"vizMappingState","open":true}
@@ -69,6 +70,11 @@ public sealed class VisualBridge : IDisposable
     private int _sentEpoch = -1;
     /// <summary>Current .nota bundle, for the `visuals/layout.json` sidecar (null = unsaved).</summary>
     private string? _projectDir;
+    /// <summary>Last audio slot length/loop/tempo sent per (track, scene), so only edits travel.</summary>
+    private readonly Dictionary<(int TrackId, int Scene), (double Beats, double Bpm, bool Loop)> _slotTiming = new();
+    /// <summary>A new engine connected: forget what was sent so every slot syncs again.</summary>
+    private volatile bool _slotTimingDirty;
+    private long _slotTimingAt;
     /// <summary>openVJ reported that its output window is on screen (`vizOut`).</summary>
     private volatile bool _outputOpen;
     /// <summary>Last show/hide Nota asked for; replayed when the visual engine reconnects.</summary>
@@ -231,6 +237,63 @@ public sealed class VisualBridge : IDisposable
             WriteLayoutFile(json);
         }
         catch (ObjectDisposedException) { /* app closing */ }
+    }
+
+    /// <summary>Re-sends every slot on the next poll (after a project load or a new media assignment).</summary>
+    public void ResendSlotTiming()
+    {
+        _slotTimingDirty = true;
+        _slotTimingAt = 0;
+    }
+
+    /// <summary>Audio loop length and loop state of every non-empty audio slot, so a video's
+    /// beat sync follows the clip's trim. Only changed slots travel; force after an edit.</summary>
+    public void PublishSlotTiming(bool force = false)
+    {
+        if (!Connected) return;
+        long now = Environment.TickCount64;
+        if (!force && now - _slotTimingAt < 500) return;
+        _slotTimingAt = now;
+        if (_slotTimingDirty)
+        {
+            _slotTiming.Clear();
+            _slotTimingDirty = false;
+        }
+        try
+        {
+            var uids = CurrentLayoutUids();
+            var layerOf = new Dictionary<string, int>(uids.Count, StringComparer.Ordinal);
+            for (int i = 0; i < uids.Count; i++) layerOf[uids[i]] = i;
+
+            var seen = new HashSet<(int, int)>();
+            double bpm = _engine.Bpm;
+            for (int i = 0; i < _engine.TrackCount; i++)
+            {
+                if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type != 0) continue;
+                if (!layerOf.TryGetValue(Nota.Application.TrackUids.UidFor(ti.Id), out int layer)) continue;
+                for (int scene = 0; scene < _engine.SceneCount; scene++)
+                {
+                    double beats = _engine.SessionSlotLength(ti.Id, scene);
+                    if (beats <= 0) continue;
+                    bool loop = !_engine.TryGetSessionClipProps(ti.Id, scene, out var props) || props.Loop != 0;
+                    var key = (ti.Id, scene);
+                    seen.Add(key);
+                    if (_slotTiming.TryGetValue(key, out var prev)
+                        && Math.Abs(prev.Beats - beats) < 1e-6
+                        && Math.Abs(prev.Bpm - bpm) < 0.05
+                        && prev.Loop == loop) continue;
+                    _slotTiming[key] = (beats, bpm, loop);
+                    Send($"{{\"t\":\"vizSlotTiming\",\"layer\":{layer},\"col\":{scene},\"beats\":{Num(beats)},\"bpm\":{Num(bpm)},\"loop\":{(loop ? "true" : "false")}}}");
+                    AppLog($"[sync] slot {ti.Id}:{scene} layer={layer} beats={beats:0.###} bpm={bpm:0.##} loop={loop}");
+                }
+            }
+            // Forget cleared slots, so a later clip in the same place is sent again.
+            var stale = new List<(int, int)>();
+            foreach (var key in _slotTiming.Keys)
+                if (!seen.Contains(key)) stale.Add(key);
+            foreach (var key in stale) _slotTiming.Remove(key);
+        }
+        catch (ObjectDisposedException) { }
     }
 
     private void WriteLayoutFile(string json)
@@ -485,6 +548,7 @@ public sealed class VisualBridge : IDisposable
             }
             _layoutDirty = true;
             _clientEpoch++;
+            _slotTimingDirty = true;
             Send("{\"t\":\"hello\",\"v\":2}");
             // A fresh engine starts with its output window hidden. Restore the state the user
             // asked for, so "View ▸ Visual Output" survives an engine restart.
@@ -541,7 +605,9 @@ public sealed class VisualBridge : IDisposable
             if (v.TryGetProperty("layer_state", out var lo) && lo.ValueKind == JsonValueKind.Object)
                 extra += $" opacity={lo.GetProperty("opacity").GetDouble():0.00} blend={lo.GetProperty("blend").GetString()}";
             if (v.TryGetProperty("playback", out var pl) && pl.ValueKind == JsonValueKind.Object)
-                extra += $" speed={pl.GetProperty("speed").GetDouble():0.00} sync={(pl.TryGetProperty("sync_beats", out var sy) && sy.ValueKind == JsonValueKind.Number ? sy.GetDouble().ToString("0.##") : "off")}";
+                extra += $" speed={pl.GetProperty("speed").GetDouble():0.00} sync={(pl.TryGetProperty("sync_beats", out var sy) && sy.ValueKind == JsonValueKind.Number ? sy.GetDouble().ToString("0.##") : "off")}"
+                       + $" trim={(pl.TryGetProperty("sync_secs", out var ss) && ss.ValueKind == JsonValueKind.Number ? ss.GetDouble().ToString("0.##") + "s" : "full")}"
+                       + $" mode={(pl.TryGetProperty("play_mode", out var pm) ? pm.GetString() : "?")}";
             AppLog($"[viz<-] {t} L{layer} C{col} seq={seq} visual={has}{extra} ({line.Length} bytes)");
         }
         catch (JsonException)

@@ -125,7 +125,12 @@ public partial class App : Avalonia.Application
         // Structural sync is polled on the UI thread (track list reads are not thread-safe).
         _visualLayout = new Avalonia.Threading.DispatcherTimer(
             TimeSpan.FromMilliseconds(250), Avalonia.Threading.DispatcherPriority.Background,
-            (_, _) => Services.GetService<VisualBridge>()?.PublishLayout());
+            (_, _) =>
+            {
+                var bridge = Services.GetService<VisualBridge>();
+                bridge?.PublishLayout();
+                bridge?.PublishSlotTiming();   // video follows audio trim/loop (throttled)
+            });
         _visualLayout.Start();
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             log.Error("Unhandled exception", e.ExceptionObject as Exception);

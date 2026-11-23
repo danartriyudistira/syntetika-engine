@@ -17,6 +17,7 @@ using Avalonia.Media;
 using Nota.Application;
 using Nota.Application.Input;
 using Nota.Application.Localization;
+using Nota.Infrastructure.Visuals;
 
 namespace Nota.App;
 
@@ -245,8 +246,9 @@ public sealed partial class SessionView
         bool loop = p.Loop != 0;
         s.Children.Add(TwoUp(
             Field(Loc.T("common.length"), FormatLength(len), NotaPalette.TextPrimary, a => Pick(a, LengthSteps, b => Math.Abs(b - len) < 1e-6,
-                b => { _engine.SetSessionSlotLength(id, scene, b); RefreshSlot(id, scene); })),
-            Field(Loc.T("common.loop"), loop ? "On" : Loc.T("session.inspector.off_one_shot"), loop ? NotaPalette.TextPrimary : NotaPalette.Warning, _ => Set(x => { x.Loop = loop ? 0 : 1; return x; })),
+                b => { _engine.SetSessionSlotLength(id, scene, b); RefreshSlot(id, scene); VisualBridge.Current?.PublishSlotTiming(force: true); })),
+            Field(Loc.T("common.loop"), loop ? "On" : Loc.T("session.inspector.off_one_shot"), loop ? NotaPalette.TextPrimary : NotaPalette.Warning,
+                _ => { Set(x => { x.Loop = loop ? 0 : 1; return x; }); VisualBridge.Current?.PublishSlotTiming(force: true); }),
             Field(Loc.T("common.start"), "1.1.1", NotaPalette.TextSecondary, null),
             Field(Loc.T("session.inspector.loop_end"), FormatPosition(len), NotaPalette.TextSecondary, null)));
 

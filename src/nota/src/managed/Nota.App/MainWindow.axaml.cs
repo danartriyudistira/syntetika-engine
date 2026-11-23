@@ -563,6 +563,28 @@ public partial class MainWindow : Window
                         break;
                     }
             }, TimeSpan.FromSeconds(8));
+        // Syntetika self-test: after the video import, shorten the audio loop and then turn its
+        // loop off; openVJ must retime the video to the same beats and mode.
+        if (Environment.GetEnvironmentVariable("NOTA_SLOT_SYNC_TEST") is { Length: > 0 })
+            Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+            {
+                int audio = 0;
+                for (int i = 0; i < Engine.TrackCount; i++)
+                    if (Engine.TryGetTrackInfo(i, out var ti) && ti.Type == 0) { audio = ti.Id; break; }
+                if (audio <= 0) { Console.Error.WriteLine("[sync] no audio track"); return; }
+                double before = Engine.SessionSlotLength(audio, 0);
+                Engine.SetSessionSlotLength(audio, 0, 8);
+                Console.Error.WriteLine($"[sync] trim {before:0.###} -> 8 beats");
+                VisualBridge.Current?.PublishSlotTiming(force: true);
+                Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                {
+                    if (!Engine.TryGetSessionClipProps(audio, 0, out var p)) return;
+                    p.Loop = 0;
+                    Engine.SetSessionClipProps(audio, 0, p);
+                    Console.Error.WriteLine("[sync] loop off");
+                    VisualBridge.Current?.PublishSlotTiming(force: true);
+                }, TimeSpan.FromSeconds(4));
+            }, TimeSpan.FromSeconds(16));
         HookSessionDeviceMoves(_session);                             // a device card dropped on a column (specs/043)
         _session.ArrangementChanged += () => Timeline.Refresh();      // M5-6
         _session.Status += msg => vm.StatusText = msg;

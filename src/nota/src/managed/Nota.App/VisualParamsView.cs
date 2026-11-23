@@ -681,6 +681,9 @@ public sealed class VisualParamsView : UserControl
             // Hashing a large video must not freeze the UI.
             string target = await Task.Run(() => MediaFiles.Prepare(source, Bridge.ProjectDir));
             Bridge.VizAssignMedia(_layer, _col, MediaFiles.KindOf(source), target);
+            // A video assigned to a slot that already has audio takes that audio's timing.
+            Bridge.ResendSlotTiming();
+            Bridge.PublishSlotTiming(force: true);
             _catalog?.Close();
         }
         catch (Exception ex)

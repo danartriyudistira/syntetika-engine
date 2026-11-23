@@ -34,6 +34,10 @@ diffs are in `patches/`.
   or drop a video from the library. Its sound is extracted with the bundled FFmpeg into the
   slot and its picture is assigned to the matching visual, beat-synced to the clip's length.
   Images drop the same way and become the visual only.
+- **Video follows the audio trim**: shortening/looping an audio slot retimes its video to the
+  same musical loop at normal speed (it trims the video instead of squeezing the whole file),
+  turning the audio's loop off makes the video play once and hold, and the timing is refreshed
+  after a project load or when a video is assigned to a slot that already has audio.
 - The browser's Files view and sample-folder tree list videos and images (not only audio),
   they are draggable onto Session slots, and the audio sample chips (Loops / One-shots / BPM /
   key) no longer hide them.

@@ -755,6 +755,21 @@ impl App {
                 NotaCommand::VizOutput { show } => self.show_output_window(out, show),
                 NotaCommand::VizUi { show } => self.show_ui_window(ui, show),
                 NotaCommand::VizMapping { show } => self.show_mapping_window(show),
+                NotaCommand::VizSlotTiming { layer, col, beats, bpm, looped } => {
+                    if beats > 0.0
+                        && let Some(clip) = self.comp.clip_mut(layer, col)
+                        && matches!(clip.source, ClipSource::Video { .. })
+                    {
+                        // The audio loop is the timing source: a shorter loop trims the video
+                        // (normal speed), and the pass ends on the audio's beat length.
+                        let loop_secs = (beats as f64) * 60.0 / bpm.max(1.0) as f64;
+                        clip.sync_beats = Some(beats.clamp(0.25, 256.0));
+                        clip.sync_secs = Some((loop_secs as f32).clamp(0.01, 36_000.0));
+                        clip.play_mode = if looped { PlayMode::Loop } else { PlayMode::OnceHold };
+                        self.grid_dirty = true;
+                        self.send_viz_state(layer, col, 0);
+                    }
+                }
                 NotaCommand::VizCatalog { kind, query, seq } => {
                     let body = crate::viz::catalog(&kind, &query);
                     let line = serde_json::json!({

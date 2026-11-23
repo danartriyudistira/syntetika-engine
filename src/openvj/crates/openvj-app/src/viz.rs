@@ -155,6 +155,7 @@ pub fn state(comp: &Composition, layer: usize, col: usize) -> Value {
         "playback": {
             "speed": clip.speed,
             "sync_beats": clip.sync_beats,
+            "sync_secs": clip.sync_secs,
             "play_mode": clip.play_mode.name(),
             "trigger": clip.trigger.name(),
         },

@@ -289,6 +289,10 @@ public partial class MainWindow
             _projectPath = dir;
             VisualBridge.Current?.SetProjectDir(dir);
             VisualBridge.Current?.VizLoad(dir);
+            // Re-apply audio loop lengths after the composition loads, so saved videos whose
+            // audio was trimmed later still match their clips.
+            VisualBridge.Current?.ResendSlotTiming();
+            VisualBridge.Current?.PublishSlotTiming(force: true);
             _learn?.LoadMappings(dir);   // MIDI-learn mappings ride in the bundle sidecar
             _devicePages?.LoadProject(dir);   // the project's copy of edited controller pages (specs/051)
             _controllers?.Overrides?.LoadProject(dir, _controllers.TrackIdAt);   // its controller rebinds (Story 7)

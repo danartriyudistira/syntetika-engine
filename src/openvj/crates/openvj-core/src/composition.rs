@@ -262,6 +262,10 @@ pub struct Clip {
     /// length, and `speed` is ignored. `None` plays at the media's own pace (times `speed`).
     #[serde(default)]
     pub sync_beats: Option<f32>,
+    /// Audio loop length in seconds. With `sync_beats`, longer media plays only this first
+    /// part, at its own speed, so a trimmed audio loop trims the video instead of stretching it.
+    #[serde(default)]
+    pub sync_secs: Option<f32>,
     /// Length in seconds of a still image or generator clip, for the play modes that need an
     /// end. `None` uses [`DEFAULT_CLIP_SECS`]. Videos use their own length.
     #[serde(default)]
@@ -332,6 +336,7 @@ impl Clip {
             mods: Default::default(),
             play_mode: PlayMode::Loop,
             sync_beats: None,
+            sync_secs: None,
             duration: None,
             media_secs: None,
             transform: default_transform(),
@@ -357,10 +362,17 @@ impl Clip {
     /// full length), or `None` for a clip without a length (live inputs).
     pub fn passes(&self, secs: f64, beats: f64) -> Option<f64> {
         let len = self.length()?;
-        Some(match self.sync_beats {
-            Some(b) if b > 0.0 => beats / b as f64,
-            _ => secs * self.speed as f64 / len,
-        })
+        let Some(beats_per_pass) = self.sync_beats.filter(|b| *b > 0.0) else {
+            return Some(secs * self.speed as f64 / len);
+        };
+        // `sync_secs` is the audio loop length. A shorter loop trims the media (the pass still
+        // ends on the audio's beats); a shorter video loops at its own speed inside the slot.
+        let period = match self.sync_secs.filter(|s| *s > 0.0) {
+            Some(loop_secs) if (loop_secs as f64) < len => beats_per_pass as f64,
+            Some(loop_secs) => beats_per_pass as f64 * len / loop_secs as f64,
+            None => beats_per_pass as f64,
+        };
+        Some(beats / period)
     }
 
     /// Where the clip is after playing for `secs` seconds, or `beats` beats.
@@ -369,8 +381,14 @@ impl Clip {
         let (Some(len), Some(cycles)) = (self.length(), self.passes(secs, beats)) else {
             return ClipTime { secs: secs.max(0.0) * speed, ended: false };
         };
+        // A shorter audio loop trims the media: play its first `sync_secs` at normal speed,
+        // then let the pass wrap on the audio's beat length.
+        let content = self
+            .sync_secs
+            .filter(|s| *s > 0.0)
+            .map_or(len, |s| (s as f64).min(len));
         let wrap = !self.source.is_generator();
-        position(self.play_mode, cycles, beats, len, wrap, self.id.0)
+        position(self.play_mode, cycles, beats, content, wrap, self.id.0)
     }
 }
 
@@ -1703,6 +1721,25 @@ mod tests {
         c.tick(20.0, 120.0);
         c.trigger(0, 0, 20.5);
         assert_eq!(c.layers[0].active.unwrap().started_beat, 121.0);
+    }
+
+    #[test]
+    fn a_trimmed_audio_loop_trims_the_video_at_normal_speed() {
+        let mut c = Composition::new(640, 360, 1, 1);
+        c.set_clip(0, 0, video());
+        let clip = c.clip_mut(0, 0).unwrap();
+        clip.media_secs = Some(51.93);
+        clip.sync_beats = Some(8.0);   // audio loop: 8 beats at 120 BPM
+        clip.sync_secs = Some(4.0);    // = 4 seconds of audio
+        c.tick(10.0, 100.0);
+        c.trigger(0, 0, 10.0);
+        // Two beats in = 1 s of audio, so the video is 1 s in, not 13 s (the whole file
+        // squeezed into 8 beats).
+        let t = c.layers[0].frame(11.0, 102.0).unwrap().incoming.unwrap().1;
+        assert!((t - 1.0).abs() < 1e-6, "got {t}");
+        // The audio's loop end wraps the trimmed video back to its start.
+        let t = c.layers[0].frame(14.0, 108.0).unwrap().incoming.unwrap().1;
+        assert!(t < 1e-6, "got {t}");
     }
 
     #[test]

@@ -15,6 +15,7 @@
 //!   {"t":"vizOutput","show":true}
 //!   {"t":"vizUi","show":true}
 //!   {"t":"vizMapping","show":true}
+//!   {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"loop":true}
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -69,6 +70,8 @@ pub enum Command {
     VizUi { show: bool },
     /// Show or hide the output mapping window (Nota's View ▸ Projection Mapping).
     VizMapping { show: bool },
+    /// The audio clip's loop length/state changed: retime the visual in that slot.
+    VizSlotTiming { layer: usize, col: usize, beats: f32, bpm: f32, looped: bool },
 }
 
 pub struct NotaBridge {
@@ -329,6 +332,14 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
         Some("vizMapping") => {
             let show = v.get("show").and_then(|x| x.as_bool()).unwrap_or(true);
             let _ = tx.send(Command::VizMapping { show });
+        }
+        Some("vizSlotTiming") => {
+            let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let beats = v.get("beats").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+            let bpm = v.get("bpm").and_then(|x| x.as_f64()).filter(|b| *b > 0.0).unwrap_or(120.0) as f32;
+            let looped = v.get("loop").and_then(|x| x.as_bool()).unwrap_or(true);
+            let _ = tx.send(Command::VizSlotTiming { layer, col, beats, bpm, looped });
         }
         Some("vizCatalog") => {
             let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("generators").to_owned();

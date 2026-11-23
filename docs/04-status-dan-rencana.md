@@ -295,6 +295,21 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Bukti uji: menu → window “openVJ Output mapping” + centang ✓; X → tertutup + centang mati;
   kill engine → mapping terbuka lagi otomatis; log `mapping window shown/hidden`.
 
+## 7f. Video mengikuti trim/loop audio (23 Nov)
+
+- Nota memantau panjang loop dan status **Loop** setiap slot audio (2×/detik) dan mengirim
+  `vizSlotTiming` hanya saat berubah. Edit panjang/loop di Session Inspector memaksa kirim
+  seketika.
+- openVJ menyimpan `sync_beats` (loop audio) dan `sync_secs` (durasi detik loop). Video yang
+  lebih panjang dipotong sepanjang loop audio dan diputar **pada kecepatan normal**, bukan
+  seluruh file dipadatkan ke loop. Video yang lebih pendek loop alami di dalam slot.
+- Loop audio **off** → video `Play once & hold`; loop on → `Loop`.
+- Timing dikirim ulang saat engine reconnect, setelah project load, dan setelah video
+  di-assign ke slot yang sudah punya audio.
+- Bukti uji (Sintel 51,93 dtk, 120 BPM): impor `sync=103.85 trim=full`; trim audio ke 8 beat
+  → `sync=8 trim=4s mode=Loop`; loop off → `mode=Play once & hold`. Unit test
+  `a_trimmed_audio_loop_trims_the_video_at_normal_speed` lulus.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |
