@@ -18,7 +18,7 @@ mod synth_controls;
 mod syphon_out;
 mod viz;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -26,11 +26,66 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use openvj_core::Composition;
 use openvj_render::{Engine, wgpu};
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{ComponentHandle, LogicalSize, PhysicalPosition, PhysicalSize, Timer, TimerMode};
+use slint::winit_030::{
+    EventResult, WinitWindowAccessor,
+    winit::event::{ElementState, WindowEvent},
+    winit::keyboard::{Key, NamedKey},
+};
 
 use app::App;
 
 slint::include_modules!();
+
+/// The output window's windowed frame: content size and position, in physical pixels.
+type OutputGeometry = (u32, u32, i32, i32);
+
+/// The output window's frame while it is a normal window (not fullscreen or maximized).
+fn output_geometry(out: &OutputWindow) -> Option<OutputGeometry> {
+    let size = out.window().size();
+    if size.width == 0 || size.height == 0 {
+        return None;
+    }
+    let position = out.window().position();
+    Some((size.width, size.height, position.x, position.y))
+}
+
+/// Winit resets the window level while toggling native fullscreen; `always-on-top` must be
+/// put back explicitly or the output would fall behind other apps after Esc.
+fn keep_output_on_top(out: &OutputWindow) {
+    let _ = out.window().with_winit_window(|w| {
+        w.set_window_level(slint::winit_030::winit::window::WindowLevel::AlwaysOnTop)
+    });
+}
+
+/// Exiting macOS native fullscreen animates for a moment; setting the frame too early is
+/// ignored. Restore the windowed output after the transition, and keep maximize→fullscreen
+/// suppressed until then so the restored (possibly still zoomed) frame cannot bounce back.
+fn restore_output_geometry(
+    out: slint::Weak<OutputWindow>,
+    geometry: Option<OutputGeometry>,
+    restoring: Rc<Cell<bool>>,
+) {
+    Timer::single_shot(Duration::from_millis(800), move || {
+        let Some(out) = out.upgrade() else { return };
+        if out.window().is_fullscreen() {
+            restoring.set(false);   // the user went fullscreen again
+            return;
+        }
+        out.window().set_maximized(false);
+        match geometry {
+            Some((width, height, x, y)) => {
+                out.window().set_size(PhysicalSize::new(width, height));
+                out.window().set_position(PhysicalPosition::new(x, y));
+            }
+            // Never seen windowed (maximized right after opening): use the design size.
+            None => out.window().set_size(LogicalSize::new(960.0, 540.0)),
+        }
+        keep_output_on_top(&out);
+        let restoring = Rc::clone(&restoring);
+        Timer::single_shot(Duration::from_millis(300), move || restoring.set(false));
+    });
+}
 
 /// Creates the GPU device shared by the engine and the UI renderer.
 fn init_gpu() -> Result<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
@@ -742,6 +797,32 @@ fn main() -> Result<()> {
             slint::CloseRequestResponse::KeepWindowShown
         });
     }
+    // The output window has no focusable control, so Slint's FocusScope may never see a key
+    // (notably after entering native fullscreen). Handle Esc/F at the window itself.
+    {
+        let o = o.clone();
+        out.window().on_winit_window_event(move |_window, event| {
+            let WindowEvent::KeyboardInput { event, .. } = event else { return EventResult::Propagate };
+            if event.state != ElementState::Pressed {
+                return EventResult::Propagate;
+            }
+            let Some(out) = o.upgrade() else { return EventResult::Propagate };
+            let fullscreen = out.window().is_fullscreen();
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    if fullscreen {
+                        out.window().set_fullscreen(false);
+                    }
+                    EventResult::PreventDefault
+                }
+                Key::Character(ch) if ch.as_str().eq_ignore_ascii_case("f") => {
+                    out.window().set_fullscreen(!fullscreen);
+                    EventResult::PreventDefault
+                }
+                _ => EventResult::Propagate,
+            }
+        });
+    }
     // Output mapping window.
     let mw = MappingWindow::new()?;
     {
@@ -848,12 +929,49 @@ fn main() -> Result<()> {
         let mut frame_count = 0u32;
         let mut interval_ms = 16u64;
         let mut screen_outputs = app::ScreenOutputs::default();
+        let output_fullscreen_was = Rc::new(Cell::new(false));
+        let output_maximize_requested = Rc::new(Cell::new(false));
+        let output_restoring = Rc::new(Cell::new(false));
+        let output_saved_geometry: Rc<Cell<Option<OutputGeometry>>> = Rc::new(Cell::new(None));
+        let output_fullscreen_was_cb = Rc::clone(&output_fullscreen_was);
+        let output_maximize_requested_cb = Rc::clone(&output_maximize_requested);
+        let output_restoring_cb = Rc::clone(&output_restoring);
+        let output_saved_geometry_cb = Rc::clone(&output_saved_geometry);
         timer.start(TimerMode::Repeated, Duration::from_millis(16), move || {
             let (Some(ui), Some(out)) = (w.upgrade(), o.upgrade()) else { return };
             let mut visible = false;
             if let Ok(mut a) = app.try_borrow_mut() {
                 visible = a.frame(&ui, &out);
                 a.sync_screen_outputs(&ui, &out, &mut screen_outputs);
+            }
+            // The output window's maximize button (green zoom / double-click) means fullscreen.
+            // Remember the windowed frame instead, so Esc or F can restore it after macOS'
+            // native fullscreen animation.
+            let window = out.window();
+            let fullscreen = window.is_fullscreen();
+            if output_fullscreen_was_cb.get() && !fullscreen && !output_maximize_requested_cb.get() {
+                eprintln!("openVJ: output fullscreen off");
+                keep_output_on_top(&out);
+                output_restoring_cb.set(true);
+                restore_output_geometry(
+                    o.clone(),
+                    output_saved_geometry_cb.get(),
+                    Rc::clone(&output_restoring_cb),
+                );
+            }
+            output_fullscreen_was_cb.set(fullscreen);
+            if fullscreen {
+                output_maximize_requested_cb.set(false);
+            } else if !output_restoring_cb.get() && window.is_maximized() {
+                if !output_maximize_requested_cb.get() {
+                    eprintln!("openVJ: output maximize -> fullscreen");
+                    output_maximize_requested_cb.set(true);
+                }
+                window.set_fullscreen(true);
+            } else if !output_restoring_cb.get() && !window.is_maximized() {
+                if let Some(frame) = output_geometry(&out) {
+                    output_saved_geometry_cb.set(Some(frame));
+                }
             }
             // Nothing on screen (editor and output hidden, no Syphon receiver): 10 fps is
             // plenty for the clock and the bridge. A shown window returns to 60 fps at once.

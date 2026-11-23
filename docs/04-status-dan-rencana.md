@@ -262,6 +262,12 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   **di-raise dan diaktifkan sekali** sehingga langsung terlihat, tetapi **tidak** selalu
   di atas aplikasi lain (tidak selalu-on-top). Tombol X hanya menyembunyikan selama
   dijalankan Nota, engine tetap hidup dan bridge tetap tersambung.
+- **Maximize = fullscreen**: klik tombol hijau/maximize (atau double-click title bar) pada
+  window output langsung masuk fullscreen penuh. **Esc** atau **F** kembali ke window output
+  dengan ukuran/posisi terakhir; always-on-top dipasang lagi setelah keluar fullscreen.
+  Tombol ditangani di level winit window, jadi tetap bekerja walau tidak ada kontrol fokus.
+- Bukti uji: zoom → `1920×1080` (`maximize -> fullscreen`); Esc → kembali `960×568` di posisi
+  semula (`fullscreen off`), layer always-on-top 3, tanpa masuk fullscreen lagi.
 - State dikirim dua arah: `vizUi` dari Nota, `vizUiState` dari openVJ; centang menu ikut
   berubah walau window ditutup dari openVJ.
 - **Optimalisasi**: saat editor, output, dan mapping tersembunyi (tidak ada klien Syphon),

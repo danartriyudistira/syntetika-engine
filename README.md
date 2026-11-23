@@ -34,7 +34,7 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 - **Video clips with sound in Nota** — drop a video on an audio Session slot: its audio is
   extracted into the slot and its picture becomes the slot's visual, beat-synced to the clip.
 - **Always-on-top visual output** — View → Visual Output opens openVJ's output window above
-  every other app, ready for a projector or second screen.
+  every other app; maximizing it means fullscreen, and Esc returns to the windowed output.
 - **Background visual engine** — openVJ runs hidden by default; View → OpenVJ raises its
   editor once (not always-on-top), and while nothing is on screen it stops GPU rendering and
   slows its tick.
