@@ -583,6 +583,19 @@ public partial class MainWindow : Window
                     Engine.SetSessionClipProps(audio, 0, p);
                     Console.Error.WriteLine("[sync] loop off");
                     VisualBridge.Current?.PublishSlotTiming(force: true);
+                    Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                    {
+                        Console.Error.WriteLine("[sync] launch slot");
+                        if (VisualBridge.Current is { } bridge)
+                            bridge.Slot(0, 0, bridge.NextQuantumBeat(audio, 0));
+                        Engine.LaunchSlotVelocity(audio, 0, 1f);
+                        Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                        {
+                            Console.Error.WriteLine("[sync] stop all");
+                            if (VisualBridge.Current is { } b) b.StopAll(b.NextQuantumBeat());
+                            Engine.StopAllSession();
+                        }, TimeSpan.FromSeconds(2));
+                    }, TimeSpan.FromSeconds(4));
                 }, TimeSpan.FromSeconds(4));
             }, TimeSpan.FromSeconds(16));
         HookSessionDeviceMoves(_session);                             // a device card dropped on a column (specs/043)

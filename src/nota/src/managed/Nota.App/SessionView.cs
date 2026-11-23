@@ -467,21 +467,46 @@ public sealed partial class SessionView : UserControl
     private void LaunchSlotVisual(Column c, int scene)
     {
         if (VisualBridge.Current is not { } bridge) return;
-        if (c.Kind == ColKind.Group) { foreach (int id in c.Children) bridge.Slot(VisualLayer(id), scene); }
-        else bridge.Slot(VisualLayer(c.TrackId), scene);
+        if (c.Kind == ColKind.Group) { foreach (int id in c.Children) SendSlotVisual(bridge, id, scene); }
+        else SendSlotVisual(bridge, c.TrackId, scene);
+    }
+
+    private void SendSlotVisual(VisualBridge bridge, int trackId, int scene)
+    {
+        int layer = VisualLayer(trackId);
+        // Toggle on a playing slot stops it: the audio stop uses the global quantum, and so
+        // must the visual. Launches use the clip's own Quantize when it overrides the global.
+        bool toggleStop = _engine.TryGetSessionClipProps(trackId, scene, out var p)
+                          && p.LaunchMode == (int)SessionLaunchMode.Toggle
+                          && _engine.SessionSlotState(trackId, scene) == 3;
+        if (toggleStop) bridge.StopLayer(layer, bridge.NextQuantumBeat());
+        else bridge.Slot(layer, scene, bridge.NextQuantumBeat(trackId, scene));
     }
 
     private void StopVisual(Column c)
     {
         if (VisualBridge.Current is not { } bridge) return;
-        if (c.Kind == ColKind.Group) { foreach (int id in c.Children) bridge.StopLayer(VisualLayer(id)); }
-        else bridge.StopLayer(VisualLayer(c.TrackId));
+        double at = bridge.NextQuantumBeat();
+        if (c.Kind == ColKind.Group) { foreach (int id in c.Children) bridge.StopLayer(VisualLayer(id), at); }
+        else bridge.StopLayer(VisualLayer(c.TrackId), at);
     }
 
     private void LaunchSceneRow(int scene)
     {
-        // Syntetika Engine: the visual engine schedules the same column on the same beat.
-        VisualBridge.Current?.Scene(scene);
+        // Syntetika Engine: schedule each track's visual on that clip's own launch quantum,
+        // and stop layers whose scene slot stops the track.
+        if (VisualBridge.Current is { } bridge)
+        {
+            for (int i = 0; i < _engine.TrackCount; i++)
+            {
+                if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type is not (0 or 1)) continue;
+                int layer = VisualLayer(ti.Id);
+                if (_engine.SessionSlotState(ti.Id, scene) != 0)
+                    bridge.Slot(layer, scene, bridge.NextQuantumBeat(ti.Id, scene));
+                else if (_engine.GetSessionSlotStopButton(ti.Id, scene))
+                    bridge.StopLayer(layer, bridge.NextQuantumBeat());
+            }
+        }
         _engine.LaunchScene(scene);
         Select(new Selection(SelKind.Scene, 0, _selectNextOnLaunch ? Math.Min(scene + 1, _sceneCount - 1) : scene));
     }
@@ -535,7 +560,7 @@ public sealed partial class SessionView : UserControl
     /// <summary>Stops every playing clip, as the toolbar's Stop All does.</summary>
     internal void StopAll()
     {
-        VisualBridge.Current?.StopAll();
+        if (VisualBridge.Current is { } bridge) bridge.StopAll(bridge.NextQuantumBeat());
         _engine.StopAllSession();
         UpdateStates();
     }

@@ -33,7 +33,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   Syphon; media is copied into the project bundle so it travels with the `.nota` file.
 - **Video clips with sound in Nota** — drop a video on an audio Session slot: its audio is
   extracted into the slot and its picture becomes the slot's visual, beat-synced to the clip.
-  Trimming or looping the audio retimes and trims the video with it.
+  Trimming or looping the audio retimes and trims the video with it, with launches and stops
+  on the same quantum (and phase-corrected) as the audio.
 - **Always-on-top visual output** — View → Visual Output opens openVJ's output window above
   every other app; maximizing it means fullscreen, and Esc returns to the windowed output.
 - **Projection mapping** — View → Projection Mapping opens openVJ's mapping editor for

@@ -672,6 +672,45 @@ impl App {
         }
     }
 
+    /// Aligns the playing video's phase with the audio slot's local beats. Corrects a launch
+    /// that landed a frame late or a legato hand-off, which otherwise shifts start and seam.
+    fn apply_slot_phase(&mut self, layer: usize, col: usize, phase: f32, sample_beat: Option<f64>, beat: f64) {
+        let Some((clip_id, video, sync_beats)) = self
+            .comp
+            .clip(layer, col)
+            .map(|c| (c.id, matches!(c.source, ClipSource::Video { .. }), c.sync_beats))
+        else {
+            return;
+        };
+        let Some(sync_beats) = sync_beats.filter(|b| *b > 0.0) else { return };
+        if !video || !phase.is_finite() || phase < 0.0 {
+            return;
+        }
+        let Some(active) = self.comp.layers.get(layer).and_then(|l| l.active) else { return };
+        if active.clip_id != clip_id {
+            return;
+        }
+        // Nota sampled `phase` at its own beat; extrapolate the audio position to this frame
+        // so network/frame latency doesn't shift the video back on every poll. Compare modulo
+        // the loop so a seam never looks like a whole-loop correction.
+        let elapsed = sample_beat
+            .filter(|b| b.is_finite())
+            .map_or(0.0, |b| (beat - b).clamp(-0.25, 0.25));
+        let len = sync_beats as f64;
+        let target = (phase as f64 + elapsed).rem_euclid(len);
+        let current = (beat - active.started_beat).rem_euclid(len);
+        let mut error = (current - target).rem_euclid(len);
+        if error > len / 2.0 {
+            error -= len;
+        }
+        if error.abs() > 0.03
+            && let Some(l) = self.comp.layers.get_mut(layer)
+        {
+            l.active = Some(Playing { started_beat: active.started_beat + error, ..active });
+            eprintln!("openVJ: NOTA phase {layer}:{col} phase={phase:.3} corrected={error:.3}");
+        }
+    }
+
     /// Drain bridge commands, then apply the ones whose beat has arrived. Launches are
     /// scheduled by absolute beat, so packet jitter never moves the cut.
     fn nota_tick(&mut self, now: f64, beat: f64, ui: &MainWindow, out: &OutputWindow) {
@@ -691,15 +730,23 @@ impl App {
             match cmd {
                 NotaCommand::Layout { tracks, scenes } => self.apply_layout(tracks, scenes),
                 NotaCommand::Select { layer, col } => self.apply_select(layer, col),
-                NotaCommand::StopLayer { layer } => {
-                    self.comp.clear_layer(layer, now);
-                    self.grid_dirty = true;
-                    eprintln!("openVJ: NOTA stop layer {layer}");
+                NotaCommand::StopLayer { layer, at_beat } => {
+                    if at_beat.is_some_and(|b| b.is_finite() && b > beat + 1e-9) {
+                        self.nota_queue.push((at_beat.unwrap(), NotaCommand::StopLayer { layer, at_beat: None }));
+                    } else {
+                        self.comp.clear_layer(layer, now);
+                        self.grid_dirty = true;
+                        eprintln!("openVJ: NOTA stop layer {layer}");
+                    }
                 }
-                NotaCommand::StopAll => {
-                    self.comp.clear_all(now);
-                    self.grid_dirty = true;
-                    eprintln!("openVJ: NOTA stop all");
+                NotaCommand::StopAll { at_beat } => {
+                    if at_beat.is_some_and(|b| b.is_finite() && b > beat + 1e-9) {
+                        self.nota_queue.push((at_beat.unwrap(), NotaCommand::StopAll { at_beat: None }));
+                    } else {
+                        self.comp.clear_all(now);
+                        self.grid_dirty = true;
+                        eprintln!("openVJ: NOTA stop all");
+                    }
                 }
                 NotaCommand::VizGet { layer, col, seq } => self.send_viz_state(layer, col, seq),
                 NotaCommand::VizSet { layer, col, group, key, value } => {
@@ -765,10 +812,13 @@ impl App {
                         let loop_secs = (beats as f64) * 60.0 / bpm.max(1.0) as f64;
                         clip.sync_beats = Some(beats.clamp(0.25, 256.0));
                         clip.sync_secs = Some((loop_secs as f32).clamp(0.01, 36_000.0));
-                        clip.play_mode = if looped { PlayMode::Loop } else { PlayMode::OnceHold };
+                        clip.play_mode = if looped { PlayMode::Loop } else { PlayMode::OnceClear };
                         self.grid_dirty = true;
                         self.send_viz_state(layer, col, 0);
                     }
+                }
+                NotaCommand::VizSlotPhase { layer, col, phase, sample_beat } => {
+                    self.apply_slot_phase(layer, col, phase, sample_beat, beat);
                 }
                 NotaCommand::VizCatalog { kind, query, seq } => {
                     let body = crate::viz::catalog(&kind, &query);
@@ -808,7 +858,15 @@ impl App {
                         self.comp.trigger(layer, col, now);
                         eprintln!("openVJ: NOTA clip {layer}:{col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
                     }
-                    // Only launches are queued by beat; the rest are handled on arrival.
+                    NotaCommand::StopLayer { layer, .. } => {
+                        self.comp.clear_layer(layer, now);
+                        eprintln!("openVJ: NOTA stop layer {layer} at={at_beat:.3} drift={drift_ms:.2}ms");
+                    }
+                    NotaCommand::StopAll { .. } => {
+                        self.comp.clear_all(now);
+                        eprintln!("openVJ: NOTA stop all at={at_beat:.3} drift={drift_ms:.2}ms");
+                    }
+                    // Only launches and stops are queued by beat; the rest arrive applied.
                     _ => {}
                 }
                 self.grid_dirty = true;

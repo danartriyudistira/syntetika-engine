@@ -20,6 +20,7 @@
 //                    {"t":"vizUi","show":true}
 //                    {"t":"vizMapping","show":true}
 //                    {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"bpm":120,"loop":true}
+//                    {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5,"beat":12.25}
 //   visual -> Nota : {"t":"vizOut","open":true}
 //                    {"t":"vizUiState","open":true}
 //                    {"t":"vizMappingState","open":true}
@@ -246,6 +247,35 @@ public sealed class VisualBridge : IDisposable
         _slotTimingAt = 0;
     }
 
+    /// <summary>While an audio slot plays, its local beat position, so the video's phase (start
+    /// and loop seam) follows the audio even if a launch landed a few milliseconds off.</summary>
+    public void PublishSlotPhase()
+    {
+        if (!Connected) return;
+        try
+        {
+            var uids = CurrentLayoutUids();
+            var layerOf = new Dictionary<string, int>(uids.Count, StringComparer.Ordinal);
+            for (int i = 0; i < uids.Count; i++) layerOf[uids[i]] = i;
+
+            for (int i = 0; i < _engine.TrackCount; i++)
+            {
+                if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type != 0) continue;
+                if (!layerOf.TryGetValue(Nota.Application.TrackUids.UidFor(ti.Id), out int layer)) continue;
+                int playing = -1;
+                for (int scene = 0; scene < _engine.SceneCount; scene++)
+                    if (_engine.SessionSlotState(ti.Id, scene) == 3) { playing = scene; break; }
+                if (playing < 0) continue;
+                double len = _engine.SessionSlotLength(ti.Id, playing);
+                if (len <= 0) continue;
+                double pos = _engine.SessionSlotPosition(ti.Id);
+                double phase = pos - Math.Floor(pos / len) * len;
+                Send($"{{\"t\":\"vizSlotPhase\",\"layer\":{layer},\"col\":{playing},\"phase\":{Num(phase)},\"beat\":{Num(_engine.PositionBeats)}}}");
+            }
+        }
+        catch (ObjectDisposedException) { }
+    }
+
     /// <summary>Audio loop length and loop state of every non-empty audio slot, so a video's
     /// beat sync follows the clip's trim. Only changed slots travel; force after an edit.</summary>
     public void PublishSlotTiming(bool force = false)
@@ -322,12 +352,16 @@ public sealed class VisualBridge : IDisposable
         => Send($"{{\"t\":\"select\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{scene.ToString(CultureInfo.InvariantCulture)}}}");
 
     /// <summary>Launch one track's visual clip (layer, column) on the next launch quantum.</summary>
-    public void Slot(int layer, int scene) => SendLaunch("slot", scene, atBeat: NextQuantumBeat(), layer: layer);
+    public void Slot(int layer, int scene, double? atBeat = null)
+        => SendLaunch("slot", scene, atBeat ?? NextQuantumBeat(), layer);
 
-    public void StopLayer(int layer)
-        => Send($"{{\"t\":\"stopLayer\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)}}}");
+    public void StopLayer(int layer, double? atBeat = null)
+        => Send(atBeat is { } b
+            ? $"{{\"t\":\"stopLayer\",\"layer\":{layer},\"atBeat\":{Num(b)}}}"
+            : $"{{\"t\":\"stopLayer\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)}}}");
 
-    public void StopAll() => Send("{\"t\":\"stopAll\"}");
+    public void StopAll(double? atBeat = null)
+        => Send(atBeat is { } b ? $"{{\"t\":\"stopAll\",\"atBeat\":{Num(b)}}}" : "{\"t\":\"stopAll\"}");
 
     /// <summary>
     /// The beat the engine will actually apply a launch on, matching SessionPlayer's
@@ -335,9 +369,27 @@ public sealed class VisualBridge : IDisposable
     /// </summary>
     public double NextQuantumBeat()
     {
+        try { return NextQuantumBeat(_engine.LaunchQuant); }
+        catch (ObjectDisposedException) { return 0; }
+    }
+
+    /// <summary>The launch boundary of one Session clip: its Quantize overrides the global.</summary>
+    public double NextQuantumBeat(int trackId, int scene)
+    {
         try
         {
             double quant = _engine.LaunchQuant;
+            if (_engine.TryGetSessionClipProps(trackId, scene, out var p) && p.QuantBeats >= 0)
+                quant = p.QuantBeats;
+            return NextQuantumBeat(quant);
+        }
+        catch (ObjectDisposedException) { return 0; }
+    }
+
+    private double NextQuantumBeat(double quant)
+    {
+        try
+        {
             double now = _engine.PositionBeats;
             if (quant <= 1e-9) return Math.Round(now, 6);
             // Match SessionPlayer: a beat already on the boundary stays on it.

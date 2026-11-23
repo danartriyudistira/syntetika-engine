@@ -130,6 +130,7 @@ public partial class App : Avalonia.Application
                 var bridge = Services.GetService<VisualBridge>();
                 bridge?.PublishLayout();
                 bridge?.PublishSlotTiming();   // video follows audio trim/loop (throttled)
+                bridge?.PublishSlotPhase();    // and its playing phase
             });
         _visualLayout.Start();
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>

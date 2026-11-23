@@ -307,8 +307,21 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Timing dikirim ulang saat engine reconnect, setelah project load, dan setelah video
   di-assign ke slot yang sudah punya audio.
 - Bukti uji (Sintel 51,93 dtk, 120 BPM): impor `sync=103.85 trim=full`; trim audio ke 8 beat
-  → `sync=8 trim=4s mode=Loop`; loop off → `mode=Play once & hold`. Unit test
+  → `sync=8 trim=4s mode=Loop`; loop off → `mode=Play once & clear`. Unit test
   `a_trimmed_audio_loop_trims_the_video_at_normal_speed` lulus.
+
+## 7g. Start/finish visual = audio (23 Nov)
+
+- **Launch**: visual slot memakai `QuantBeats` clip (bukan hanya quant global); scene launch
+  dijadwalkan per layer dengan quant masing-masing, dan slot kosong mengirim stop terjadwal.
+- **Stop**: tombol Stop, Stop All, Toggle, serta Gate/Repeat saat tombol dilepas mengirim
+  `stopLayer` dengan `atBeat` yang sama dengan quantum global audio (bukan langsung).
+- **Phase**: selama audio slot playing, Nota mengirim `vizSlotPhase` (posisi lokal + beat
+  sampel). openVJ mengoreksi `started_beat` video dengan kompensasi latensi, jadi start dan
+  loop seam mengikuti audio walau launch meleset beberapa frame.
+- **One-shot**: loop audio off → video `Play once & clear` (hilang saat audio selesai).
+- Bukti uji: phase terkorreksi sekali setelah launch (`corrected≈0.215 beat`), lalu tidak
+  berulang; `sync=8 trim=4s mode=Play once & clear`.
 
 ## 8. Risiko
 

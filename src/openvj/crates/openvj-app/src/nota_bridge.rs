@@ -16,6 +16,7 @@
 //!   {"t":"vizUi","show":true}
 //!   {"t":"vizMapping","show":true}
 //!   {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"loop":true}
+//!   {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5}
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -48,8 +49,8 @@ pub struct LayoutTrack {
 pub enum Command {
     Scene { col: usize, at_beat: f64 },
     Slot { layer: usize, col: usize, at_beat: f64 },
-    StopLayer { layer: usize },
-    StopAll,
+    StopLayer { layer: usize, at_beat: Option<f64> },
+    StopAll { at_beat: Option<f64> },
     Layout { tracks: Vec<LayoutTrack>, scenes: Vec<String> },
     /// Mirror NotA's selected slot: show that clip in Preview/Properties.
     Select { layer: usize, col: usize },
@@ -72,6 +73,8 @@ pub enum Command {
     VizMapping { show: bool },
     /// The audio clip's loop length/state changed: retime the visual in that slot.
     VizSlotTiming { layer: usize, col: usize, beats: f32, bpm: f32, looped: bool },
+    /// The audio slot's local beat phase, so the video's start/loop seam follows it.
+    VizSlotPhase { layer: usize, col: usize, phase: f32, sample_beat: Option<f64> },
 }
 
 pub struct NotaBridge {
@@ -236,10 +239,12 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
         }
         Some("stopLayer") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-            let _ = tx.send(Command::StopLayer { layer });
+            let at_beat = v.get("atBeat").and_then(|x| x.as_f64());
+            let _ = tx.send(Command::StopLayer { layer, at_beat });
         }
         Some("stopAll") => {
-            let _ = tx.send(Command::StopAll);
+            let at_beat = v.get("atBeat").and_then(|x| x.as_f64());
+            let _ = tx.send(Command::StopAll { at_beat });
         }
         Some("select") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
@@ -340,6 +345,13 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
             let bpm = v.get("bpm").and_then(|x| x.as_f64()).filter(|b| *b > 0.0).unwrap_or(120.0) as f32;
             let looped = v.get("loop").and_then(|x| x.as_bool()).unwrap_or(true);
             let _ = tx.send(Command::VizSlotTiming { layer, col, beats, bpm, looped });
+        }
+        Some("vizSlotPhase") => {
+            let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let phase = v.get("phase").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+            let sample_beat = v.get("beat").and_then(|x| x.as_f64());
+            let _ = tx.send(Command::VizSlotPhase { layer, col, phase, sample_beat });
         }
         Some("vizCatalog") => {
             let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("generators").to_owned();

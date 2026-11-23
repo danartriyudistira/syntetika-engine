@@ -508,7 +508,15 @@ public sealed partial class SessionView
 
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
         {
-            if (_launched) { _launched = false; _o._engine.ReleaseSlot(_c.TrackId, _scene); }
+            if (_launched)
+            {
+                _launched = false;
+                // Gate / Repeat stop on release (at the global quantum); their visual must too.
+                bool stopsVisual = _o._engine.TryGetSessionClipProps(_c.TrackId, _scene, out var props)
+                                   && props.LaunchMode is (int)SessionLaunchMode.Gate or (int)SessionLaunchMode.Repeat;
+                _o._engine.ReleaseSlot(_c.TrackId, _scene);
+                if (stopsVisual) _o.StopVisual(_c);
+            }
             bool wasDragging = _dragging;
             _pressed = _dragging = false;
             e.Pointer.Capture(null);

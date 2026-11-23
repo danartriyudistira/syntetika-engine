@@ -36,8 +36,12 @@ diffs are in `patches/`.
   Images drop the same way and become the visual only.
 - **Video follows the audio trim**: shortening/looping an audio slot retimes its video to the
   same musical loop at normal speed (it trims the video instead of squeezing the whole file),
-  turning the audio's loop off makes the video play once and hold, and the timing is refreshed
+  turning the audio's loop off makes the video play once and clear, and the timing is refreshed
   after a project load or when a video is assigned to a slot that already has audio.
+- **Start/finish match**: visual launches use each clip's own Quantize, scene launches are
+  scheduled per layer, stops (stop button, Stop All, Toggle, Gate/Repeat release) land on the
+  same quantum as the audio, and the playing slot's local beat phase corrects the video's
+  start/loop seam (latency-compensated).
 - The browser's Files view and sample-folder tree list videos and images (not only audio),
   they are draggable onto Session slots, and the audio sample chips (Loops / One-shots / BPM /
   key) no longer hide them.
