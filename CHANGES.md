@@ -11,6 +11,9 @@ diffs are in `patches/`.
   `NotAopenVJ` profile is copied once on first launch (the old folder is left untouched).
 - New original icon (SVG source, rendered to `logo.png`/`.icns`) and a new About credit block.
 - The self-updater is disabled: it would replace this fork with a stock Nota release.
+- `scripts/package-dmg-syntetika.sh` wraps the built bundle in a drag-to-Applications
+  `.dmg` (hdiutil only) with a checksum; it carries the product version and a Gatekeeper
+  note. Ad-hoc signed and not notarized, so another Mac needs **Open Anyway** once.
 - MCP server name is `Syntetika Engine`; default port 3910 (3900 is a stock Nota install).
 
 ## Nota fork

@@ -74,6 +74,17 @@ it crashes, and stops it on quit. Then open **Session View**, select a clip, and
 **OpenVJ** tab to assign a visual. Build instructions live in
 [docs/02-m0-setup.md](docs/02-m0-setup.md).
 
+Package a DMG (the bundle must be built first):
+
+```bash
+cd src/nota
+bash scripts/bundle-mac.sh              # native engine + managed publish + .app
+bash scripts/package-dmg-syntetika.sh   # dist/Syntetika-Engine-<version>-arm64.dmg
+```
+
+The image is ad-hoc signed, not notarized: on another Mac, right-click → **Open** once (or
+System Settings → Privacy & Security → **Open Anyway**).
+
 ## Repository layout
 
 ```

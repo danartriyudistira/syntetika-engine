@@ -116,15 +116,20 @@ source "<repo>/scripts/env.sh"
 # Build visual engine
 cd "$SYNTETIKA_ROOT/src/openvj" && cargo build --release
 
-# Build + bundle app (engine ikut di Contents/Helpers)
+# Build + bundle app (native engine, managed publish, helper, FFmpeg, ad-hoc sign)
 cd "$SYNTETIKA_ROOT/src/nota"
-dotnet publish src/managed/Nota.App -c Release -r osx-arm64 --self-contained true \
-  -p:NotaSkipWebBuild=true -p:NotaNativeDir="$PWD/build-arm64" -o "$PWD/dist/publish"
-NOTA_SKIP_BUILD=1 NOTA_APP_DIR="$PWD/dist" bash scripts/bundle-mac.sh
+NOTA_APP_DIR="$PWD/dist" bash scripts/bundle-mac.sh
+
+# Installer DMG (drag to Applications; .sha256 alongside)
+bash scripts/package-dmg-syntetika.sh
 
 # Jalankan
 open "$SYNTETIKA_ROOT/src/nota/dist/Syntetika Engine.app"
 ```
+
+`bundle-mac.sh` memakai build native yang sudah terkonfigurasi (Ninja atau Makefiles) dan
+mengirim path absolut ke `dotnet publish`, jadi `libnota_engine.dylib` selalu ikut. DMG
+bersifat ad-hoc signed dan belum notarized; di Mac lain perlu **Open Anyway** sekali.
 
 Log yang berguna:
 
@@ -189,9 +194,12 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 
 ### P3 — Paket rilis v0.1.0 (±3–5 hari)
 
-- Bundle helper ditandatangani + notarized; versi produk di Info.plist.
-- `release.yml`: build macOS arm64, zip, checksum, catatan rilis.
-- Halaman unduhan + panduan “Open Anyway”.
+- [x] **DMG drag-to-Applications** (`scripts/package-dmg-syntetika.sh`): 111 MB, berisi app,
+  symlink Applications, Read me Gatekeeper, dan `.sha256`. Nama memakai versi produk (0.1.0).
+- [ ] Developer ID signing + notarization (`notarytool`); bundle masih ad-hoc dan versi
+  `CFBundleShortVersionString` masih mengikuti Nota (0.60.4).
+- [ ] `release.yml`: build macOS arm64, DMG, checksum, catatan rilis.
+- [ ] Halaman unduhan + panduan “Open Anyway”.
 - Kriteria: unduhan bersih bisa dibuka di Mac lain; About menampilkan versi yang benar.
 
 ### P4 — Editing lanjutan (±5–8 hari)
