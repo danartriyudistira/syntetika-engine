@@ -40,6 +40,11 @@ diffs are in `patches/`.
 - **Visual output window**: View → **Visual Output** toggles openVJ's output window, kept
   always on top for a projector or second screen; its checkmark follows the engine's `vizOut`
   reports, and the last request is replayed when the engine reconnects.
+- **Background engine**: Nota starts openVJ with its editor hidden, and View → **OpenVJ**
+  shows or hides that window. Closing the editor hides it instead of quitting the engine.
+- **Idle cost**: while the editor, output and mapping windows are hidden (and no Syphon client
+  is receiving), openVJ skips the GPU frame, the UI sync and the redraw work, and drops its
+  tick to 10 fps. Sharing the screen (output or editor) returns to 60 fps immediately.
 - **Media sources**: the assign dialog offers video/image files, cameras and Syphon servers.
   Picked files are copied content-addressed into `visuals/media/<sha256>.<ext>` (staged in the
   data folder until the project is saved), and `composition.json` stores `media/<file>` so a

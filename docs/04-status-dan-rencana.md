@@ -254,6 +254,26 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Bukti uji: `vizOut open=true`, log engine `output window shown`, window “Syntetika Visual
   Output” muncul; toggle kedua menghasilkan `open=false`.
 
+## 7d. openVJ sebagai background engine (23 Nov)
+
+- Nota menjalankan `syntetika-visual` dengan `SYNTETIKA_UI_HIDDEN=1`; window editor tidak
+  tampil saat start.
+- **View → OpenVJ** menampilkan/menyembunyikan editor; tombol X hanya menyembunyikan selama
+  dijalankan Nota, engine tetap hidup dan bridge tetap tersambung.
+- State dikirim dua arah: `vizUi` dari Nota, `vizUiState` dari openVJ; centang menu ikut
+  berubah walau window ditutup dari openVJ.
+- **Optimalisasi**: saat editor, output, dan mapping tersembunyi (tidak ada klien Syphon),
+  openVJ melewati `engine.render`, `sync` UI, thumbnail/library pump, dan redraw; tick turun
+  dari 60 ke 10 fps. Begitu jendela tampil, kembali 60 fps.
+- Bukti: CPU idle turun dari **18–27%** (UI selalu tampil) menjadi **~6–8%** saat semua
+  tersembunyi; window list hanya menampilkan Nota, `render=off` di log, dan output tetap
+  60 fps dengan `max_render` > 0 saat dibuka.
+- Sisa biaya idle berasal dari thread internal engine (watcher folder efek/MilkDrop, Link,
+  driver GPU), bukan render atau tick; kandidat optimasi berikutnya adalah memperlambat
+  pemindaian folder.
+- Syphon discovery tetap hidup saat hidden: server dibuat ringan, dan render otomatis
+  berjalan begitu ada klien yang menerima.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

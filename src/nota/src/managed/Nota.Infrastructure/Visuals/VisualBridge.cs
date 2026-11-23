@@ -17,7 +17,9 @@
 //                    {"t":"stopLayer","layer":0}
 //                    {"t":"stopAll"}
 //                    {"t":"vizOutput","show":true}
+//                    {"t":"vizUi","show":true}
 //   visual -> Nota : {"t":"vizOut","open":true}
+//                    {"t":"vizUiState","open":true}
 //
 // No audio ever crosses this channel; only musical time and commands.
 
@@ -69,12 +71,22 @@ public sealed class VisualBridge : IDisposable
     private volatile bool _outputOpen;
     /// <summary>Last show/hide Nota asked for; replayed when the visual engine reconnects.</summary>
     private volatile bool _outputWanted;
+    /// <summary>openVJ reported that its editor window is on screen (`vizUiState`).</summary>
+    private volatile bool _uiOpen;
+    /// <summary>Last editor show/hide Nota asked for; replayed on reconnect.</summary>
+    private volatile bool _uiWanted;
 
     /// <summary>Whether the visual engine's output window is open, as it last reported.</summary>
     public bool OutputOpen => _outputOpen;
 
+    /// <summary>Whether openVJ's editor window is open, as it last reported.</summary>
+    public bool UiOpen => _uiOpen;
+
     /// <summary>Raised on a bridge thread when the output window opens or closes.</summary>
     public event Action<bool>? OutputOpenChanged;
+
+    /// <summary>Raised on a bridge thread when openVJ's editor window opens or closes.</summary>
+    public event Action<bool>? UiOpenChanged;
 
     public VisualBridge(NotaEngine engine) => _engine = engine;
 
@@ -466,6 +478,7 @@ public sealed class VisualBridge : IDisposable
             // asked for, so "View ▸ Visual Output" survives an engine restart.
             SetOutputOpen(false);
             if (_outputWanted) Send("{\"t\":\"vizOutput\",\"show\":true}");
+            if (_uiWanted) Send("{\"t\":\"vizUi\",\"show\":true}");
             var reader = new Thread(() => ReadLoop(client)) { IsBackground = true, Name = "visual-bridge-read" };
             reader.Start();
             if (!_loggedFirstClient)
@@ -534,20 +547,41 @@ public sealed class VisualBridge : IDisposable
         Send($"{{\"t\":\"vizOutput\",\"show\":{(show ? "true" : "false")}}}");
     }
 
+    /// <summary>Shows or hides openVJ's editor window; replayed if the engine reconnects.</summary>
+    public void VizUi(bool show)
+    {
+        _uiWanted = show;
+        Send($"{{\"t\":\"vizUi\",\"show\":{(show ? "true" : "false")}}}");
+    }
+
     /// <summary>Handles messages about the engine itself; true when consumed here.</summary>
     private bool HandleControlMessage(string line)
     {
-        if (!line.Contains("\"vizOut\"", StringComparison.Ordinal)) return false;
+        bool maybeOutput = line.Contains("\"vizOut\"", StringComparison.Ordinal);
+        bool maybeUi = line.Contains("\"vizUiState\"", StringComparison.Ordinal);
+        if (!maybeOutput && !maybeUi) return false;
         try
         {
             using var doc = JsonDocument.Parse(line);
             var v = doc.RootElement;
-            if (!v.TryGetProperty("t", out var t) || t.GetString() != "vizOut") return false;
+            if (!v.TryGetProperty("t", out var t)) return false;
+            string? kind = t.GetString();
             bool open = v.TryGetProperty("open", out var o) && o.ValueKind == JsonValueKind.True;
-            _outputWanted = open;
-            SetOutputOpen(open);
-            AppLog($"[viz<-] vizOut open={open}");
-            return true;
+            if (kind == "vizOut")
+            {
+                _outputWanted = open;
+                SetOutputOpen(open);
+                AppLog($"[viz<-] vizOut open={open}");
+                return true;
+            }
+            if (kind == "vizUiState")
+            {
+                _uiWanted = open;
+                SetUiOpen(open);
+                AppLog($"[viz<-] vizUiState open={open}");
+                return true;
+            }
+            return false;
         }
         catch (JsonException) { return false; }
     }
@@ -558,6 +592,14 @@ public sealed class VisualBridge : IDisposable
         _outputOpen = open;
         try { OutputOpenChanged?.Invoke(open); }
         catch (Exception ex) { AppLog("output state handler failed: " + ex.Message); }
+    }
+
+    private void SetUiOpen(bool open)
+    {
+        if (_uiOpen == open) return;
+        _uiOpen = open;
+        try { UiOpenChanged?.Invoke(open); }
+        catch (Exception ex) { AppLog("editor state handler failed: " + ex.Message); }
     }
 
     private long NextSeq() => Interlocked.Increment(ref _seq);
@@ -746,6 +788,7 @@ public sealed class VisualBridge : IDisposable
         _stream = null;
         _client = null;
         SetOutputOpen(false);
+        SetUiOpen(false);
     }
 
     private static void AppLog(string text) => Console.Error.WriteLine("[visual-bridge] " + text);

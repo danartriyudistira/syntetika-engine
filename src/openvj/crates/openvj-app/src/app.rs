@@ -253,6 +253,10 @@ pub struct App {
     status: String,
     escape_at: Option<f64>,
     pub output_open: bool,
+    /// The editor window is on screen. Nota starts the engine hidden and toggles this.
+    ui_open: bool,
+    /// The bridge connection, tracked so a reconnect sends the current editor state.
+    nota_connected: bool,
     /// Properties tab to switch to on the next sync.
     tab_request: Option<i32>,
 
@@ -505,6 +509,8 @@ impl App {
             nota_queue: Vec::new(),
             nota_beat: None,
             nota_slew_max: 0.0,
+            ui_open: false,
+            nota_connected: false,
             prewarm: Vec::new(),
             layout_uids: Vec::new(),
             viz_last: String::new(),
@@ -629,9 +635,51 @@ impl App {
         eprintln!("openVJ: following Nota's clock");
     }
 
+    /// True when Nota started this engine (so closing the editor hides it instead of quitting).
+    pub fn hosted_by_nota(&self) -> bool {
+        self.nota.is_some()
+    }
+
+    /// Nota's View ▸ OpenVJ: show or hide the editor window.
+    fn show_ui_window(&mut self, ui: &MainWindow, show: bool) {
+        if show {
+            let _ = ui.show();
+            ui.invoke_focus_keys();
+        } else {
+            ui.window().set_fullscreen(false);
+            let _ = ui.hide();
+        }
+        self.ui_shown(show);
+    }
+
+    /// Records the editor window's visibility and tells Nota, which mirrors it in its menu.
+    pub fn ui_shown(&mut self, open: bool) {
+        if self.ui_open == open {
+            return;
+        }
+        self.ui_open = open;
+        eprintln!("openVJ: editor window {}", if open { "shown" } else { "hidden" });
+        self.send_ui_state();
+    }
+
+    fn send_ui_state(&self) {
+        if let Some(bridge) = &self.nota {
+            bridge.send(&format!("{{\"t\":\"vizUiState\",\"open\":{}}}", self.ui_open));
+        }
+    }
+
     /// Drain bridge commands, then apply the ones whose beat has arrived. Launches are
     /// scheduled by absolute beat, so packet jitter never moves the cut.
-    fn nota_tick(&mut self, now: f64, beat: f64, out: &OutputWindow) {
+    fn nota_tick(&mut self, now: f64, beat: f64, ui: &MainWindow, out: &OutputWindow) {
+        // A reconnecting engine starts with Nota's requested visibility (or hidden), so report
+        // it once the link is up; a hand-started engine may have its editor on screen.
+        let connected = self.nota.as_ref().is_some_and(|b| b.connected());
+        if connected != self.nota_connected {
+            self.nota_connected = connected;
+            if connected {
+                self.send_ui_state();
+            }
+        }
         // Structural and selection messages are not musical events: apply them on arrival so
         // they never wait on (or get stuck behind) a transport beat.
         let commands = self.nota.as_ref().map(|b| b.poll()).unwrap_or_default();
@@ -701,6 +749,7 @@ impl App {
                     self.send_viz_state(layer, col, 0);
                 }
                 NotaCommand::VizOutput { show } => self.show_output_window(out, show),
+                NotaCommand::VizUi { show } => self.show_ui_window(ui, show),
                 NotaCommand::VizCatalog { kind, query, seq } => {
                     let body = crate::viz::catalog(&kind, &query);
                     let line = serde_json::json!({
@@ -1398,12 +1447,12 @@ impl App {
 
     // ---------------------------------------------------------------- frame loop
 
-    pub fn frame(&mut self, ui: &MainWindow, out: &OutputWindow) {
+    pub fn frame(&mut self, ui: &MainWindow, out: &OutputWindow) -> bool {
         let now = self.now();
         let dt = (now - self.last_frame).clamp(0.0, 0.25) as f32;
         self.last_frame = now;
         let beat = self.update_tempo(now, dt as f64);
-        self.nota_tick(now, beat, out);
+        self.nota_tick(now, beat, ui, out);
         self.viz_poll(now);
         let live = self.comp.live_clip_ids();
         self.comp.tick(now, beat);
@@ -1426,14 +1475,27 @@ impl App {
             clip.apply_macros(&inputs);
         }
         let preview = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id);
+        // Keep the Syphon server discoverable while hidden; a receiving client then forces
+        // rendering again instead of leaving it with a frozen frame.
         self.syphon_out.before_render(&mut self.engine);
-        // While Automix plays, the Player's own composition goes to the output instead.
+        let ui_visible = self.ui_open && !ui.window().is_minimized();
+        // `output_open` also drives the extra mapped screens, so a minimized main output
+        // window must not stop rendering for a fullscreen output on another display.
+        let output_visible = self.output_open;
+        let render_needed =
+            ui_visible || output_visible || self.mapping_window_open || self.syphon_out.is_receiving();
+
+        // Automix and its own composition keep advancing while nothing is on screen; only the
+        // GPU frame is skipped.
+        let player_shown = self.player.frame(&self.comp, now, beat, self.comp.bpm, &self.inputs);
         let render_started = Instant::now();
-        match self.player.frame(&self.comp, now, beat, self.comp.bpm, &self.inputs) {
-            Some(shown) => self.engine.render(shown, now, &self.inputs, None),
-            None => self.engine.render(&self.comp, now, &self.inputs, preview),
+        if render_needed {
+            match player_shown {
+                Some(shown) => self.engine.render(shown, now, &self.inputs, None),
+                None => self.engine.render(&self.comp, now, &self.inputs, preview),
+            }
         }
-        let render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
+        let render_ms = if render_needed { render_started.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
         self.dbg_max_render_ms = self.dbg_max_render_ms.max(render_ms);
         if render_ms > 50.0 {
             let active: Vec<String> = self
@@ -1455,7 +1517,8 @@ impl App {
                 self.engine.last_pass_count()
             );
         }
-        if (self.output_open || self.mapping_window_open)
+        if render_needed
+            && (self.output_open || self.mapping_window_open)
             && let Some(setup) = &self.mapping.setup
         {
             self.engine.map_output(setup, self.mapping.test_card);
@@ -1463,10 +1526,14 @@ impl App {
                 self.images_dirty = true;
             }
         }
-        self.syphon_out.after_render(&self.engine);
-        ui.set_syphon_on(self.syphon_out.is_enabled());
-        ui.set_syphon_receiving(self.syphon_out.is_receiving());
-        ui.set_syphon_error(self.syphon_out.error().unwrap_or_default().into());
+        if render_needed {
+            self.syphon_out.after_render(&self.engine);
+        }
+        if ui_visible {
+            ui.set_syphon_on(self.syphon_out.is_enabled());
+            ui.set_syphon_receiving(self.syphon_out.is_receiving());
+            ui.set_syphon_error(self.syphon_out.error().unwrap_or_default().into());
+        }
         // Event inputs (such as Acuarela's Reset) fire for one frame.
         for fx in self
             .comp
@@ -1481,23 +1548,25 @@ impl App {
             clip.effects.iter_mut().for_each(Effect::clear_events);
         }
 
-        self.update_effect_library(ui);
-        self.update_milk_library(ui);
-        self.update_milk_pack(ui);
-        self.update_library(dt);
-        if self.escape_at.is_some_and(|t| now - t > 0.8) {
-            self.escape_at = None;
-            self.props_dirty = true;
-        }
-        ui.set_beat(self.inputs.beat.rem_euclid(1024.0) as f32);
-        ui.set_link_on(self.link.is_enabled());
-        ui.set_link_peers(self.link.peers() as i32);
-        let waiting = self.clock_on && self.midi_clock.is_waiting(now);
-        if self.clock_dirty || waiting != ui.get_clock_waiting() {
-            self.clock_dirty = false;
-            ui.set_clock_on(self.clock_on);
-            ui.set_clock_waiting(waiting);
-            ui.set_clock_port(self.clock_port.clone().unwrap_or_default().into());
+        if ui_visible {
+            self.update_effect_library(ui);
+            self.update_milk_library(ui);
+            self.update_milk_pack(ui);
+            self.update_library(dt);
+            if self.escape_at.is_some_and(|t| now - t > 0.8) {
+                self.escape_at = None;
+                self.props_dirty = true;
+            }
+            ui.set_beat(self.inputs.beat.rem_euclid(1024.0) as f32);
+            ui.set_link_on(self.link.is_enabled());
+            ui.set_link_peers(self.link.peers() as i32);
+            let waiting = self.clock_on && self.midi_clock.is_waiting(now);
+            if self.clock_dirty || waiting != ui.get_clock_waiting() {
+                self.clock_dirty = false;
+                ui.set_clock_on(self.clock_on);
+                ui.set_clock_waiting(waiting);
+                ui.set_clock_port(self.clock_port.clone().unwrap_or_default().into());
+            }
         }
         self.frames += 1;
         self.dbg_max_dt = self.dbg_max_dt.max(dt as f64 * 1000.0);
@@ -1505,22 +1574,32 @@ impl App {
         if elapsed >= 1.0 {
             let fps = self.frames as f64 / elapsed;
             eprintln!(
-                "openVJ: fps={fps:.1} max_dt={:.1}ms max_render={:.1}ms bridge={} slew={:.4} beat",
-                self.dbg_max_dt, self.dbg_max_render_ms, self.nota.is_some(), self.nota_slew_max
+                "openVJ: fps={fps:.1} max_dt={:.1}ms max_render={:.1}ms bridge={} render={} slew={:.4} beat",
+                self.dbg_max_dt, self.dbg_max_render_ms, self.nota.is_some(),
+                if render_needed { "on" } else { "off" }, self.nota_slew_max
             );
-            ui.set_fps(format!("{fps:.0} fps").into());
+            if ui_visible {
+                ui.set_fps(format!("{fps:.0} fps").into());
+            }
             self.frames = 0;
             self.fps_since = Instant::now();
             self.dbg_max_dt = 0.0;
             self.dbg_max_render_ms = 0.0;
             self.nota_slew_max = 0.0;
         }
-        self.sync(ui, out);
-        ui.window().request_redraw();
-        if self.output_open {
+        if ui_visible || output_visible || self.mapping_window_open {
+            self.sync(ui, out);
+        }
+        if ui_visible {
+            ui.window().request_redraw();
+        }
+        if output_visible {
             out.window().request_redraw();
         }
-        self.prewarm_tick();
+        if render_needed {
+            self.prewarm_tick();
+        }
+        render_needed
     }
 
     /// Pushes whatever changed since the last call to the UI.

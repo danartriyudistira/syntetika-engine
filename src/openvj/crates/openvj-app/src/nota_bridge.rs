@@ -13,6 +13,7 @@
 //!   {"t":"stopLayer","layer":0}
 //!   {"t":"stopAll"}
 //!   {"t":"vizOutput","show":true}
+//!   {"t":"vizUi","show":true}
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -63,6 +64,8 @@ pub enum Command {
     VizLayer { layer: usize, opacity: Option<f32>, blend: Option<String>, bypass: Option<bool> },
     /// Show or hide the output window (Nota's View ▸ Visual Output).
     VizOutput { show: bool },
+    /// Show or hide the editor window (Nota's View ▸ OpenVJ).
+    VizUi { show: bool },
 }
 
 pub struct NotaBridge {
@@ -91,6 +94,11 @@ impl NotaBridge {
 
     pub fn clock(&self) -> Option<ClockSample> {
         *self.clock.lock().ok()?
+    }
+
+    /// True while the socket to Nota is up (used to report editor visibility on reconnect).
+    pub fn connected(&self) -> bool {
+        self.writer.lock().map(|w| w.is_some()).unwrap_or(false)
     }
 
     /// Sends one JSON line to NotA (viz replies). Ignored while disconnected.
@@ -310,6 +318,10 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
             // Missing field means "show": a bare request should not hide the window.
             let show = v.get("show").and_then(|x| x.as_bool()).unwrap_or(true);
             let _ = tx.send(Command::VizOutput { show });
+        }
+        Some("vizUi") => {
+            let show = v.get("show").and_then(|x| x.as_bool()).unwrap_or(true);
+            let _ = tx.send(Command::VizUi { show });
         }
         Some("vizCatalog") => {
             let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("generators").to_owned();

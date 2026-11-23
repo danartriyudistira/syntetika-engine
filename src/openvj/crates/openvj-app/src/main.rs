@@ -818,23 +818,49 @@ fn main() -> Result<()> {
         }
     }
 
-    ui.window().on_close_requested(|| {
-        let _ = slint::quit_event_loop();
-        slint::CloseRequestResponse::HideWindow
-    });
+    {
+        let (app, w) = (app.clone(), ui.as_weak());
+        ui.window().on_close_requested(move || {
+            // Hosted by Nota the engine is the visual backend: closing the editor hides it, and
+            // Nota's View ▸ OpenVJ brings it back. Hand-started openVJ still quits.
+            let hosted = app.try_borrow().map(|a| a.hosted_by_nota()).unwrap_or(false);
+            if hosted {
+                if let Some(ui) = w.upgrade() {
+                    ui.window().set_fullscreen(false);
+                    let _ = ui.hide();
+                }
+                if let Ok(mut a) = app.try_borrow_mut() {
+                    a.ui_shown(false);
+                }
+                return slint::CloseRequestResponse::KeepWindowShown;
+            }
+            let _ = slint::quit_event_loop();
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
 
     // Render loop.
-    let timer = Timer::default();
+    let timer = Rc::new(Timer::default());
     {
         let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        let ticker = Rc::clone(&timer);
         let snapshot = std::env::var_os("OPENVJ_SNAPSHOT").map(PathBuf::from);
         let mut frame_count = 0u32;
+        let mut interval_ms = 16u64;
         let mut screen_outputs = app::ScreenOutputs::default();
         timer.start(TimerMode::Repeated, Duration::from_millis(16), move || {
             let (Some(ui), Some(out)) = (w.upgrade(), o.upgrade()) else { return };
+            let mut visible = false;
             if let Ok(mut a) = app.try_borrow_mut() {
-                a.frame(&ui, &out);
+                visible = a.frame(&ui, &out);
                 a.sync_screen_outputs(&ui, &out, &mut screen_outputs);
+            }
+            // Nothing on screen (editor and output hidden, no Syphon receiver): 10 fps is
+            // plenty for the clock and the bridge. A shown window returns to 60 fps at once.
+            let want = if visible { 16 } else { 100 };
+            if want != interval_ms {
+                ticker.set_interval(Duration::from_millis(want));
+                interval_ms = want;
             }
             frame_count += 1;
             // Debug aid: OPENVJ_SNAPSHOT=out.png saves a screenshot of the window after ~2 s and quits.
@@ -853,8 +879,15 @@ fn main() -> Result<()> {
         });
     }
 
-    ui.show()?;
-    ui.invoke_focus_keys();
+    // Nota starts the engine as a background visual backend: its editor window stays hidden
+    // until View ▸ OpenVJ asks for it. Running openVJ by hand still shows the editor.
+    let ui_hidden = std::env::var_os("SYNTETIKA_UI_HIDDEN").is_some()
+        && std::env::var_os("OPENVJ_SNAPSHOT").is_none();
+    if !ui_hidden {
+        ui.show()?;
+        app.borrow_mut().ui_shown(true);
+        ui.invoke_focus_keys();
+    }
     slint::run_event_loop()?;
     app.borrow_mut().library.save_now();
     Ok(())
