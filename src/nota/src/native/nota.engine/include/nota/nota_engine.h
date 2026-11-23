@@ -246,6 +246,12 @@ NOTA_API const char* nota_get_data_dir(void);
 /* Open the default CoreAudio output device and start the audio thread. */
 NOTA_API NotaResult nota_engine_start(NotaEngine* engine);
 
+/* Syntetika Engine: the master-output tap the visual process analyses. A file-backed ring
+ * of interleaved stereo f32 frames (see src/engine/AudioTap.h for the layout). Call before
+ * nota_engine_start with the target path; an empty or NULL path disables the tap. The file
+ * is created/truncated when the device opens and written from the audio thread. */
+NOTA_API NotaResult nota_engine_set_audio_tap(NotaEngine* engine, const char* path_utf8);
+
 /* Stop the audio thread and close the device. */
 NOTA_API NotaResult nota_engine_stop(NotaEngine* engine);
 

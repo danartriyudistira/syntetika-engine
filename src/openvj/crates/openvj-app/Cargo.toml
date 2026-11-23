@@ -26,6 +26,7 @@ openvj-render.workspace = true
 openvj-resolume.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
+libc = "0.2"
 wgpu.workspace = true
 slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-femtovg-wgpu", "compat-1-2", "unstable-wgpu-30", "unstable-winit-030", "accessibility"] }
 # Slint's internal drag and drop entry point, to feed it file drags from the Finder

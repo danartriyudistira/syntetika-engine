@@ -102,6 +102,8 @@ public sealed class VisualEngineProcess : IDisposable
             // The engine is a background visual backend: its editor window stays hidden until
             // View ▸ OpenVJ asks for it. The output window has its own View menu item.
             psi.Environment["SYNTETIKA_UI_HIDDEN"] = "1";
+            // The master-output ring openVJ analyses for audio-reactive visuals.
+            psi.Environment["SYNTETIKA_AUDIO_TAP"] = NotaPaths.AudioTapFile;
             // If NotA disappears (quit or crash), the visual engine exits instead of lingering.
             psi.Environment["SYNTETIKA_EXIT_ON_DISCONNECT"] = "1";
             // Keep GPU diagnostics in the app's log folder, not on the system console.

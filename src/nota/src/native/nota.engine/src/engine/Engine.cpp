@@ -93,6 +93,10 @@ bool Engine::start() {
         audioFallbackReason_ = "a plug-in stopped responding inside the audio callback — restart Nota";
         return false;
     }
+    // The visual process reads the master output from a mapped ring: open it before the device
+    // starts so the very first block is written, then publish the rate the device negotiated.
+    if (!tapPath_.empty())
+        tap_.open(tapPath_, config_.sampleRate > 0.0 ? config_.sampleRate : transport_.sampleRate());
     bool ok = backend_->start([this](float* main, float* cue, int32_t n) { render(main, cue, n); }, bc);
     if (!ok && activeSystem_ == AudioSystem::Asio) {
         // FR-011: a missing, busy or broken ASIO driver never leaves Nota silent — run WASAPI
@@ -111,9 +115,12 @@ bool Engine::start() {
     if (ok && outputRoutingSet_) backend_->setOutputRouting(outputRouting_); // specs/089
     if (ok) {
         transport_.setSampleRate(backend_->sampleRate());
+        tap_.setSampleRate(backend_->sampleRate());
         propagateSampleRate(backend_->sampleRate()); // re-prepare every node (incl. master + racks) at the new rate
         reconfigureAllWarpStreams();                 // warp transpose + window sizes depend on the device SR
         recomputePdc();                              // latencies are known once plugins are prepared
+    } else {
+        tap_.close();
     }
     // Plug-ins with real-time threads of their own, and the render pool, join the device's IO
     // workgroup (#436).
@@ -302,6 +309,7 @@ void Engine::stop() {
     setPluginAudioWorkgroup(nullptr); // before the device (and its workgroup) goes
     if (pool_) pool_->setWorkgroup(nullptr, 0.0);
     if (backend_) backend_->stop();
+    tap_.close(); // no callback can be inside render() now
 }
 
 // --- audio device settings (M7-1) --------------------------------------------

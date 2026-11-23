@@ -60,6 +60,10 @@ public sealed partial class NotaEngine : IAudioEngine
     public void Start()
     {
         ThrowIfDisposed();
+        // Syntetika Engine: publish the master output for the visual process before the device
+        // opens, so the first block is written. An unavailable path just leaves the tap silent.
+        try { _ = NativeMethods.SetAudioTap(_handle, NotaPaths.AudioTapFile); }
+        catch (Exception) { /* not fatal: the visuals fall back to the beat */ }
         Check(NativeMethods.Start(_handle));
     }
 

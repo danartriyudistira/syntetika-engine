@@ -1023,6 +1023,8 @@ void Engine::render(float* out, float* cue, int32_t numFrames) {
     deviceBlock_ = true; // a deadline, whatever the gap since the last block
     phaseNs_ = 0.0;
     processBlock(out, cue, numFrames);
+    // The visual process's copy of the master (post-clamp, post-master-chain).
+    tap_.write(out, numFrames);
     // The transport's rate, as mixGraph sizes by (a device-block render in tests has no device).
     if (phaseNs_ > 0.0 && numFrames > 0 && transport_.sampleRate() > 0.0)
         adjustPoolSizing((double)std::chrono::duration_cast<std::chrono::nanoseconds>(

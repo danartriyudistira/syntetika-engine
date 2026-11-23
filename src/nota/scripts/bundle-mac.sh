@@ -22,7 +22,7 @@ BUNDLE_ID="studio.syntetika.engine"
 # derive it from the semver so QA can tell builds apart.
 VERSION="$(tr -d '[:space:]' < VERSION)"
 BUILD_NUMBER="$(echo "${VERSION}" | awk -F. '{ printf "%d%03d%03d", $1, $2, $3 }')"
-NATIVE_BUILD="src/native/nota.engine/build"
+NATIVE_BUILD="$(pwd)/src/native/nota.engine/build"
 APP_DIR="${NOTA_APP_DIR:-$PWD/dist}"
 APP="${APP_DIR}/${APP_NAME}.app"
 CONTENTS="${APP}/Contents"
@@ -30,7 +30,10 @@ CONTENTS="${APP}/Contents"
 PUBDIR="${NOTA_PUBLISH_DIR:-$(pwd)/dist/publish}"
 if [ "${NOTA_SKIP_BUILD:-0}" != "1" ]; then
   echo "==> Building native engine (universal)…"
-  cmake -G Ninja -S src/native/nota.engine -B "${NATIVE_BUILD}" \
+  # No -G here: reuse the generator the build directory was configured with (Ninja where
+  # available, Unix Makefiles otherwise). Forcing Ninja turns an existing Makefiles cache
+  # into a configure error.
+  cmake -S src/native/nota.engine -B "${NATIVE_BUILD}" \
     -DCMAKE_BUILD_TYPE=Release >/dev/null
   cmake --build "${NATIVE_BUILD}" >/dev/null
 

@@ -11,6 +11,7 @@ mod media_browser;
 mod midi;
 mod milk_pack;
 mod nota_bridge;
+mod nota_tap;
 mod player;
 mod prefs;
 mod shadertoy_import;

@@ -40,6 +40,11 @@ diffs are in `patches/`.
   video 10–20 s), turning the audio's loop off makes the video play once and clear, and the
   timing is refreshed after a project load or when a video is assigned to a slot that already
   has audio.
+- **Audio-reactive visuals follow Nota's master**: while Nota hosts the engine it writes the
+  final master (tracks, plugins, master chain) into a lock-free shared ring; openVJ analyses
+  it with the same FFT as its input device, so MilkDrop, ISF audio inputs and audio-modulated
+  parameters react to the DAW's sound without any extra routing. The tap costs two memcpys
+  per audio block and starts/stops with the device.
 - **Copy/paste carries the visual**: copying, cutting, duplicating or drag-copying a Session
   clip also copies or moves its openVJ visual (source, effects, playback, trim), including the
   media behind the new clip id.

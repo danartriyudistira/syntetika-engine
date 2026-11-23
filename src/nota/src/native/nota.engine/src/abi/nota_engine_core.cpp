@@ -58,6 +58,12 @@ NotaResult nota_engine_start(NotaEngine* engine) {
     return reinterpret_cast<Engine*>(engine)->start() ? NOTA_OK : NOTA_ERR_AUDIO_DEVICE;
 }
 
+NotaResult nota_engine_set_audio_tap(NotaEngine* engine, const char* path_utf8) {
+    if (!engine) return NOTA_ERR_INVALID_ARG;
+    ENG(engine)->setAudioTapPath(path_utf8 ? path_utf8 : "");
+    return NOTA_OK;
+}
+
 NotaResult nota_engine_stop(NotaEngine* engine) {
     if (!engine) return NOTA_ERR_INVALID_ARG;
     reinterpret_cast<Engine*>(engine)->stop();

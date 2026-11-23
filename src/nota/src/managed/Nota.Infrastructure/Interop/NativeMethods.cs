@@ -45,6 +45,9 @@ internal static partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "nota_engine_start")]
     internal static partial NotaResult Start(IntPtr engine);
 
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_audio_tap", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult SetAudioTap(IntPtr engine, string path);
+
     [LibraryImport(Lib, EntryPoint = "nota_engine_stop")]
     internal static partial NotaResult Stop(IntPtr engine);
 

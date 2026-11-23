@@ -16,6 +16,7 @@
 #include "audio_io/AudioInput.h"
 #include "CommandQueue.h"
 #include "engine/AudioThreadPool.h"
+#include "engine/AudioTap.h"
 #include "engine/CaptureRing.h"
 #include "engine/SessionPass.h"
 #include "engine/SnapshotHistory.h"
@@ -63,6 +64,9 @@ class Engine {
 
     bool start();
     void stop();
+    // Where the master-output tap lives (Syntetika Engine). Set by the app before start();
+    // an empty path disables it. The tap opens with the device and closes with it.
+    void setAudioTapPath(const std::string& path) { tapPath_ = path; }
     double sampleRate() const { return backend_ ? backend_->sampleRate() : 0.0; }
     bool isRunning() const { return backend_ && backend_->isRunning(); }
     // One block through the device callback's path, without a device (tests/benchmarks).
@@ -1815,6 +1819,8 @@ class Engine {
     AudioConfig config_;    // chosen device/rate/buffer (M7-1)
     AudioSystem activeSystem_ = AudioSystem::Wasapi; // what backend_ is (after any fallback)
     std::string audioFallbackReason_;                // why ASIO didn't start (specs/049)
+    AudioTap tap_;                                  // master output for the visual process
+    std::string tapPath_;                           // set before start(); empty = off
     std::string asioSkipOnce_; // set when the running driver went silent: the next start runs WASAPI
     MidiConfig midiConfig_; // enabled MIDI inputs (M7-2)
     std::unique_ptr<MidiInput> midiInput_;

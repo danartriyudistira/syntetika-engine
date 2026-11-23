@@ -51,6 +51,9 @@ Tidak berafiliasi dengan/endorse oleh kedua proyek upstream. Detail di `ATTRIBUT
   beat dibekukan.
 - **Launch**: `scene`/`slot` dikirim dengan **beat absolut**; openVJ mengantre dan mengeksekusi
   saat beat tercapai. Drift terukur 1–17 ms (satu frame).
+- **Audio tap**: master NotA ditulis ke ring file-backed (`audio-tap.shm`) tanpa lock; openVJ
+  menganalisisnya dengan FFT yang sama seperti input device, jadi parameter audio-reactive
+  mengikuti suara DAW (track, plugin, master chain) tanpa routing tambahan.
 - **Layout mirror**: 1 layer = 1 track audio/MIDI, 1 kolom = 1 scene; tambah/hapus/urut/rename
   live (≤250 ms). Track memakai **UID permanen** (`TrackDto.Uid` + `TrackUids`), jadi isi
   visual mengikuti track saat reorder/save/reload.
@@ -180,8 +183,8 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 
 ### P2 — Sinkronisasi A/V & reaktivitas audio (±5–7 hari)
 
-- Slider offset A/V ±200 ms + kalibrasi (flash/klik).
-- Tap audio master NotA → shared memory → band/hits openVJ (tanpa BlackHole).
+- [ ] Slider offset A/V ±200 ms + kalibrasi (flash/klik).
+- [x] Tap audio master NotA → shared memory → band/hits openVJ (tanpa BlackHole).
 - Kriteria: offset < 20 ms; visual bereaksi ke kick/bass; tidak menambah stall.
 
 ### P3 — Paket rilis v0.1.0 (±3–5 hari)
@@ -429,6 +432,29 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   `Visual only — this slot has no audio clip`.
 - Perbaikan manual untuk slot yang sudah berisi audio lain: hapus clip audio di slot itu, lalu
   pasang ulang videonya (atau Import video dari menu slot) agar pasangan audio+visual direset.
+
+## 7o. Audio reactivity dari master Nota (23 Nov)
+
+- **Tap native**: `Engine::render` menyalin blok master (setelah master chain + clamp) ke ring
+  buffer file-backed. Audio thread hanya 1–2 `memcpy` + satu atomic store; tidak ada lock,
+  alokasi, atau syscall di callback.
+- **File**: `~/Library/Application Support/Syntetika Engine/audio-tap.shm`, 262.208 byte =
+  header 64 B + 32.768 frame stereo f32. Header: magic `NTA1`, versi, channels, frames, sample
+  rate (f32 bits), write index monotonic (u64), dropped (u64); data di offset 64.
+- **Siklus**: `NotaEngine.Start()` memanggil `nota_engine_set_audio_tap(path)` sebelum device
+  dibuka; engine membuka mapping di `start()` dan menutupnya di `stop()`.
+  `VisualEngineProcess` mengirim `SYNTETIKA_AUDIO_TAP` ke proses visual.
+- **openVJ**: bila env ada, `update_audio` memakai tap sebagai sumber (bukan input device):
+  frame baru di-`push` ke `Analyzer` yang sama, lalu `ModInputs`, spectrum texture, dan PCM
+  MilkDrop memakai hasilnya. Rate dibaca dari header (analyzer dibuat ulang bila berubah),
+  file dicoba ulang tiap 1 s, dan restart engine terdeteksi dari index yang mundur.
+- **Hasil uji** (video Sintel 52 s, output-only 60 fps): `tap level=0.76
+  bands=[0.92, 0.79, 0.73, 0.59]`, feed 512–1024 sampel/frame,
+  `fps=59.8 max_render=1.4 ms passes=4 drops=0`; hidden engine 3,2% CPU dan tap tetap
+  menulis 44.544 frame/detik.
+- **Debug**: `SYNTETIKA_TAP_DEBUG=1` mencetak `tap level/bands/rate/feed` sekali per detik.
+- **Batasan**: tap di macOS/Linux (Windows stub); hanya parameter yang audio-reactive yang
+  bergerak; tap selalu aktif saat engine hidup (biaya sangat kecil).
 
 ## 8. Risiko
 

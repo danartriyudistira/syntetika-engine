@@ -104,6 +104,7 @@ set(NOTA_ENGINE_SOURCES
     src/engine/Engine_Render.cpp
     src/engine/Audition.cpp
     src/engine/AudioThreadPool.cpp  # fork-join pool
+    src/engine/AudioTap.cpp         # master output for the visual process
     src/media/WarpStream.cpp
     src/media/TempoDetect.cpp
     src/media/SampleAnalysis.cpp

@@ -19,6 +19,9 @@ public static class NotaPaths
     /// <summary>The per-user Nota data root, created if missing.</summary>
     public static string DataDir { get; } = ResolveDataDir();
 
+    /// <summary>Master-output ring the visual process maps (Syntetika Engine audio reactivity).</summary>
+    public static string AudioTapFile => Path.Combine(DataDir, "audio-tap.shm");
+
     /// <summary>User home directory.</summary>
     public static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 

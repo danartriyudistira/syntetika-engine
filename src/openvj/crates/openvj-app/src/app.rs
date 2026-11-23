@@ -248,6 +248,12 @@ pub struct App {
     last_ui_sync: f64,
 
     analyzer: Analyzer,
+    /// Nota's master-output tap; Some while the DAW hosts the visuals.
+    nota_tap: Option<crate::nota_tap::NotaTap>,
+    /// Sample rate the analyser was built for (the tap can arrive after startup).
+    analyzer_rate: u32,
+    /// Frames read through the tap, for the optional once-a-second diagnostic.
+    tap_frames: u32,
     audio: Option<AudioInput>,
     /// "Default input" followed by the device names, once enumerated.
     audio_devices: Vec<String>,
@@ -466,6 +472,12 @@ impl App {
             last_frame: 0.0,
             last_ui_sync: 0.0,
             analyzer: Analyzer::new(48_000),
+            nota_tap: std::env::var("SYNTETIKA_AUDIO_TAP")
+                .ok()
+                .filter(|p| !p.is_empty())
+                .map(crate::nota_tap::NotaTap::new),
+            analyzer_rate: 48_000,
+            tap_frames: 0,
             audio: None,
             audio_devices: vec!["Default input".into()],
             audio_device: 0,
@@ -2101,6 +2113,32 @@ impl App {
     /// Analyses this frame's audio (scaled by the composition's Reactivity) and hands the
     /// spectrum to the engine.
     fn update_audio(&mut self, beat: f64, dt: f32) -> ModInputs {
+        // Hosted by Nota: the DAW's master output is the source, so tracks, plugins, effects
+        // and the master chain all drive the visuals. Before the tap appears this is silence.
+        if let Some(tap) = &mut self.nota_tap {
+            let mut samples = Vec::new();
+            if let Some(rate) = tap.drain(&mut samples)
+                && rate != self.analyzer_rate
+            {
+                let release = self.analyzer.release;
+                self.analyzer = Analyzer::new(rate);
+                self.analyzer.release = release;
+                self.analyzer_rate = rate;
+            }
+            self.analyzer.push(&samples);
+            self.engine.set_audio_samples(&samples, self.analyzer_rate, self.comp.reactivity);
+            self.analyzer.gain = self.comp.reactivity;
+            let l = self.analyzer.analyze(dt);
+            self.engine.set_spectrum(Some(self.analyzer.spectrum()));
+            self.tap_frames = self.tap_frames.wrapping_add(1);
+            if self.tap_frames % 60 == 0 && std::env::var_os("SYNTETIKA_TAP_DEBUG").is_some() {
+                eprintln!(
+                    "openVJ: tap level={:.2} bands={:?} rate={} feed={}",
+                    l.overall.level, l.bands, self.analyzer_rate, samples.len()
+                );
+            }
+            return analyzed_inputs(beat, l);
+        }
         let Some(input) = &self.audio else {
             self.engine.set_spectrum(None);
             return ModInputs { beat, ..Default::default() };
@@ -2110,19 +2148,7 @@ impl App {
         self.analyzer.gain = self.comp.reactivity;
         let l = self.analyzer.analyze(dt);
         self.engine.set_spectrum(Some(self.analyzer.spectrum()));
-        let signal = |f: openvj_audio::Features| AudioSignal {
-            level: f.level,
-            hits: f.hits,
-            presence: f.presence,
-            clock: f.clock,
-        };
-        ModInputs {
-            beat,
-            bands: l.bands,
-            band_signals: l.band_features.map(signal),
-            overall: signal(l.overall),
-            launch_beat: 0.0,
-        }
+        analyzed_inputs(beat, l)
     }
 
     /// Parameter rows change every frame while modulated, so they are rebuilt each sync
@@ -5992,4 +6018,21 @@ fn kind_tag(source: &ClipSource) -> &'static str {
 /// Seconds since the Unix epoch, for the library's "last used".
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Maps one frame of analyser levels to the modulation inputs every parameter reads.
+fn analyzed_inputs(beat: f64, l: openvj_audio::Levels) -> ModInputs {
+    let signal = |f: openvj_audio::Features| AudioSignal {
+        level: f.level,
+        hits: f.hits,
+        presence: f.presence,
+        clock: f.clock,
+    };
+    ModInputs {
+        beat,
+        bands: l.bands,
+        band_signals: l.band_features.map(signal),
+        overall: signal(l.overall),
+        launch_beat: 0.0,
+    }
 }
