@@ -411,6 +411,25 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Batasan: klik header kolom, Piano press/release, dan peluncuran dari Remote/MCP belum
   men-trigger balik ke Nota.
 
+## 7n. Audio ikut saat video dipasang ke slot visual (23 Nov)
+
+- Penyebab "visual berganti, audio Nota tidak": visual bisa dipasang ke slot yang **kosong**
+  (tidak ada clip audio). Klik sel itu hanya meluncurkan visual; tidak ada audio untuk
+  dimulai. Video tanpa stream audio juga tetap senyap.
+- Sekarang **media picker di tab OpenVJ** (dan drop di editor openVJ) memasangkan suara video
+  ke slot Nota yang sama bila slot itu masih kosong: FFmpeg mengekstrak audio, clip diberi
+  nama file, dan sync visual di-set ke panjang slot (beats). Slot yang sudah punya audio tidak
+  ditimpa (status: audio lama dipertahankan).
+- Track MIDI/instrument tidak punya slot audio; status menjelaskan bahwa suara butuh audio
+  track.
+- Drop di editor openVJ mengirim `vizMediaAudio {layer,col,path}`; Nota memetakan layer→track,
+  mengimpor audio, lalu `VizPlayback(..., setSync:true)` tanpa mengganti clip visual yang
+  sudah dipasang.
+- Status saat klik clip: `Launched from openVJ` (ada audio) atau
+  `Visual only — this slot has no audio clip`.
+- Perbaikan manual untuk slot yang sudah berisi audio lain: hapus clip audio di slot itu, lalu
+  pasang ulang videonya (atau Import video dari menu slot) agar pasangan audio+visual direset.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

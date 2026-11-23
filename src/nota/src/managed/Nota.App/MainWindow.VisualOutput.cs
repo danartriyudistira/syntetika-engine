@@ -163,11 +163,14 @@ public partial class MainWindow
                 _mappingShown = open;
                 SyncMappingMenu();
             });
+            bridge.SlotAudioRequested += (layer, scene, path) =>
+                Dispatcher.UIThread.Post(() => _ = PairSlotAudioAsync(layer, scene, path));
             bridge.LayoutChanged += () => Dispatcher.UIThread.Post(RefreshVisualTab);
             bridge.SlotLaunchRequested += (layer, scene) => Dispatcher.UIThread.Post(() =>
             {
-                _session?.LaunchSlotFromVisual(layer, scene);
-                if (_vm is not null) _vm.StatusText = Loc.T("session.launched_from_openvj");
+                bool audio = _session?.LaunchSlotFromVisual(layer, scene) == true;
+                if (_vm is not null)
+                    _vm.StatusText = Loc.T(audio ? "session.launched_from_openvj" : "session.visual_only_no_audio");
             });
         }
         SyncVisualOutputMenu();

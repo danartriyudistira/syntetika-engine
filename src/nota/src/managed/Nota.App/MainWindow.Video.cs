@@ -146,4 +146,78 @@ public partial class MainWindow
             _vm.StatusText = $"Could not import {name}: {ex.Message}";
         }
     }
+
+    /// <summary>The OpenVJ tab's media picker: a video's sound joins its visual in the same
+    /// Session slot, so launching the clip brings both. An image, or a video on a slot that
+    /// already has audio, only changes the visual.</summary>
+    internal async Task ImportVisualMediaAsync(int layer, int scene, string source)
+    {
+        if (_vm is null) return;
+        string name = Path.GetFileName(source);
+        string kind = MediaFiles.KindOf(source);
+        int trackId = _session?.TrackForLayer(layer) ?? 0;
+        bool video = kind == "video";
+        if (video && trackId > 0 && TrackIsAudio(trackId)
+            && _session is { } s && !s.SlotFilled(trackId, scene))
+        {
+            await ImportVideoAsync(source, trackId, scene);
+            return;
+        }
+        try
+        {
+            string media = await Task.Run(() => MediaFiles.Prepare(source, VisualBridge.Current?.ProjectDir));
+            VisualBridge.Current?.VizAssignMedia(layer, scene, kind, media);
+            // A video assigned to a slot that already has audio takes that audio's timing.
+            VisualBridge.Current?.ResendSlotTiming();
+            VisualBridge.Current?.PublishSlotTiming(force: true);
+            _session?.Refresh();
+            _vm.StatusText = !video
+                ? $"Image on the visual layer: {name}"
+                : trackId <= 0 || !TrackIsAudio(trackId)
+                    ? $"Visual added — {name}'s sound needs an audio track."
+                    : $"Visual added — the slot keeps its existing audio.";
+        }
+        catch (Exception ex)
+        {
+            _vm.StatusText = $"Could not add {name}: {ex.Message}";
+        }
+    }
+
+    /// <summary>A video dropped in openVJ's own editor: put its sound in the Session slot that
+    /// already carries the picture, unless the slot has audio of its own. The engine placed and
+    /// loaded the clip; this only adds the audio and beat-syncs the pair.</summary>
+    internal async Task PairSlotAudioAsync(int layer, int scene, string path)
+    {
+        if (_vm is null || _session is null) return;
+        int trackId = _session.TrackForLayer(layer);
+        if (trackId <= 0 || scene < 0 || scene >= Engine.SceneCount) return;
+        if (!TrackIsAudio(trackId)) return;          // a MIDI track has no audio slot to fill
+        if (_session.SlotFilled(trackId, scene)) return; // keep the slot's own audio
+        if (!VideoAudio.Available) return;
+        string name = Path.GetFileName(path);
+        try
+        {
+            string? wav = await VideoAudio.ExtractAsync(path);
+            if (wav is null)
+            {
+                _vm.StatusText = $"{name} has no audio — the visual stays silent.";
+                return;
+            }
+            if (!Engine.AddSessionAudioFile(trackId, scene, wav)) return;
+            Engine.SetSessionClipName(trackId, scene, Path.GetFileNameWithoutExtension(path));
+            double length = Engine.SessionSlotLength(trackId, scene);
+            if (length > 0)
+                VisualBridge.Current?.VizPlayback(layer, scene, null, length, "Loop", null, setSync: true);
+            _session.Refresh();
+            Console.Error.WriteLine($"[video] paired {name} with layer {layer} scene {scene} ({length:0.###} beats)");
+            _vm.StatusText = length > 0
+                ? $"The video's sound joined its visual ({length:0.##} beats)."
+                : "The video's sound joined its visual.";
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("[video] pairing failed: " + ex.Message);
+            _vm.StatusText = $"Could not take {name}'s sound: {ex.Message}";
+        }
+    }
 }

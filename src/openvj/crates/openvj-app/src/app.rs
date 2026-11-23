@@ -1463,6 +1463,26 @@ impl App {
     // ---------------------------------------------------------------- clips & media
 
     fn place(&mut self, layer: usize, col: usize, source: ClipSource) {
+        self.place_inner(layer, col, source, false);
+    }
+
+    /// A user put a file in a slot: a video's sound is offered to the matching Nota slot.
+    fn place_user(&mut self, layer: usize, col: usize, source: ClipSource) {
+        self.place_inner(layer, col, source, true);
+    }
+
+    /// Test hook: act as if the user dropped a media file in a slot.
+    pub fn test_place_user(&mut self, layer: usize, col: usize, path: &Path) {
+        if let Some(source) = ClipSource::from_path(path) {
+            self.place_user(layer, col, source);
+        }
+    }
+
+    fn place_inner(&mut self, layer: usize, col: usize, source: ClipSource, announce: bool) {
+        let audio_path = match &source {
+            ClipSource::Video { .. } => source.media_path().map(Path::to_owned),
+            _ => None,
+        };
         let media = source.media_path().map(|p| (p.to_owned(), matches!(source, ClipSource::Video { .. })));
         let Some(id) = self.comp.set_clip(layer, col, source) else { return };
         if let Some((path, is_video)) = media {
@@ -1473,6 +1493,22 @@ impl App {
         self.selected_layer = layer;
         self.grid_dirty = true;
         self.props_dirty = true;
+        if announce
+            && let Some(path) = audio_path
+        {
+            self.nota_pair_audio(layer, col, &path);
+        }
+    }
+
+    /// openVJ put a video in a slot while Nota hosts the engine: ask Nota to take its sound
+    /// into the same Session slot, so launching the slot brings picture and audio together.
+    fn nota_pair_audio(&self, layer: usize, col: usize, path: &Path) {
+        let Some(bridge) = self.nota.as_ref().filter(|b| b.connected()) else { return };
+        let Ok(quoted) = serde_json::to_string(&path.to_string_lossy()) else { return };
+        bridge.send(&format!(
+            "{{\"t\":\"vizMediaAudio\",\"layer\":{layer},\"col\":{col},\"path\":{quoted}}}"
+        ));
+        eprintln!("openVJ: NOTA pair audio {layer}:{col} {}", path.display());
     }
 
     fn start_load(&mut self, id: ClipId, path: PathBuf, is_video: bool) {
@@ -2960,7 +2996,7 @@ impl App {
             layer.clips.iter().position(Option::is_none).map(|c| (self.selected_layer, c))
         });
         match target {
-            Some((l, c)) => self.place(l, c, source),
+            Some((l, c)) => self.place_user(l, c, source),
             None => self.set_status("Select a slot first (right-click a cell)"),
         }
     }
@@ -3784,7 +3820,7 @@ impl App {
     /// Puts a library item in a slot, with a preset's parameters, mappings and effects.
     fn place_library(&mut self, layer: usize, col: usize, id: &str) {
         let Some(clip) = self.library_clip(id) else { return };
-        self.place(layer, col, clip.source.clone());
+        self.place_user(layer, col, clip.source.clone());
         if let Some(placed) = self.comp.clip_mut(layer, col) {
             let id = placed.id;
             *placed = Clip { id, ..clip };
@@ -3948,7 +3984,7 @@ impl App {
                 return; // effect_add says where it went
             }
             Dragged::Library(id) => self.place_library(layer, col, &id),
-            Dragged::Source(source) => self.place(layer, col, source),
+            Dragged::Source(source) => self.place_user(layer, col, source),
             Dragged::Clip(l, c) => {
                 self.drop_clip((l, c), (layer, col), copy);
                 return;
@@ -4028,7 +4064,7 @@ impl App {
         let columns = self.comp.columns.len();
         let mut placed = 0;
         for (c, source) in (col..columns).zip(sources) {
-            self.place(layer, c, source);
+            self.place_user(layer, c, source);
             placed += 1;
         }
         self.select_slot(layer, col);

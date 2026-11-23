@@ -445,9 +445,9 @@ public sealed partial class SessionView : UserControl
 
     private void Say(string text) => Status?.Invoke(text);
 
-    private bool SlotFilled(int trackId, int scene) => _engine.SessionSlotState(trackId, scene) != 0;
+    /// <summary>Whether a Session slot holds a clip (audio, MIDI or a take).</summary>
+    internal bool SlotFilled(int trackId, int scene) => _engine.SessionSlotState(trackId, scene) != 0;
 
-    /// <summary>The visual layer a track maps to: its position among launchable columns.</summary>
     /// <summary>The first track column that can carry a visual, or 0.</summary>
     internal int FirstPlayableTrackId() => _cols.FirstOrDefault(c => c.Kind == ColKind.Track)?.TrackId ?? 0;
 
@@ -498,18 +498,24 @@ public sealed partial class SessionView : UserControl
         return index >= 0 && index < cols.Count ? cols[index].TrackId : 0;
     }
 
-    /// <summary>openVJ clicked a clip: launch the matching audio slot and schedule its visual.</summary>
-    internal void LaunchSlotFromVisual(int layer, int scene)
+    /// <summary>The track an openVJ layer belongs to (0 when the layer has no track column).</summary>
+    internal int TrackForLayer(int layer) => TrackForVisualLayer(layer);
+
+    /// <summary>openVJ clicked a clip: launch the matching audio slot and schedule its visual.
+    /// Returns true when the slot has a clip whose audio was launched, false for a visual-only
+    /// slot (the caller can then say why no sound started).</summary>
+    internal bool LaunchSlotFromVisual(int layer, int scene)
     {
         int trackId = TrackForVisualLayer(layer);
-        if (trackId <= 0 || scene < 0 || scene >= _engine.SceneCount) return;
-        if (ColumnFor(trackId) is not { Kind: ColKind.Track } c) return;
+        if (trackId <= 0 || scene < 0 || scene >= _engine.SceneCount) return false;
+        if (ColumnFor(trackId) is not { Kind: ColKind.Track } c) return false;
         Select(new Selection(SelKind.Slot, trackId, scene));
         LaunchSlotVisual(c, scene);
         // A visual-only clip still launches; only touch the audio when the slot has a take.
-        if (_engine.SessionSlotState(trackId, scene) != 0)
-            _engine.LaunchSlotVelocity(trackId, scene, 1f);
+        bool audio = _engine.SessionSlotState(trackId, scene) != 0;
+        if (audio) _engine.LaunchSlotVelocity(trackId, scene, 1f);
         UpdateStates();
+        return audio;
     }
 
     /// <summary>Copy every playable track's visual from one scene column to another.</summary>

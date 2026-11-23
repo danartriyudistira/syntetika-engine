@@ -999,6 +999,23 @@ fn main() -> Result<()> {
         });
     }
 
+    // Debug aid: simulate a video drop in openVJ's grid (the audio pairing handshake) without
+    // the mouse. `OPENVJ_PAIR_TEST=layer:col=/path/to/clip.mp4`.
+    if let Ok(spec) = std::env::var("OPENVJ_PAIR_TEST")
+        && let Some((cell, path)) = spec.split_once('=')
+        && let Some((layer, col)) = cell.split_once(':')
+        && let (Ok(layer), Ok(col)) = (layer.parse::<usize>(), col.parse::<usize>())
+    {
+        let path = path.to_owned();
+        let app = app.clone();
+        Timer::single_shot(Duration::from_secs(14), move || {
+            if let Ok(mut a) = app.try_borrow_mut() {
+                eprintln!("openVJ: test pair {layer}:{col} {path}");
+                a.test_place_user(layer, col, std::path::Path::new(&path));
+            }
+        });
+    }
+
     // Debug aid: simulate an openVJ clip click (the reverse Nota launch) without the mouse.
     if let Ok(spec) = std::env::var("OPENVJ_CLICK_TEST")
         && let Some((layer, col)) = spec.split_once(':')

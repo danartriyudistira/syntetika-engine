@@ -61,6 +61,10 @@ public sealed class VisualParamsView : UserControl
     public int Layer => _layer;
     public int Col => _col;
 
+    /// <summary>Hands a picked media file to the window, which pairs a video's sound with its
+    /// visual in the same Session slot. Null keeps the visual-only behaviour.</summary>
+    public Func<int, int, string, Task>? MediaPicked { get; set; }
+
     /// <summary>Shows a message instead of parameters (no Session clip, engine offline…).</summary>
     public void ShowHint(string text)
     {
@@ -685,6 +689,13 @@ public sealed class VisualParamsView : UserControl
             if (files.Count == 0) return;
             string? source = files[0].TryGetLocalPath();
             if (source is null || !MediaFiles.IsMedia(source)) return;
+            if (MediaPicked is not null)
+            {
+                var picked = MediaPicked;
+                _catalog?.Close();
+                await picked(_layer, _col, source);
+                return;
+            }
             // Hashing a large video must not freeze the UI.
             string target = await Task.Run(() => MediaFiles.Prepare(source, Bridge.ProjectDir));
             Bridge.VizAssignMedia(_layer, _col, MediaFiles.KindOf(source), target);

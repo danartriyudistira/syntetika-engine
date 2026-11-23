@@ -563,6 +563,18 @@ public partial class MainWindow : Window
                         break;
                     }
             }, TimeSpan.FromSeconds(8));
+        // Syntetika self-test: a video dropped in openVJ (layer:scene:path) takes its sound into
+        // the Session slot, unless that slot already has audio.
+        if (Environment.GetEnvironmentVariable("NOTA_PAIR_TEST") is { Length: > 0 } pairTest)
+            Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+            {
+                var parts = pairTest.Split(':', 3);
+                if (parts.Length == 3 && int.TryParse(parts[0], out int layer) && int.TryParse(parts[1], out int scene))
+                {
+                    Console.Error.WriteLine($"[video] pair hook L{layer} C{scene} {parts[2]}");
+                    _ = PairSlotAudioAsync(layer, scene, parts[2]);
+                }
+            }, TimeSpan.FromSeconds(11));
         // Syntetika self-test: after the video import, shorten the audio loop and then turn its
         // loop off; openVJ must retime the video to the same beats and mode.
         if (Environment.GetEnvironmentVariable("NOTA_SLOT_SYNC_TEST") is { Length: > 0 })

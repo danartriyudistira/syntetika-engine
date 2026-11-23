@@ -1243,13 +1243,13 @@ public partial class MainWindow
             return;
         }
 
-        _visualView ??= new VisualParamsView();
-        _visualView.ShowHint(Loc.T("visual.select_session_clip"));
+        var view = EnsureVisualView();
+        view.ShowHint(Loc.T("visual.select_session_clip"));
         if (DetailFloating && _detailWindow is not null)
-            SetHost(_detailWindow.ClipHost, _visualView);
+            SetHost(_detailWindow.ClipHost, view);
         else
         {
-            DetailBody.Content = _visualView;
+            DetailBody.Content = view;
             ShowDetail(160, honorPersist: false);
         }
         DetailVisualBtn.IsChecked = true;
@@ -1258,10 +1258,16 @@ public partial class MainWindow
         DetailClipBtn.IsChecked = false;
     }
 
+    private VisualParamsView EnsureVisualView()
+    {
+        _visualView ??= new VisualParamsView { MediaPicked = ImportVisualMediaAsync };
+        return _visualView;
+    }
+
     private void ShowVisualPanel(int layer, int scene)
     {
-        _visualView ??= new VisualParamsView();
-        _visualView.SetTarget(layer, scene);
+        var view = EnsureVisualView();
+        view.SetTarget(layer, scene);
         if (DetailFloating && _detailWindow is not null)
             SetHost(_detailWindow.ClipHost, _visualView);
         else

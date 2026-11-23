@@ -16,6 +16,7 @@
 //!   {"t":"vizUi","show":true}
 //!   {"t":"vizMapping","show":true}
 //!   {"t":"vizPerf","mode":2}
+//!   {"t":"vizMediaAudio","layer":0,"col":3,"path":"/path/clip.mp4"}
 //!   {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"loop":true}
 //!   {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5}
 //!   {"t":"vizCopy","fromLayer":0,"fromCol":0,"toLayer":0,"toCol":1,"move":false}

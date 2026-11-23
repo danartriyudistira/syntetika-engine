@@ -47,6 +47,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   visuals of Session clips that are still playing.
 - **Click-through launching** — clicking a clip in openVJ launches the matching Nota Session
   slot (audio and visual on the same quantum).
+- **Paired video sound** — a video dropped on a visual slot also brings its audio into that
+  Nota slot, unless the slot already has sound.
 - **Performance** — hidden engine ~2–3% CPU, output-only ~24% at 60 fps; editor work is
   capped at 30 fps and the output path skips UI sync. View → Visual Performance selects Eco
   (30 fps, ~6.5% output), Balanced (45) or Quality (60).

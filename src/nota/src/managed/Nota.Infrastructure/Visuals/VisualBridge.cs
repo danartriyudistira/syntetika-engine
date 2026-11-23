@@ -28,6 +28,7 @@
 //                    {"t":"vizUiState","open":true}
 //                    {"t":"vizMappingState","open":true}
 //                    {"t":"launchSlot","layer":0,"col":3}
+//                    {"t":"vizMediaAudio","layer":0,"col":3,"path":"/path/clip.mp4"}
 //
 // No audio ever crosses this channel; only musical time and commands.
 
@@ -47,6 +48,10 @@ public sealed class VisualBridge : IDisposable
 {
     /// <summary>Raised on a bridge thread when openVJ asks Nota to launch a Session slot.</summary>
     public event Action<int, int>? SlotLaunchRequested;
+
+    /// <summary>Raised on a bridge thread when openVJ dropped a video that Nota should pair
+    /// with the same Session slot (layer, scene, media path).</summary>
+    public event Action<int, int, string>? SlotAudioRequested;
 
     /// <summary>Raised on the UI thread after a layout snapshot was sent.</summary>
     public event Action? LayoutChanged;
@@ -805,6 +810,26 @@ public sealed class VisualBridge : IDisposable
                 AppLog($"[viz<-] launchSlot L{layer} C{scene}");
                 try { SlotLaunchRequested?.Invoke(layer, scene); }
                 catch (Exception ex) { AppLog("launch request handler failed: " + ex.Message); }
+                return true;
+            }
+            catch (JsonException) { return false; }
+        }
+        // openVJ dropped a video: take its sound into the matching Session slot, when the slot
+        // has no audio of its own.
+        if (line.Contains("\"vizMediaAudio\"", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var v = doc.RootElement;
+                if (!v.TryGetProperty("t", out var t) || t.GetString() != "vizMediaAudio") return false;
+                int layer = v.TryGetProperty("layer", out var l) ? l.GetInt32() : -1;
+                int scene = v.TryGetProperty("col", out var c) ? c.GetInt32() : -1;
+                string path = v.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
+                if (layer < 0 || scene < 0 || path.Length == 0) return true;
+                AppLog($"[viz<-] vizMediaAudio L{layer} C{scene} {Path.GetFileName(path)}");
+                try { SlotAudioRequested?.Invoke(layer, scene, path); }
+                catch (Exception ex) { AppLog("media audio handler failed: " + ex.Message); }
                 return true;
             }
             catch (JsonException) { return false; }
