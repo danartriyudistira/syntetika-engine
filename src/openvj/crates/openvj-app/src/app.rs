@@ -852,6 +852,30 @@ impl App {
                         self.send_viz_state(to_layer, to_col, 0);
                     }
                 }
+                NotaCommand::VizColumnInsert { index } => {
+                    let at = self.comp.insert_column(index);
+                    self.columns_inserted(at);
+                    self.grid_dirty = true;
+                    self.props_dirty = true;
+                    eprintln!("openVJ: NOTA insert column {at}");
+                }
+                NotaCommand::VizColumnRemove { index } => {
+                    let before = self.comp.columns.len();
+                    self.comp.remove_column(index);
+                    if self.comp.columns.len() < before {
+                        self.columns_removed(index);
+                        self.grid_dirty = true;
+                        self.props_dirty = true;
+                        eprintln!("openVJ: NOTA remove column {index}");
+                    }
+                }
+                NotaCommand::VizColumnMove { from, to } => {
+                    self.comp.move_column(from, to);
+                    self.columns_moved(from, to);
+                    self.grid_dirty = true;
+                    self.props_dirty = true;
+                    eprintln!("openVJ: NOTA move column {from} -> {to}");
+                }
                 NotaCommand::VizCatalog { kind, query, seq } => {
                     let body = crate::viz::catalog(&kind, &query);
                     let line = serde_json::json!({
@@ -1065,6 +1089,61 @@ impl App {
             self.tab_request = Some(2);   // Clip tab
         }
         eprintln!("openVJ: NOTA select {layer}:{col}");
+    }
+
+    /// Keeps the selected/edited column on the same clip when scenes are inserted/removed/moved.
+    fn columns_inserted(&mut self, at: usize) {
+        if let Some((layer, col)) = self.selected
+            && col >= at
+        {
+            self.selected = Some((layer, col + 1));
+        }
+        if let Some(col) = self.last_column
+            && col >= at
+        {
+            self.last_column = Some(col + 1);
+        }
+    }
+
+    fn columns_removed(&mut self, at: usize) {
+        if let Some((layer, col)) = self.selected {
+            self.selected = if col == at {
+                None
+            } else if col > at {
+                Some((layer, col - 1))
+            } else {
+                Some((layer, col))
+            };
+        }
+        if let Some(col) = self.last_column {
+            self.last_column = if col == at {
+                None
+            } else if col > at {
+                Some(col - 1)
+            } else {
+                Some(col)
+            };
+        }
+    }
+
+    fn columns_moved(&mut self, from: usize, to: usize) {
+        fn remap(col: usize, from: usize, to: usize) -> usize {
+            if col == from {
+                to
+            } else if from < to && col > from && col <= to {
+                col - 1
+            } else if to < from && col >= to && col < from {
+                col + 1
+            } else {
+                col
+            }
+        }
+        if let Some((layer, col)) = self.selected {
+            self.selected = Some((layer, remap(col, from, to)));
+        }
+        if let Some(col) = self.last_column {
+            self.last_column = Some(remap(col, from, to));
+        }
     }
 
     /// Sends one slot's viz state (and remembers it as the last one sent).

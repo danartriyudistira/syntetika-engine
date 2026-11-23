@@ -43,6 +43,10 @@ diffs are in `patches/`.
 - **Copy/paste carries the visual**: copying, cutting, duplicating or drag-copying a Session
   clip also copies or moves its openVJ visual (source, effects, playback, trim), including the
   media behind the new clip id.
+- **Scene structure stays aligned**: inserting, removing, moving or duplicating a scene moves
+  or copies the matching visual columns (duplicate copies each layer's visual), and the
+  selected slot is re-sent by track UID after a layout change, so a track reorder cannot leave
+  openVJ pointing at another layer.
 - **Start/finish match**: visual launches use each clip's own Quantize, scene launches are
   scheduled per layer, stops (stop button, Stop All, Toggle, Gate/Repeat release) land on the
   same quantum as the audio, and the playing slot's local beat phase corrects the video's

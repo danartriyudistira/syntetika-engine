@@ -338,6 +338,21 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - Catatan: undo Nota belum mengembalikan salinan visual; paste dari Arrangement tidak membuat
   visual baru (tidak ada visual sumber).
 
+## 7i. Sinkronisasi struktur scene & selection (23 Nov)
+
+- Operasi scene di Nota kini memindahkan/menyalin **column visual** yang sesuai:
+  insert scene → `vizColumnInsert`, remove → `vizColumnRemove`, drag/move →
+  `vizColumnMove`, duplicate → insert + copy visual tiap layer.
+- Capture Scene menyalin visual yang sedang playing ke scene baru.
+- Selection disimpan sebagai **track UID + scene**; setelah layout berubah (track
+  tambah/hapus/reorder) atau engine reconnect, `select` dihitung ulang dan dikirim lagi.
+- Tab OpenVJ mendengarkan `LayoutChanged` dan me-reload layer/scene yang baru.
+- Bukti uji: insert scene setelah scene 0 →
+  `NOTA insert column 1`, layout 9 kolom, `select 0:0` ulang; unit test
+  `scene_columns_keep_their_clips_when_inserted_removed_moved` lulus.
+- Batasan: operasi scene dari Remote/MCP/undo yang tidak lewat `SessionView` belum
+  menyesuaikan kolom; solusi penuh perlu scene UID.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

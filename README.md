@@ -41,6 +41,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   projector warping, slicing and masking, from inside Nota.
 - **Clip copy/paste carries the visual** — copying, cutting, duplicating or dragging a Session
   clip also copies or moves its openVJ visual and media.
+- **Scenes stay aligned** — inserting, removing, moving or duplicating scenes moves/copies the
+  visual columns, and track reorders re-sync the selected slot.
 - **Background visual engine** — openVJ runs hidden by default; View → OpenVJ raises its
   editor once (not always-on-top), and while nothing is on screen it stops GPU rendering and
   slows its tick.

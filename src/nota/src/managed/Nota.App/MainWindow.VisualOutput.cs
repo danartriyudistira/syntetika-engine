@@ -99,6 +99,19 @@ public partial class MainWindow
         if (MenuItemFor("view.mapping") is { } mi) mi.IsChecked = _mappingShown;
     }
 
+    /// <summary>After a track reorder/add/remove, point the OpenVJ tab at the same slot's new layer.</summary>
+    private void RefreshVisualTab()
+    {
+        if (_visualView is null || _session is null) return;
+        var slot = _session.SelectedSlot;
+        if (slot.TrackId <= 0 || slot.Scene < 0) return;
+        int layer = _session.VisualLayerFor(slot.TrackId);
+        if (layer != _visualView.Layer || slot.Scene != _visualView.Col)
+            _visualView.SetTarget(layer, slot.Scene);
+        else
+            _visualView.Reload();
+    }
+
     /// <summary>Wires the menu checkmarks to the engine's reports and applies the test hooks.</summary>
     private void AttachVisualOutputState()
     {
@@ -124,6 +137,7 @@ public partial class MainWindow
                 _mappingShown = open;
                 SyncMappingMenu();
             });
+            bridge.LayoutChanged += () => Dispatcher.UIThread.Post(RefreshVisualTab);
         }
         SyncVisualOutputMenu();
         SyncOpenVjMenu();

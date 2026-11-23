@@ -18,6 +18,7 @@
 //!   {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"loop":true}
 //!   {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5}
 //!   {"t":"vizCopy","fromLayer":0,"fromCol":0,"toLayer":0,"toCol":1,"move":false}
+//!   {"t":"vizColumnInsert","index":2}
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -78,6 +79,10 @@ pub enum Command {
     VizSlotPhase { layer: usize, col: usize, phase: f32, sample_beat: Option<f64> },
     /// Copy or move a slot's visual with its Session clip (copy/paste, duplicate, drag).
     VizCopy { from_layer: usize, from_col: usize, to_layer: usize, to_col: usize, moving: bool },
+    /// Scene structure: keep visual columns aligned with Nota's scenes.
+    VizColumnInsert { index: usize },
+    VizColumnRemove { index: usize },
+    VizColumnMove { from: usize, to: usize },
 }
 
 pub struct NotaBridge {
@@ -364,6 +369,19 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
             let to_col = v.get("toCol").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let moving = v.get("move").and_then(|x| x.as_bool()).unwrap_or(false);
             let _ = tx.send(Command::VizCopy { from_layer, from_col, to_layer, to_col, moving });
+        }
+        Some("vizColumnInsert") => {
+            let index = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let _ = tx.send(Command::VizColumnInsert { index });
+        }
+        Some("vizColumnRemove") => {
+            let index = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let _ = tx.send(Command::VizColumnRemove { index });
+        }
+        Some("vizColumnMove") => {
+            let from = v.get("from").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let to = v.get("to").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let _ = tx.send(Command::VizColumnMove { from, to });
         }
         Some("vizCatalog") => {
             let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("generators").to_owned();

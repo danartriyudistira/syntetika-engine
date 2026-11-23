@@ -1146,6 +1146,16 @@ impl Composition {
         self.columns.len() - 1
     }
 
+    /// Inserts an empty column at `index`, shifting the columns and clips after it.
+    pub fn insert_column(&mut self, index: usize) -> usize {
+        let at = index.min(self.columns.len());
+        self.columns.insert(at, Column { name: format!("{}", at + 1) });
+        for layer in &mut self.layers {
+            layer.clips.insert(at, None);
+        }
+        at
+    }
+
     /// Moves a column (and its clips) to another place, shifting the ones between.
     pub fn move_column(&mut self, from: usize, to: usize) {
         if from >= self.columns.len() || to >= self.columns.len() || from == to {
@@ -1826,6 +1836,28 @@ mod tests {
         let moved = c.move_clip_over((0, 1), (0, 0)).unwrap();
         assert_eq!(c.clip(0, 0).unwrap().id, moved);
         assert!(c.clip(0, 1).is_none());
+    }
+
+    #[test]
+    fn scene_columns_keep_their_clips_when_inserted_removed_moved() {
+        let mut c = Composition::new(640, 360, 1, 3);
+        let a = c.set_clip(0, 0, generator(GeneratorKind::Plasma)).unwrap();
+        let b = c.set_clip(0, 1, generator(GeneratorKind::Bars)).unwrap();
+        let d = c.set_clip(0, 2, generator(GeneratorKind::Rings)).unwrap();
+        c.insert_column(1);
+        assert_eq!(c.columns.len(), 4);
+        assert_eq!(c.clip(0, 0).unwrap().id, a);
+        assert!(c.clip(0, 1).is_none());
+        assert_eq!(c.clip(0, 2).unwrap().id, b);
+        assert_eq!(c.clip(0, 3).unwrap().id, d);
+        c.move_column(3, 1);
+        assert_eq!(c.clip(0, 1).unwrap().id, d);
+        assert!(c.clip(0, 2).is_none());
+        assert_eq!(c.clip(0, 3).unwrap().id, b);
+        c.remove_column(1);
+        assert_eq!(c.columns.len(), 3);
+        assert!(c.clip(0, 1).is_none());
+        assert_eq!(c.clip(0, 2).unwrap().id, b);
     }
 
     #[test]

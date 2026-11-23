@@ -16,6 +16,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Nota.Application;
 using Nota.Application.Localization;
+using Nota.Infrastructure.Visuals;
 
 namespace Nota.App;
 
@@ -70,7 +71,7 @@ public sealed partial class SessionView
 
         var addScene = new Button { Content = Loc.T("session.grid.scene"), Classes = { "ghost" }, FontSize = 9, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(0) };
         ToolTip.SetTip(addScene, Loc.T("session.grid.add_a_scene_at_the"));
-        addScene.Click += (_, _) => { int s = _engine.InsertScene(_engine.SceneCount); Refresh(); if (s >= 0) Select(new Selection(SelKind.Scene, 0, s)); };
+        addScene.Click += (_, _) => { int s = _engine.InsertScene(_engine.SceneCount); if (s >= 0) VisualBridge.Current?.InsertColumn(s); Refresh(); if (s >= 0) Select(new Selection(SelKind.Scene, 0, s)); };
 
         var stopAll = new Button { HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(0) };
         ToolTip.SetTip(stopAll, Loc.T("session.stop_every_session_clip"));
@@ -884,7 +885,13 @@ public sealed partial class SessionView
             if (_o._sceneDragTarget is { } to && wasDragging)
             {
                 _o._sceneDragTarget = null;
-                if (_o._engine.MoveScene(_scene, to)) { _o.Refresh(); _o.Select(new Selection(SelKind.Scene, 0, to)); _o.Say(Loc.T("session.grid.moved_scene")); }
+                if (_o._engine.MoveScene(_scene, to))
+                {
+                    VisualBridge.Current?.MoveColumn(_scene, to);
+                    _o.Refresh();
+                    _o.Select(new Selection(SelKind.Scene, 0, to));
+                    _o.Say(Loc.T("session.grid.moved_scene"));
+                }
                 return;
             }
             if (_o._sceneDragTarget is not null) { _o._sceneDragTarget = null; _o.InvalidateAll(); }

@@ -83,6 +83,13 @@ public sealed class VisualParamsView : UserControl
         Bridge?.VizGet(layer, col);
     }
 
+    /// <summary>Re-reads the current slot after the layer/scene structure changed.</summary>
+    public void Reload()
+    {
+        _stateKey = "";
+        if (_layer >= 0) Bridge?.VizGet(_layer, _col);
+    }
+
     private void Pump()
     {
         if (Bridge is not { Connected: true })

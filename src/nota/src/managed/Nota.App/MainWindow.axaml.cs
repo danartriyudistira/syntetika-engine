@@ -620,6 +620,18 @@ public partial class MainWindow : Window
                 bool pasted = _session?.PasteSelection() ?? false;
                 Console.Error.WriteLine($"[copy] slot 0 -> 1 copied={copied} pasted={pasted}");
             }, TimeSpan.FromSeconds(20));
+        // Scene structure mirror: insert a scene before the next one; the visual columns shift.
+        if (Environment.GetEnvironmentVariable("NOTA_SCENE_TEST") is { Length: > 0 })
+            Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+            {
+                int audio = 0;
+                for (int i = 0; i < Engine.TrackCount; i++)
+                    if (Engine.TryGetTrackInfo(i, out var ti) && ti.Type == 0) { audio = ti.Id; break; }
+                if (audio <= 0) { Console.Error.WriteLine("[scene] no audio track"); return; }
+                _session?.SelectSlot(audio, 0);
+                bool inserted = _session?.InsertSceneAtSelection() ?? false;
+                Console.Error.WriteLine($"[scene] insert after 0 = {inserted}");
+            }, TimeSpan.FromSeconds(20));
         HookSessionDeviceMoves(_session);                             // a device card dropped on a column (specs/043)
         _session.ArrangementChanged += () => Timeline.Refresh();      // M5-6
         _session.Status += msg => vm.StatusText = msg;

@@ -391,7 +391,7 @@ public sealed partial class SessionView : UserControl
             SlotSelected?.Invoke(sel.TrackId, sel.Scene);
         // Syntetika Engine: the visual engine follows the selection (Preview + Properties).
         if (sel.Kind == SelKind.Slot && ColumnFor(sel.TrackId) is { Kind: ColKind.Track })
-            VisualBridge.Current?.Select(VisualLayer(sel.TrackId), sel.Scene);
+            VisualBridge.Current?.Select(sel.TrackId, sel.Scene);
     }
 
     /// <summary>What is selected: a slot, a scene row or a Return / Master column (specs/107: the
@@ -489,6 +489,31 @@ public sealed partial class SessionView : UserControl
         double at = bridge.NextQuantumBeat();
         if (c.Kind == ColKind.Group) { foreach (int id in c.Children) bridge.StopLayer(VisualLayer(id), at); }
         else bridge.StopLayer(VisualLayer(c.TrackId), at);
+    }
+
+    /// <summary>Copy every playable track's visual from one scene column to another.</summary>
+    private void CopySceneVisuals(int fromScene, int toScene)
+    {
+        if (VisualBridge.Current is not { } bridge || fromScene == toScene) return;
+        for (int i = 0; i < _engine.TrackCount; i++)
+            if (_engine.TryGetTrackInfo(i, out var ti) && ti.Type is 0 or 1)
+                bridge.VizCopy(VisualLayer(ti.Id), fromScene, VisualLayer(ti.Id), toScene, move: false);
+    }
+
+    /// <summary>After Capture Scene: copy each layer's currently playing visual into the new scene.</summary>
+    private void CopyPlayingVisualsInto(int scene)
+    {
+        if (VisualBridge.Current is not { } bridge) return;
+        for (int i = 0; i < _engine.TrackCount; i++)
+        {
+            if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type is not (0 or 1)) continue;
+            for (int s = 0; s < _engine.SceneCount; s++)
+                if (s != scene && _engine.SessionSlotState(ti.Id, s) == 3)
+                {
+                    bridge.VizCopy(VisualLayer(ti.Id), s, VisualLayer(ti.Id), scene, move: false);
+                    break;
+                }
+        }
     }
 
     private void LaunchSceneRow(int scene)
@@ -702,6 +727,11 @@ public sealed partial class SessionView : UserControl
         {
             int s = _engine.DuplicateScene(_sel.Scene);
             if (s < 0) return false;
+            if (VisualBridge.Current is not null)
+            {
+                VisualBridge.Current.InsertColumn(s);
+                CopySceneVisuals(_sel.Scene, s);
+            }
             Refresh();
             Select(new Selection(SelKind.Scene, 0, s));
             Say(Loc.T("session.duplicated_scene"));
@@ -722,7 +752,9 @@ public sealed partial class SessionView : UserControl
         if (_sel.Kind == SelKind.Bus) return true;   // a Return / Master has no clip to act on; keep it from reaching the Arrangement
         if (_sel.Kind == SelKind.Scene)
         {
-            if (!_engine.RemoveScene(_sel.Scene)) return false;
+            int scene = _sel.Scene;
+            if (!_engine.RemoveScene(scene)) return false;
+            VisualBridge.Current?.RemoveColumn(scene);
             Refresh();
             Say(Loc.T("session.deleted_scene"));
             return true;
@@ -730,14 +762,14 @@ public sealed partial class SessionView : UserControl
         if (_sel.Kind != SelKind.Slot || !_engine.ClearSessionSlot(_sel.TrackId, _sel.Scene)) return false;
         RefreshSlot(_sel.TrackId, _sel.Scene);
         Say(Loc.T("session.deleted_clip"));
-        return true;
-    }
+        return true;    }
 
     /// <summary>⌘I: insert an empty scene below the selection.</summary>
     public bool InsertSceneAtSelection()
     {
         int s = _engine.InsertScene(Math.Min(_sel.Scene + 1, _sceneCount));
         if (s < 0) return false;
+        VisualBridge.Current?.InsertColumn(s);
         Refresh();
         Select(new Selection(SelKind.Scene, 0, s));
         Say(Loc.T("session.inserted_scene"));
@@ -748,6 +780,11 @@ public sealed partial class SessionView : UserControl
     {
         int s = _engine.CaptureScene(Math.Min(_sel.Scene + 1, _sceneCount));
         if (s < 0) return;
+        if (VisualBridge.Current is not null)
+        {
+            VisualBridge.Current.InsertColumn(s);
+            CopyPlayingVisualsInto(s);
+        }
         if (string.IsNullOrEmpty(_engine.GetSceneName(s))) _engine.SetSceneName(s, Loc.T("session.captured"));
         Refresh();
         Select(new Selection(SelKind.Scene, 0, s));

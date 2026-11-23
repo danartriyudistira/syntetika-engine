@@ -22,6 +22,7 @@
 //                    {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"bpm":120,"loop":true,"start":10}
 //                    {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5,"beat":12.25}
 //                    {"t":"vizCopy","fromLayer":0,"fromCol":0,"toLayer":0,"toCol":1,"move":false}
+//                    {"t":"vizColumnInsert","index":2}
 //   visual -> Nota : {"t":"vizOut","open":true}
 //                    {"t":"vizUiState","open":true}
 //                    {"t":"vizMappingState","open":true}
@@ -42,6 +43,9 @@ namespace Nota.Infrastructure.Visuals;
 
 public sealed class VisualBridge : IDisposable
 {
+    /// <summary>Raised on the UI thread after a layout snapshot was sent.</summary>
+    public event Action? LayoutChanged;
+
     /// <summary>Loopback port the visual engine connects to. 47810 is not used by Nota itself.</summary>
     public const int DefaultPort = 47810;
     private const int ClockIntervalMs = 8;   // ~125 Hz
@@ -70,6 +74,9 @@ public sealed class VisualBridge : IDisposable
     /// structure did not change (a send racing a disconnect must not lose the snapshot).</summary>
     private volatile int _clientEpoch;
     private int _sentEpoch = -1;
+    /// <summary>Selected Session slot, kept as a track UID so a layer reorder can resend it.</summary>
+    private string? _selectedUid;
+    private int _selectedScene = -1;
     /// <summary>Current .nota bundle, for the `visuals/layout.json` sidecar (null = unsaved).</summary>
     private string? _projectDir;
     /// <summary>Last audio slot length/loop/tempo/trim sent per (track, scene), so only edits travel.</summary>
@@ -237,8 +244,28 @@ public sealed class VisualBridge : IDisposable
             AppLog($"layout sent: {tracks.Count} tracks / {scenes.Count} scenes");
             Send(json);
             WriteLayoutFile(json);
+            // A layer can move while the selected track stays put: resend it with the new layer.
+            SendSelection();
+            try { LayoutChanged?.Invoke(); }
+            catch (Exception ex) { AppLog("layout handler failed: " + ex.Message); }
         }
         catch (ObjectDisposedException) { /* app closing */ }
+    }
+
+    /// <summary>Mirror the selected slot, remembering the track by UID for layout changes.</summary>
+    public void Select(int trackId, int scene)
+    {
+        _selectedUid = Nota.Application.TrackUids.UidFor(trackId);
+        _selectedScene = scene;
+        SendSelection();
+    }
+
+    private void SendSelection()
+    {
+        if (_selectedUid is not { Length: > 0 } uid || _selectedScene < 0) return;
+        int layer = CurrentLayoutUids().IndexOf(uid);
+        if (layer < 0) return;
+        Send($"{{\"t\":\"select\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{_selectedScene.ToString(CultureInfo.InvariantCulture)}}}");
     }
 
     /// <summary>Re-sends every slot on the next poll (after a project load or a new media assignment).</summary>
@@ -356,9 +383,6 @@ public sealed class VisualBridge : IDisposable
     public void Scene(int scene) => SendLaunch("scene", scene, atBeat: NextQuantumBeat());
 
     /// <summary>Mirror the selected clip: openVJ selects the same slot (Preview + Properties).</summary>
-    public void Select(int layer, int scene)
-        => Send($"{{\"t\":\"select\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{scene.ToString(CultureInfo.InvariantCulture)}}}");
-
     /// <summary>Launch one track's visual clip (layer, column) on the next launch quantum.</summary>
     public void Slot(int layer, int scene, double? atBeat = null)
         => SendLaunch("slot", scene, atBeat ?? NextQuantumBeat(), layer);
@@ -704,6 +728,16 @@ public sealed class VisualBridge : IDisposable
     /// <summary>Copy or move a slot's visual with its Session clip (copy/paste, duplicate, drag).</summary>
     public void VizCopy(int fromLayer, int fromCol, int toLayer, int toCol, bool move)
         => Send($"{{\"t\":\"vizCopy\",\"fromLayer\":{fromLayer.ToString(CultureInfo.InvariantCulture)},\"fromCol\":{fromCol.ToString(CultureInfo.InvariantCulture)},\"toLayer\":{toLayer.ToString(CultureInfo.InvariantCulture)},\"toCol\":{toCol.ToString(CultureInfo.InvariantCulture)},\"move\":{(move ? "true" : "false")}}}");
+
+    /// <summary>Scene structure: keep visual columns aligned with Nota's scenes.</summary>
+    public void InsertColumn(int index)
+        => Send($"{{\"t\":\"vizColumnInsert\",\"index\":{index.ToString(CultureInfo.InvariantCulture)}}}");
+
+    public void RemoveColumn(int index)
+        => Send($"{{\"t\":\"vizColumnRemove\",\"index\":{index.ToString(CultureInfo.InvariantCulture)}}}");
+
+    public void MoveColumn(int from, int to)
+        => Send($"{{\"t\":\"vizColumnMove\",\"from\":{from.ToString(CultureInfo.InvariantCulture)},\"to\":{to.ToString(CultureInfo.InvariantCulture)}}}");
 
     /// <summary>Handles messages about the engine itself; true when consumed here.</summary>
     private bool HandleControlMessage(string line)
