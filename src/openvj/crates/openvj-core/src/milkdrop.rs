@@ -185,7 +185,9 @@ pub fn watch(dirs: Vec<PathBuf>) {
                 last = Some(presets.clone());
                 set_milk_library(MilkLibrary::new(dirs.clone(), presets));
             }
-            std::thread::sleep(Duration::from_secs(1));
+            // The MilkDrop pack can hold thousands of presets; scanning it every second wasted
+            // CPU even when nothing changed. New presets still appear within five seconds.
+            std::thread::sleep(Duration::from_secs(5));
         }
     });
     if let Err(e) = spawned {

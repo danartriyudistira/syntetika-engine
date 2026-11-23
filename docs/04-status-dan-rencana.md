@@ -364,6 +364,23 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   sama dengan stop/gate).
 - Batasan: project yang belum disimpan tetap kehilangan komposisi visual saat engine restart.
 
+## 7k. Performance pass (23 Nov)
+
+- **Output-only fast path**: saat editor hidden tetapi output tampil, hanya frame output/mapping
+  yang di-push; model UI, params, library, player, dan thumbnail pump dilewati.
+- **UI sync 30 fps** saat editor terbuka; render output tetap 60 fps. `ui_images_pending`
+  memastikan tekstur output/preview tetap dikirim saat editor dibuka kembali.
+- **Watcher folder** efek/MilkDrop dari 1 dtk → 5 dtk (reload preset masih terasa instan untuk
+  setup).
+- Hasil ukur (M1, demo, `ps` CPU process):
+  - hidden: **9,3% → 2,2–2,6%**
+  - output-only: **32,6% → 24,3%**
+  - editor+output: **48,5% → ~48%** (tidak turun; renderer window editor yang dominan,
+    bukan sync)
+  - `max_render` engine < 2 ms; memori ~133–186 MB tergantung cache.
+- Optimasi lanjutan yang masih terbuka: render direct texture ke output window (hindari pass
+  FemtoVG kedua), dan menurunkan render editor saat output tampil.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

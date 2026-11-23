@@ -45,6 +45,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   visual columns, and track reorders re-sync the selected slot.
 - **Reconnect recovery** — a restarted visual engine reloads the project, then resumes the
   visuals of Session clips that are still playing.
+- **Performance** — hidden engine ~2–3% CPU, output-only ~24% at 60 fps; editor work is
+  capped at 30 fps and the output path skips UI sync.
 - **Background visual engine** — openVJ runs hidden by default; View → OpenVJ raises its
   editor once (not always-on-top), and while nothing is on screen it stops GPU rendering and
   slows its tick.

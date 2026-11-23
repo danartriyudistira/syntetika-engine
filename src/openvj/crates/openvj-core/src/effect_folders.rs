@@ -235,7 +235,9 @@ pub fn watch(dirs: Vec<PathBuf>, check: Check) {
     let spawned = std::thread::Builder::new().name("effect-folders".into()).spawn(move || {
         loop {
             install(&mut scanner);
-            std::thread::sleep(Duration::from_secs(1));
+            // New effects are a setup-time change, not live sync: a slow cadence keeps idle
+            // CPU low (the scanner walks whole effect folders).
+            std::thread::sleep(Duration::from_secs(5));
         }
     });
     if let Err(e) = spawned {

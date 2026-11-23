@@ -217,6 +217,8 @@ pub struct App {
     /// Beat and audio levels for this frame.
     inputs: ModInputs,
     last_frame: f64,
+    /// Last time the UI models/properties were pushed (30 fps while the output renders at 60).
+    last_ui_sync: f64,
 
     analyzer: Analyzer,
     audio: Option<AudioInput>,
@@ -348,6 +350,9 @@ pub struct App {
     milk_generation: Option<u64>,
     browser_dirty: bool,
     images_dirty: bool,
+    /// The output frame was already sent while the editor was hidden; push the textures to
+    /// the UI on the first frame after it opens.
+    ui_images_pending: bool,
     /// The output window's picture must be fetched again after the next mapped frame.
     mapping_dirty: bool,
     /// The output mapping (screens, slices, masks) the output window shows.
@@ -404,6 +409,7 @@ impl App {
             clock_port: None,
             inputs: ModInputs::default(),
             last_frame: 0.0,
+            last_ui_sync: 0.0,
             analyzer: Analyzer::new(48_000),
             audio: None,
             audio_devices: vec!["Default input".into()],
@@ -433,8 +439,7 @@ impl App {
             mapping: crate::mapping::Mapping::load(),
             mapping_ui: slint::Weak::default(),
             mapping_window_open: false,
-            mapping_view_dirty: true,
-            tab_request: None,
+            mapping_view_dirty: true,            tab_request: None,
             browser_entries: browser::list(&browser_dir),
             browser_dir,
             thumbs: HashMap::new(),
@@ -498,6 +503,7 @@ impl App {
             milk_pack_shown: crate::milk_pack::Progress::Idle,
             browser_dirty: true,
             images_dirty: true,
+            ui_images_pending: false,
             frames: 0,
             fps_since: Instant::now(),
             dbg_max_dt: 0.0,
@@ -1794,10 +1800,16 @@ impl App {
             self.dbg_max_render_ms = 0.0;
             self.nota_slew_max = 0.0;
         }
-        if ui_visible || output_visible || self.mapping_window_open {
+        // The output renders at 60 fps; the editor's models and redraws only need 30 fps. The
+        // window's own renderer still runs at the display rate, so this only trims property work.
+        let ui_sync = ui_visible && now - self.last_ui_sync >= 1.0 / 30.0;
+        if ui_sync {
+            self.last_ui_sync = now;
             self.sync(ui, out);
+        } else if output_visible || self.mapping_window_open {
+            self.sync_output(out);
         }
-        if ui_visible {
+        if ui_sync {
             ui.window().request_redraw();
         }
         if output_visible {
@@ -1811,25 +1823,7 @@ impl App {
 
     /// Pushes whatever changed since the last call to the UI.
     pub fn sync(&mut self, ui: &MainWindow, out: &OutputWindow) {
-        if self.mapping_window_open && (self.images_dirty || self.mapping_view_dirty) {
-            self.sync_mapping_window(self.images_dirty);
-        }
-        if self.images_dirty {
-            self.images_dirty = false;
-            let output = Image::try_from(self.engine.output().texture.clone()).expect("output texture is importable");
-            let preview =
-                Image::try_from(self.engine.preview().texture.clone()).expect("preview texture is importable");
-            let mapped = self
-                .mapping
-                .setup
-                .as_ref()
-                .and(self.engine.screen(0))
-                .map(|t| Image::try_from(t.texture.clone()).expect("screen texture is importable"));
-            out.set_frame(mapped.unwrap_or_else(|| output.clone()));
-            ui.set_output_image(output);
-            ui.set_preview_image(preview);
-            ui.set_comp_info(format!("{}×{}", self.comp.width, self.comp.height).into());
-        }
+        self.push_output(Some(ui), out);
         self.poll_media_thumbs();
         if self.layout == SYNTHESIS_LAYOUT {
             self.sync_overlay_transport(ui);
@@ -1892,6 +1886,51 @@ impl App {
         self.sync_player_time(ui);
         let selected = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.name.clone());
         ui.set_selected_clip_name(selected.unwrap_or_default().into());
+    }
+
+    /// Pushes only the output/mapping pictures, for when the editor is hidden and the UI work
+    /// in [`App::sync`] would be wasted.
+    pub fn sync_output(&mut self, out: &OutputWindow) {
+        self.push_output(None, out);
+    }
+
+    fn push_output(&mut self, ui: Option<&MainWindow>, out: &OutputWindow) {
+        if self.mapping_window_open && (self.images_dirty || self.mapping_view_dirty) {
+            self.sync_mapping_window(self.images_dirty);
+        }
+        if self.images_dirty {
+            self.images_dirty = false;
+            let output = Image::try_from(self.engine.output().texture.clone()).expect("output texture is importable");
+            let mapped = self
+                .mapping
+                .setup
+                .as_ref()
+                .and(self.engine.screen(0))
+                .map(|t| Image::try_from(t.texture.clone()).expect("screen texture is importable"));
+            out.set_frame(mapped.unwrap_or_else(|| output.clone()));
+            if let Some(ui) = ui {
+                let preview =
+                    Image::try_from(self.engine.preview().texture.clone()).expect("preview texture is importable");
+                ui.set_output_image(output);
+                ui.set_preview_image(preview);
+                ui.set_comp_info(format!("{}×{}", self.comp.width, self.comp.height).into());
+                self.ui_images_pending = false;
+            } else {
+                self.ui_images_pending = true;
+            }
+        } else if let Some(ui) = ui
+            && self.ui_images_pending
+        {
+            // The frame went to the output while the editor was hidden; give the UI the live
+            // textures on its first frame back.
+            let output = Image::try_from(self.engine.output().texture.clone()).expect("output texture is importable");
+            let preview =
+                Image::try_from(self.engine.preview().texture.clone()).expect("preview texture is importable");
+            ui.set_output_image(output);
+            ui.set_preview_image(preview);
+            ui.set_comp_info(format!("{}×{}", self.comp.width, self.comp.height).into());
+            self.ui_images_pending = false;
+        }
     }
 
     /// Beat position for this frame, from Ableton Link when it's on.

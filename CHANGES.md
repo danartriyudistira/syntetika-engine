@@ -81,6 +81,10 @@ diffs are in `patches/`.
   ships `Syphon.framework` and declares camera usage.
 - **Performance**: static grid thumbnails (no GPU readback during a show), pipeline prewarm,
   PLL clock smoothing, stopped-transport freeze.
+- **Measured performance**: hidden editor/output ≈2–3% CPU (folder watchers at 5 s, 10 fps
+  tick), output-only ≈24% at 60 fps, editor+output ≈48% (the editor window's renderer
+  dominates; engine render stays <2 ms). The output-only path skips the editor model sync, and
+  editor property sync is capped at 30 fps.
 
 ## openVJ fork
 
