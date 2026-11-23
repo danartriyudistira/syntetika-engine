@@ -53,7 +53,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   lock-free shared ring, so shaders, MilkDrop and audio-modulated parameters follow the DAW.
 - **Performance** — hidden engine ~2–3% CPU, output-only ~24% at 60 fps; editor work is
   capped at 30 fps and the output path skips UI sync. View → Visual Performance selects Eco
-  (30 fps, ~6.5% output), Balanced (45) or Quality (60).
+  (30 fps, ~6.5% output), Balanced (45) or Quality (60). A visual that takes far over budget
+  makes the engine render smaller (down to 12.5%) instead of freezing the app.
 - **Background visual engine** — openVJ runs hidden by default; View → OpenVJ raises its
   editor once (not always-on-top), and while nothing is on screen it stops GPU rendering and
   slows its tick.

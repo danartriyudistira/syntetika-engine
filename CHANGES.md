@@ -98,6 +98,12 @@ diffs are in `patches/`.
   tick), output-only ≈24% at 60 fps, editor+output ≈48% (the editor window's renderer
   dominates; engine render stays <2 ms). The output-only path skips the editor model sync and
   preview target, and editor property sync is capped at 30 fps.
+- **Slow-visual guard**: a generator or effect that needs far more than a frame's budget no
+  longer freezes the app. While frames stay over 200 ms the engine halves its render size (down
+  to 12.5%) and restores it below 6 ms; the composition label shows the percentage. The log
+  names the exact source (`isf:<id>`, `milk:<preset>`, `gen:<kind>`), its effects and the size.
+  The bridge also stopped queueing per-track phase messages while the OpenVJ tab is closed —
+  that queue used to grow for as long as audio played.
 - **Visual performance profiles**: View → Visual Performance offers Eco (30 fps, preview 15),
   Balanced (45/30) and Quality (60/60). The profile is saved in Nota and applied live to the
   visual engine; a hidden editor renders no preview at all. Measured on M1: output-only

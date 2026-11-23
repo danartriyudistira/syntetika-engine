@@ -456,6 +456,30 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Batasan**: tap di macOS/Linux (Windows stub); hanya parameter yang audio-reactive yang
   bergerak; tap selalu aktif saat engine hidup (biaya sangat kecil).
 
+## 7p. Aplikasi makin berat: generator lambat & antrean bridge (23 Nov)
+
+- **Temuan sesi pengguna**: fps 59 → 0,5–0,7 dalam satu detik setelah clip generator di layer 2
+  scene 0 aktif. Log: `slow render 1863–2092 ms passes=4–5 active=["2:gen"]`. Sebelum clip itu
+  aktif, 9 menit stabil 59 fps; jadi bukan kebocoran bertahap, melainkan satu visual yang
+  memblokir UI thread ~1,9 detik per frame.
+- **MilkDrop bukan penyebab umum**: batch 653 preset di 640×360 → median **1,39 ms**, p95
+  **7,81 ms**, terburuk **41 ms**; generator bawaan **0,55 ms**. Jadi beban berasal dari shader
+  generator/ISF tertentu (kemungkinan raymarching berat) atau ukuran komposisi, bukan mesin
+  render secara umum. Preset yang gagal: 1 (syntax error di per-frame code).
+- **Diagnostik**: `slow render` sekarang menyebut sumber persis (`isf:<id>`, `milk:<preset>`,
+  `gen:<kind>`), efek aktif (`+[...]`), dan ukuran komposisi.
+- **Adaptive render scale**: EMA render >200 ms → skala render dibagi dua (minimal 12,5%),
+  jeda 2 detik antar perubahan; naik lagi saat <6 ms. Gambar lebih lembut, aplikasi tetap
+  responsif. Label komposisi menampilkan `1280×720 · 25%`.
+  Bukti: `OPENVJ_SCALE_TEST=0.25` → `render scale 25% (320×180)` → `50%` → `100%`,
+  `fps=60.0 max_render=2,3 ms drops=0`.
+- **Antrean bridge**: semua pesan engine (termasuk `vizSlotPhase` 4×/detik per track) dulu masuk
+  `_inbox` yang hanya dikuras saat tab OpenVJ terlihat, sehingga tumbuh selama audio diputar.
+  Sekarang hanya `vizState`/`vizCatalog` yang diantrekan (dengan batas 512 baris); tipe lain
+  tetap dicatat/ditangani tanpa menumpuk.
+- **Sisa**: clip lambat belum diidentifikasi namanya (komposisi tidak tersimpan). Log baru akan
+  menyebutkannya saat diputar lagi; kandidat bisa dioptimalkan atau diberi peringatan.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

@@ -710,6 +710,12 @@ public sealed class VisualBridge : IDisposable
                     if (HandleControlMessage(line)) continue;
                     if (line.Contains("\"vizSaved\"", StringComparison.Ordinal)) _saved.Set();
                     LogIncoming(line);
+                    // Only the OpenVJ tab's view reads the inbox, and it handles just these two
+                    // shapes. Queuing per-track phase messages while that tab is closed used to
+                    // grow the queue for as long as audio played.
+                    if (!line.Contains("\"vizState\"", StringComparison.Ordinal)
+                        && !line.Contains("\"vizCatalog\"", StringComparison.Ordinal)) continue;
+                    if (_inbox.Count > 512) _inbox.TryDequeue(out _);
                     _inbox.Enqueue(line);
                 }
             }

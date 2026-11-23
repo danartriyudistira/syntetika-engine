@@ -1000,6 +1000,20 @@ fn main() -> Result<()> {
         });
     }
 
+    // Debug aid: force the adaptive render scale, to check the resize path without a slow
+    // generator. `OPENVJ_SCALE_TEST=0.25`.
+    if let Ok(scale) = std::env::var("OPENVJ_SCALE_TEST")
+        && let Ok(scale) = scale.parse::<f32>()
+    {
+        let app = app.clone();
+        Timer::single_shot(Duration::from_secs(10), move || {
+            if let Ok(mut a) = app.try_borrow_mut() {
+                eprintln!("openVJ: test render scale {scale}");
+                a.test_render_scale(scale);
+            }
+        });
+    }
+
     // Debug aid: simulate a video drop in openVJ's grid (the audio pairing handshake) without
     // the mouse. `OPENVJ_PAIR_TEST=layer:col=/path/to/clip.mp4`.
     if let Ok(spec) = std::env::var("OPENVJ_PAIR_TEST")

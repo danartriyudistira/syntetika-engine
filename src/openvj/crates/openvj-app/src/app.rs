@@ -392,6 +392,10 @@ pub struct App {
     target_fps: Rc<Cell<u32>>,
     /// Frames over 1.5× the target interval, logged and reset once per second.
     dropped_frames: u32,
+    /// Adaptive render scale: 1.0 at the composition size, halved while a visual is too slow.
+    render_scale: f32,
+    render_avg_ms: f32,
+    render_scale_at: f64,
     /// The output window's picture must be fetched again after the next mapped frame.
     mapping_dirty: bool,
     /// The output mapping (screens, slices, masks) the output window shows.
@@ -574,6 +578,9 @@ impl App {
             performance_mode,
             target_fps,
             dropped_frames: 0,
+            render_scale: 1.0,
+            render_avg_ms: 0.0,
+            render_scale_at: 0.0,
             frames: 0,
             fps_since: Instant::now(),
             dbg_max_dt: 0.0,
@@ -684,6 +691,9 @@ impl App {
         self.selected_layer = 0;
         self.last_column = None;
         self.engine.resize(self.comp.width, self.comp.height);
+        self.render_scale = 1.0;
+        self.render_avg_ms = 0.0;
+        self.render_scale_at = 0.0;
         self.engine.retain_clips(&HashSet::new());
         let media: Vec<_> = self
             .comp
@@ -1322,6 +1332,9 @@ impl App {
                 if size != (w, h) {
                     self.engine.resize(w, h);
                 }
+                self.render_scale = 1.0;
+                self.render_avg_ms = 0.0;
+                self.render_scale_at = 0.0;
                 eprintln!(
                     "openVJ: viz loaded from {path} ({} layers / {} columns)",
                     self.comp.layers.len(),
@@ -1838,14 +1851,17 @@ impl App {
                         .layers
                         .get(i)?
                         .clip_by_id(id)
-                        .map(|c| format!("{i}:{}", c.source.kind_label()))
+                        .map(|c| format!("{i}:{}{}", describe_source(&c.source), describe_effects(&c.effects)))
                 })
                 .collect();
             eprintln!(
-                "openVJ: slow render {render_ms:.0}ms passes={} active={active:?}",
-                self.engine.last_pass_count()
+                "openVJ: slow render {render_ms:.0}ms passes={} size={}x{} active={active:?}",
+                self.engine.last_pass_count(),
+                self.comp.width,
+                self.comp.height
             );
         }
+        self.adapt_render_scale(now, render_ms);
         if render_needed
             && (self.output_open || self.mapping_window_open)
             && let Some(setup) = &self.mapping.setup
@@ -2031,7 +2047,7 @@ impl App {
                     Image::try_from(self.engine.preview().texture.clone()).expect("preview texture is importable");
                 ui.set_output_image(output);
                 ui.set_preview_image(preview);
-                ui.set_comp_info(format!("{}×{}", self.comp.width, self.comp.height).into());
+                ui.set_comp_info(self.comp_label().into());
                 self.ui_images_pending = false;
             } else {
                 self.ui_images_pending = true;
@@ -2046,9 +2062,59 @@ impl App {
                 Image::try_from(self.engine.preview().texture.clone()).expect("preview texture is importable");
             ui.set_output_image(output);
             ui.set_preview_image(preview);
-            ui.set_comp_info(format!("{}×{}", self.comp.width, self.comp.height).into());
+            ui.set_comp_info(self.comp_label().into());
             self.ui_images_pending = false;
         }
+    }
+
+    /// "1280×720", with the adaptive render scale when a slow visual forced it down.
+    fn comp_label(&self) -> String {
+        let base = format!("{}×{}", self.comp.width, self.comp.height);
+        if self.render_scale < 0.999 {
+            format!("{base} · {:.0}%", self.render_scale * 100.0)
+        } else {
+            base
+        }
+    }
+
+    /// One pathological generator or effect must not freeze the app: when frames stay far over
+    /// budget, render the composition smaller (the picture softens, the performance keeps
+    /// going) and restore the size once the load is gone. Hysteresis keeps it from flapping.
+    fn adapt_render_scale(&mut self, now: f64, render_ms: f64) {
+        if render_ms <= 0.0 {
+            return;
+        }
+        self.render_avg_ms = self.render_avg_ms * 0.7 + render_ms as f32 * 0.3;
+        if now - self.render_scale_at < 2.0 {
+            return;
+        }
+        if self.render_avg_ms > 200.0 && self.render_scale > 0.125 {
+            let scale = self.render_scale * 0.5;
+            self.set_render_scale(scale, now);
+            self.render_avg_ms = 0.0;
+        } else if self.render_avg_ms < 6.0 && self.render_scale < 0.999 {
+            let scale = (self.render_scale * 2.0).min(1.0);
+            self.set_render_scale(scale, now);
+            self.render_avg_ms = 0.0;
+        }
+    }
+
+    fn set_render_scale(&mut self, scale: f32, now: f64) {
+        let scale = scale.clamp(0.125, 1.0);
+        self.render_scale = scale;
+        self.render_scale_at = now;
+        let w = ((self.comp.width as f32 * scale) as u32).max(160);
+        let h = ((self.comp.height as f32 * scale) as u32).max(90);
+        self.engine.resize(w, h);
+        self.images_dirty = true;
+        self.ui_images_pending = true;
+        eprintln!("openVJ: render scale {:.0}% ({}x{})", scale * 100.0, w, h);
+    }
+
+    /// Test hook: force a render scale (and restore it with 1.0).
+    pub fn test_render_scale(&mut self, scale: f32) {
+        let now = self.now();
+        self.set_render_scale(scale, now);
     }
 
     /// Beat position for this frame, from Ableton Link when it's on.
@@ -6034,5 +6100,25 @@ fn analyzed_inputs(beat: f64, l: openvj_audio::Levels) -> ModInputs {
         band_signals: l.band_features.map(signal),
         overall: signal(l.overall),
         launch_beat: 0.0,
+    }
+}
+
+/// A clip's enabled effects, for the slow-render diagnostic.
+fn describe_effects(effects: &[Effect]) -> String {
+    let names: Vec<&str> = effects.iter().filter(|e| e.enabled).map(|e| e.kind.as_str()).collect();
+    if names.is_empty() { String::new() } else { format!("+[{}]", names.join(",")) }
+}
+
+/// A clip's source for the slow-render diagnostic: enough to name the generator or preset.
+fn describe_source(source: &ClipSource) -> String {
+    match source {
+        ClipSource::Generator { kind } => format!("gen:{kind:?}"),
+        ClipSource::Isf { generator } => format!("isf:{}", generator.kind),
+        ClipSource::Milkdrop { preset } => format!("milk:{preset}"),
+        ClipSource::Image { .. } => "image".into(),
+        ClipSource::Video { .. } => "video".into(),
+        ClipSource::Camera { device, .. } => format!("camera:{device}"),
+        ClipSource::Syphon { app, server } => format!("syphon:{app}/{server}"),
+        ClipSource::Router { input } => format!("router:{input:?}"),
     }
 }
