@@ -27,6 +27,7 @@
 //   visual -> Nota : {"t":"vizOut","open":true}
 //                    {"t":"vizUiState","open":true}
 //                    {"t":"vizMappingState","open":true}
+//                    {"t":"launchSlot","layer":0,"col":3}
 //
 // No audio ever crosses this channel; only musical time and commands.
 
@@ -44,6 +45,9 @@ namespace Nota.Infrastructure.Visuals;
 
 public sealed class VisualBridge : IDisposable
 {
+    /// <summary>Raised on a bridge thread when openVJ asks Nota to launch a Session slot.</summary>
+    public event Action<int, int>? SlotLaunchRequested;
+
     /// <summary>Raised on the UI thread after a layout snapshot was sent.</summary>
     public event Action? LayoutChanged;
 
@@ -787,6 +791,24 @@ public sealed class VisualBridge : IDisposable
     /// <summary>Handles messages about the engine itself; true when consumed here.</summary>
     private bool HandleControlMessage(string line)
     {
+        // openVJ's own clip click: launch the matching Session slot (audio + visual) in Nota.
+        if (line.Contains("\"launchSlot\"", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var v = doc.RootElement;
+                if (!v.TryGetProperty("t", out var t) || t.GetString() != "launchSlot") return false;
+                int layer = v.TryGetProperty("layer", out var l) ? l.GetInt32() : -1;
+                int scene = v.TryGetProperty("col", out var c) ? c.GetInt32() : -1;
+                if (layer < 0 || scene < 0) return true;
+                AppLog($"[viz<-] launchSlot L{layer} C{scene}");
+                try { SlotLaunchRequested?.Invoke(layer, scene); }
+                catch (Exception ex) { AppLog("launch request handler failed: " + ex.Message); }
+                return true;
+            }
+            catch (JsonException) { return false; }
+        }
         bool maybeOutput = line.Contains("\"vizOut\"", StringComparison.Ordinal);
         bool maybeUi = line.Contains("\"vizUiState\"", StringComparison.Ordinal);
         bool maybeMapping = line.Contains("\"vizMappingState\"", StringComparison.Ordinal);

@@ -51,6 +51,10 @@ diffs are in `patches/`.
   then gets the layout, slot timing and a relaunch of every Session slot whose audio is still
   playing. Deleting a playing/queued clip clears its visual on the same quantum as the audio
   stop.
+- **openVJ click launches Nota**: clicking a clip in openVJ's editor asks Nota to launch the
+  matching Session slot, so its audio and visual start on Nota's launch quantum together. A
+  visual-only clip still launches; the bridge falls back to a local visual launch when Nota is
+  not connected.
 - **Start/finish match**: visual launches use each clip's own Quantize, scene launches are
   scheduled per layer, stops (stop button, Stop All, Toggle, Gate/Repeat release) land on the
   same quantum as the audio, and the playing slot's local beat phase corrects the video's

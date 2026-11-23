@@ -999,6 +999,20 @@ fn main() -> Result<()> {
         });
     }
 
+    // Debug aid: simulate an openVJ clip click (the reverse Nota launch) without the mouse.
+    if let Ok(spec) = std::env::var("OPENVJ_CLICK_TEST")
+        && let Some((layer, col)) = spec.split_once(':')
+        && let (Ok(layer), Ok(col)) = (layer.parse::<usize>(), col.parse::<usize>())
+    {
+        let app = app.clone();
+        Timer::single_shot(Duration::from_secs(12), move || {
+            if let Ok(mut a) = app.try_borrow_mut() {
+                eprintln!("openVJ: test click {layer}:{col}");
+                a.cell_clicked(layer, col);
+            }
+        });
+    }
+
     // Nota starts the engine as a background visual backend: its editor window stays hidden
     // until View ▸ OpenVJ asks for it. Running openVJ by hand still shows the editor.
     let ui_hidden = std::env::var_os("SYNTETIKA_UI_HIDDEN").is_some()

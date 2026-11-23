@@ -2567,10 +2567,23 @@ impl App {
     pub fn cell_clicked(&mut self, layer: usize, col: usize) {
         self.stop_audition();
         let now = self.now();
+        let filled = self.comp.clip(layer, col).is_some();
+        // Hosted by Nota: the DAW owns the audio. Ask it to launch the matching Session slot;
+        // Nota schedules both the audio and the visual back on the same quantum, so clicking
+        // here and clicking in Nota behave alike. A disconnected bridge falls back to a local
+        // visual launch.
+        let hosted = self.nota.as_ref().is_some_and(|b| b.connected());
         // Piano clips launched on the press already (cell_pressed).
-        if self.comp.clip(layer, col).is_some_and(|c| c.trigger != TriggerStyle::Piano) {
+        if filled && self.comp.clip(layer, col).is_some_and(|c| c.trigger != TriggerStyle::Piano) {
             self.stop_automix_for_mixer();
-            self.comp.trigger(layer, col, now);
+            if hosted {
+                if let Some(bridge) = &self.nota {
+                    bridge.send(&format!("{{\"t\":\"launchSlot\",\"layer\":{layer},\"col\":{col}}}"));
+                }
+                eprintln!("openVJ: NOTA launch request {layer}:{col}");
+            } else {
+                self.comp.trigger(layer, col, now);
+            }
             self.last_column = None;
         }
         self.selected = Some((layer, col));

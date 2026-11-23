@@ -397,6 +397,20 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   **Eco editor+output 9,3%**; fps 29–30, `max_render` ~1 ms, `passes=2`, `drops=0`. Profil Eco
   bertahan setelah restart (`VisualPerformanceMode` di settings.json).
 
+## 7m. Klik clip openVJ men-trigger slot Nota (23 Nov)
+
+- `cell_clicked` di openVJ, saat hosted dan bridge connected, tidak lagi memutar visual lokal.
+  Ia mengirim `launchSlot {layer,col}` ke Nota.
+- Nota memetakan layer → track (urutan kolom track terbalik), memilih slot, lalu menjalankan
+  `LaunchSlotVelocity` (audio) dan `LaunchSlotVisual` (visual) pada quantum yang sama.
+- Slot tanpa take audio (visual-only) tetap meluncurkan visualnya.
+- Jika bridge tidak connect atau openVJ dijalankan standalone, klik tetap memutar visual lokal.
+- Bukti uji: `OPENVJ_CLICK_TEST=0:0` pada project Sintel →
+  `[viz<-] launchSlot L0 C0`, `openVJ: NOTA launch request 0:0`,
+  `openVJ: NOTA clip 0:0 at=-0.000`.
+- Batasan: klik header kolom, Piano press/release, dan peluncuran dari Remote/MCP belum
+  men-trigger balik ke Nota.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

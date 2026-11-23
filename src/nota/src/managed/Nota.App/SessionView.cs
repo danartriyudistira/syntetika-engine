@@ -491,6 +491,27 @@ public sealed partial class SessionView : UserControl
         else bridge.StopLayer(VisualLayer(c.TrackId), at);
     }
 
+    private int TrackForVisualLayer(int layer)
+    {
+        var cols = _cols.Where(c => c.Kind == ColKind.Track).ToList();
+        int index = cols.Count - 1 - layer;
+        return index >= 0 && index < cols.Count ? cols[index].TrackId : 0;
+    }
+
+    /// <summary>openVJ clicked a clip: launch the matching audio slot and schedule its visual.</summary>
+    internal void LaunchSlotFromVisual(int layer, int scene)
+    {
+        int trackId = TrackForVisualLayer(layer);
+        if (trackId <= 0 || scene < 0 || scene >= _engine.SceneCount) return;
+        if (ColumnFor(trackId) is not { Kind: ColKind.Track } c) return;
+        Select(new Selection(SelKind.Slot, trackId, scene));
+        LaunchSlotVisual(c, scene);
+        // A visual-only clip still launches; only touch the audio when the slot has a take.
+        if (_engine.SessionSlotState(trackId, scene) != 0)
+            _engine.LaunchSlotVelocity(trackId, scene, 1f);
+        UpdateStates();
+    }
+
     /// <summary>Copy every playable track's visual from one scene column to another.</summary>
     private void CopySceneVisuals(int fromScene, int toScene)
     {

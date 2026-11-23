@@ -164,6 +164,11 @@ public partial class MainWindow
                 SyncMappingMenu();
             });
             bridge.LayoutChanged += () => Dispatcher.UIThread.Post(RefreshVisualTab);
+            bridge.SlotLaunchRequested += (layer, scene) => Dispatcher.UIThread.Post(() =>
+            {
+                _session?.LaunchSlotFromVisual(layer, scene);
+                if (_vm is not null) _vm.StatusText = Loc.T("session.launched_from_openvj");
+            });
         }
         SyncVisualOutputMenu();
         SyncOpenVjMenu();
