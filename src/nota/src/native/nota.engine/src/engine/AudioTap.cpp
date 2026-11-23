@@ -16,7 +16,6 @@ void AudioTap::write(const float*, int32_t) noexcept {}
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 namespace nota {

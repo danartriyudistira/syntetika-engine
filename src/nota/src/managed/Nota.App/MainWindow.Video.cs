@@ -17,13 +17,14 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using Nota.Application;
+using Nota.Application.Localization;
 using Nota.Infrastructure.Visuals;
 
 namespace Nota.App;
 
 public partial class MainWindow
 {
-    private static readonly FilePickerFileType VideoPicker = new("Video")
+    private static readonly FilePickerFileType VideoPicker = new(Loc.T("visual.video_files"))
     {
         Patterns = new[] { "*.mp4", "*.m4v", "*.mov", "*.mkv", "*.webm", "*.avi", "*.mxf", "*.mpg", "*.mpeg" },
     };
@@ -34,12 +35,12 @@ public partial class MainWindow
         if (_vm is null) return;
         if (!VideoAudio.Available)
         {
-            _vm.StatusText = "Video import needs FFmpeg (the app ships it; check Contents/Helpers).";
+            _vm.StatusText = Loc.T("visual.ffmpeg_needed");
             return;
         }
         var files = await this.PickFilesAsync(new FilePickerOpenOptions
         {
-            Title = "Import video (audio + visual)",
+            Title = Loc.T("visual.import_video_title"),
             AllowMultiple = false,
             FileTypeFilter = new[] { VideoPicker },
         });
@@ -61,11 +62,11 @@ public partial class MainWindow
             _session?.Refresh();
             _session?.SelectSlot(trackId, scene);
             ShowVisualPanel(layer, scene);   // show the assigned visual straight away
-            _vm.StatusText = $"Image on the visual layer: {Path.GetFileName(path)}";
+            _vm.StatusText = Loc.F("visual.image_on_layer", Path.GetFileName(path));
         }
         catch (Exception ex)
         {
-            _vm.StatusText = $"Could not add {Path.GetFileName(path)}: {ex.Message}";
+            _vm.StatusText = Loc.F("visual.could_not_add", Path.GetFileName(path), ex.Message);
         }
     }
 
@@ -84,11 +85,11 @@ public partial class MainWindow
             }
         if (!audioTrack)
         {
-            _vm.StatusText = "Choose a Session slot on an audio track for a video's sound.";
+            _vm.StatusText = Loc.T("visual.choose_audio_slot");
             return;
         }
         Console.Error.WriteLine($"[video] import start {path} ffmpeg={VideoAudio.FfmpegPath} probe={VideoAudio.FfprobePath}");
-        _vm.StatusText = $"Importing {name}…";
+        _vm.StatusText = Loc.F("visual.importing", name);
         try
         {
             string? wav = null;
@@ -100,7 +101,7 @@ public partial class MainWindow
             catch (Exception ex)
             {
                 Console.Error.WriteLine("[video] audio extraction failed: " + ex.Message);
-                _vm.StatusText = $"Audio could not be extracted ({ex.Message}); importing the visual only.";
+                _vm.StatusText = Loc.F("visual.audio_extract_failed", ex.Message);
             }
 
             if (wav is not null && Engine.AddSessionAudioFile(trackId, scene, wav))
@@ -111,7 +112,7 @@ public partial class MainWindow
             }
             else if (wav is null)
             {
-                _vm.StatusText = $"{name} has no usable audio — importing the visual only.";
+                _vm.StatusText = Loc.F("visual.no_usable_audio", name);
             }
 
             // Copy the video content-addressed (bundle when saved, staging until then).
@@ -132,18 +133,18 @@ public partial class MainWindow
             if (audio)
             {
                 _vm.StatusText = length > 0
-                    ? $"Imported {name}: audio in the slot, video on the visual layer ({length:0.##} beats)."
-                    : $"Imported {name}: audio in the slot, video assigned.";
+                    ? Loc.F("visual.imported_pair_beats", name, length)
+                    : Loc.F("visual.imported_pair", name);
             }
             else
             {
-                _vm.StatusText = $"Imported {name}: visual only (no audio).";
+                _vm.StatusText = Loc.F("visual.imported_visual_only", name);
             }
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine("[video] failed: " + ex);
-            _vm.StatusText = $"Could not import {name}: {ex.Message}";
+            _vm.StatusText = Loc.F("visual.could_not_import", name, ex.Message);
         }
     }
 
@@ -172,14 +173,14 @@ public partial class MainWindow
             VisualBridge.Current?.PublishSlotTiming(force: true);
             _session?.Refresh();
             _vm.StatusText = !video
-                ? $"Image on the visual layer: {name}"
+                ? Loc.F("visual.image_on_layer", name)
                 : trackId <= 0 || !TrackIsAudio(trackId)
-                    ? $"Visual added — {name}'s sound needs an audio track."
-                    : $"Visual added — the slot keeps its existing audio.";
+                    ? Loc.F("visual.sound_needs_audio_track", name)
+                    : Loc.T("visual.kept_existing_audio");
         }
         catch (Exception ex)
         {
-            _vm.StatusText = $"Could not add {name}: {ex.Message}";
+            _vm.StatusText = Loc.F("visual.could_not_add", name, ex.Message);
         }
     }
 
@@ -200,7 +201,7 @@ public partial class MainWindow
             string? wav = await VideoAudio.ExtractAsync(path);
             if (wav is null)
             {
-                _vm.StatusText = $"{name} has no audio — the visual stays silent.";
+                _vm.StatusText = Loc.F("visual.video_no_audio", name);
                 return;
             }
             if (!Engine.AddSessionAudioFile(trackId, scene, wav)) return;
@@ -211,13 +212,13 @@ public partial class MainWindow
             _session.Refresh();
             Console.Error.WriteLine($"[video] paired {name} with layer {layer} scene {scene} ({length:0.###} beats)");
             _vm.StatusText = length > 0
-                ? $"The video's sound joined its visual ({length:0.##} beats)."
-                : "The video's sound joined its visual.";
+                ? Loc.F("visual.sound_joined_beats", length)
+                : Loc.T("visual.sound_joined");
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine("[video] pairing failed: " + ex.Message);
-            _vm.StatusText = $"Could not take {name}'s sound: {ex.Message}";
+            _vm.StatusText = Loc.F("visual.could_not_take_sound", name, ex.Message);
         }
     }
 }

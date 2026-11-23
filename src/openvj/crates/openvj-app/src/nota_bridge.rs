@@ -46,6 +46,9 @@ pub struct ClockSample {
 pub struct LayoutTrack {
     pub uid: String,
     pub name: String,
+    /// 0 audio, 1 instrument. Kept so the wire shape stays documented; the renderer only
+    /// needs the order and the uid.
+    #[allow(dead_code)]
     pub kind: i64,
 }
 

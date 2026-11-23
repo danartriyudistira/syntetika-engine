@@ -164,7 +164,7 @@ public sealed class VisualParamsView : UserControl
         catch (Exception ex)
         {
             _root.Children.Clear();
-            _root.Children.Add(Text("Visual panel error: " + ex.Message, NotaPalette.TextSecondary, 11));
+            _root.Children.Add(Text(Loc.F("visual.panel_error", ex.Message), NotaPalette.TextSecondary, 11));
         }
     }
 
@@ -418,7 +418,7 @@ public sealed class VisualParamsView : UserControl
             }
             case "event":
             {
-                var btn = new Button { Content = "Trigger" };
+                var btn = new Button { Content = Loc.T("visual.trigger") };
                 btn.Click += (_, _) => Bridge?.VizSet(_layer, _col, group, key, 1);
                 return ParamRowRaw(Label(p), btn, null);
             }
@@ -457,7 +457,7 @@ public sealed class VisualParamsView : UserControl
 
     private static string FormatValue(double v, string unit) => unit switch
     {
-        "%" => $"{v:0}%",
+        "%" => $"{v:0}\u2009%",
         "°" => $"{v:0}°",
         "" => $"{v:0.00}",
         _ => $"{v:0.0}{unit}",
@@ -632,8 +632,8 @@ public sealed class VisualParamsView : UserControl
         }
         if (names.Count == 0) names.Add(_catalogKind switch
         {
-            "cameras" => "(no cameras found)",
-            "syphon" => "(no Syphon servers found — start one, e.g. in the visual engine)",
+            "cameras" => Loc.T("visual.no_cameras"),
+            "syphon" => Loc.T("visual.no_syphon_servers"),
             _ => "(nothing matches)",
         });
         _catalogList.ItemsSource = names;
@@ -676,7 +676,7 @@ public sealed class VisualParamsView : UserControl
                 AllowMultiple = false,
                 FileTypeFilter = new[]
                 {
-                    new FilePickerFileType("Media")
+                    new FilePickerFileType(Loc.T("visual.media_files"))
                     {
                         Patterns = new[]
                         {
@@ -706,7 +706,7 @@ public sealed class VisualParamsView : UserControl
         }
         catch (Exception ex)
         {
-            _catalogList?.ItemsSource = new[] { "Could not add the media: " + ex.Message };
+            _catalogList?.ItemsSource = new[] { Loc.F("visual.could_not_add_media", ex.Message) };
         }
     }
 }

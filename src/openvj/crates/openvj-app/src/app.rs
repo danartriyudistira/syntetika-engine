@@ -396,6 +396,8 @@ pub struct App {
     render_scale: f32,
     render_avg_ms: f32,
     render_scale_at: f64,
+    /// When the slow-render line was last written, so a merely slow visual can't spam the log.
+    slow_log_at: f64,
     /// The output window's picture must be fetched again after the next mapped frame.
     mapping_dirty: bool,
     /// The output mapping (screens, slices, masks) the output window shows.
@@ -449,7 +451,11 @@ impl App {
             "openVJ: performance mode {} ({} fps, preview {} fps)",
             self.performance_mode,
             performance_fps(self.performance_mode),
-            match self.performance_mode { 0 => 15, 1 => 30, _ => 60 }
+            match self.performance_mode {
+                0 => 15,
+                1 => 30,
+                _ => 60,
+            }
         );
     }
 
@@ -510,7 +516,8 @@ impl App {
             mapping: crate::mapping::Mapping::load(),
             mapping_ui: slint::Weak::default(),
             mapping_window_open: false,
-            mapping_view_dirty: true,            tab_request: None,
+            mapping_view_dirty: true,
+            tab_request: None,
             browser_entries: browser::list(&browser_dir),
             browser_dir,
             thumbs: HashMap::new(),
@@ -581,6 +588,7 @@ impl App {
             render_scale: 1.0,
             render_avg_ms: 0.0,
             render_scale_at: 0.0,
+            slow_log_at: 0.0,
             frames: 0,
             fps_since: Instant::now(),
             dbg_max_dt: 0.0,
@@ -1813,16 +1821,12 @@ impl App {
         let output_visible = self.output_open;
         // The preview monitor only exists in the editor: do not render it when the editor is
         // hidden (the output-only path).
-        let preview = if ui_visible {
-            self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id)
-        } else {
-            None
-        };
+        let preview =
+            if ui_visible { self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id) } else { None };
         // Keep the Syphon server discoverable while hidden; a receiving client then forces
         // rendering again instead of leaving it with a frozen frame.
         self.syphon_out.before_render(&mut self.engine);
-        let render_needed =
-            ui_visible || output_visible || self.mapping_window_open || self.syphon_out.is_receiving();
+        let render_needed = ui_visible || output_visible || self.mapping_window_open || self.syphon_out.is_receiving();
         if render_needed && dt as f64 > 1.5 / self.target_fps.get().max(15) as f64 {
             self.dropped_frames = self.dropped_frames.saturating_add(1);
         }
@@ -1839,7 +1843,8 @@ impl App {
         }
         let render_ms = if render_needed { render_started.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
         self.dbg_max_render_ms = self.dbg_max_render_ms.max(render_ms);
-        if render_ms > 50.0 {
+        if render_ms > 50.0 && now - self.slow_log_at >= 2.0 {
+            self.slow_log_at = now;
             let active: Vec<String> = self
                 .comp
                 .layers
@@ -1920,9 +1925,13 @@ impl App {
             let fps = self.frames as f64 / elapsed;
             eprintln!(
                 "openVJ: fps={fps:.1} max_dt={:.1}ms max_render={:.1}ms passes={} drops={} bridge={} render={} slew={:.4} beat",
-                self.dbg_max_dt, self.dbg_max_render_ms, self.engine.last_pass_count(),
-                self.dropped_frames, self.nota.is_some(),
-                if render_needed { "on" } else { "off" }, self.nota_slew_max
+                self.dbg_max_dt,
+                self.dbg_max_render_ms,
+                self.engine.last_pass_count(),
+                self.dropped_frames,
+                self.nota.is_some(),
+                if render_needed { "on" } else { "off" },
+                self.nota_slew_max
             );
             if ui_visible {
                 ui.set_fps(format!("{fps:.0} fps").into());
@@ -2070,11 +2079,7 @@ impl App {
     /// "1280×720", with the adaptive render scale when a slow visual forced it down.
     fn comp_label(&self) -> String {
         let base = format!("{}×{}", self.comp.width, self.comp.height);
-        if self.render_scale < 0.999 {
-            format!("{base} · {:.0}%", self.render_scale * 100.0)
-        } else {
-            base
-        }
+        if self.render_scale < 0.999 { format!("{base} · {:.0}%", self.render_scale * 100.0) } else { base }
     }
 
     /// One pathological generator or effect must not freeze the app: when frames stay far over
@@ -2197,10 +2202,13 @@ impl App {
             let l = self.analyzer.analyze(dt);
             self.engine.set_spectrum(Some(self.analyzer.spectrum()));
             self.tap_frames = self.tap_frames.wrapping_add(1);
-            if self.tap_frames % 60 == 0 && std::env::var_os("SYNTETIKA_TAP_DEBUG").is_some() {
+            if self.tap_frames.is_multiple_of(60) && std::env::var_os("SYNTETIKA_TAP_DEBUG").is_some() {
                 eprintln!(
                     "openVJ: tap level={:.2} bands={:?} rate={} feed={}",
-                    l.overall.level, l.bands, self.analyzer_rate, samples.len()
+                    l.overall.level,
+                    l.bands,
+                    self.analyzer_rate,
+                    samples.len()
                 );
             }
             return analyzed_inputs(beat, l);
@@ -6088,12 +6096,8 @@ fn unix_now() -> u64 {
 
 /// Maps one frame of analyser levels to the modulation inputs every parameter reads.
 fn analyzed_inputs(beat: f64, l: openvj_audio::Levels) -> ModInputs {
-    let signal = |f: openvj_audio::Features| AudioSignal {
-        level: f.level,
-        hits: f.hits,
-        presence: f.presence,
-        clock: f.clock,
-    };
+    let signal =
+        |f: openvj_audio::Features| AudioSignal { level: f.level, hits: f.hits, presence: f.presence, clock: f.clock };
     ModInputs {
         beat,
         bands: l.bands,

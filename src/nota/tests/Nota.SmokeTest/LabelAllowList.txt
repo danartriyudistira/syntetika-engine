@@ -15,3 +15,5 @@ Nota.App/DetailWindow.cs	Devices / Clip	# data: names the window's two tabs, Dev
 Nota.App/MainWindow.Downloads.cs	Open Settings → Downloads	# data: names the Settings window and its Downloads page
 Nota.App/ModularView.cs	{0} NODES	# todo: ALL CAPS since before spec 068, hidden while it was an interpolated string; sentence-case it in a design pass
 Nota.App/ModularView.cs	CV LINK · LFO {0}	# todo: ALL CAPS since before spec 068, hidden while it was an interpolated string; sentence-case it in a design pass
+Nota.App/AboutWindow.cs	Syntetika Engine {0}	# data: product name (proper noun)
+Nota.App/MainWindow.axaml	Syntetika Engine	# data: product name (proper noun)

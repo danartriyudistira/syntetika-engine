@@ -365,6 +365,8 @@ pub struct Engine {
     preview_interval: f64,
     preview_at: f64,
     preview_clip: Option<ClipId>,
+    /// Whether the preview target holds a picture that must be cleared when its source goes.
+    preview_has_content: bool,
     /// MilkDrop engines, one per MilkDrop clip.
     milk: HashMap<ClipId, MilkClip>,
     /// This frame's audio for MilkDrop: mono samples, their rate and the Reactivity gain.
@@ -581,6 +583,7 @@ impl Engine {
             preview_interval: 0.0,
             preview_at: f64::NEG_INFINITY,
             preview_clip: None,
+            preview_has_content: false,
             milk: HashMap::new(),
             pcm: Vec::new(),
             pcm_rate: 48_000,
@@ -1219,6 +1222,7 @@ impl Engine {
         if self.preview_allowed && preview == Some(clip.id) && !self.previewed {
             passes.push(Self::blend_pass(&t.preview, target, target, MODE_MIX, 0.0));
             self.previewed = true;
+            self.preview_has_content = true;
         }
     }
 
@@ -1368,11 +1372,14 @@ impl Engine {
         let auditioning = self.audition.is_some();
         let preview = if auditioning { None } else { preview };
         let preview_changed = preview != self.preview_clip;
+        // The preview held a picture (an audition or a selected clip) and its source is gone:
+        // clear it even between refresh intervals, so a monitor doesn't keep a stale frame.
+        let preview_cleared = !auditioning && preview.is_none() && self.preview_has_content;
         self.preview_clip = preview;
         self.preview_allowed = auditioning
             || preview_changed
-            || (preview.is_some()
-                && (self.preview_interval == 0.0 || now - self.preview_at >= self.preview_interval));
+            || preview_cleared
+            || (preview.is_some() && (self.preview_interval == 0.0 || now - self.preview_at >= self.preview_interval));
         if self.preview_allowed {
             self.preview_at = now;
         }
@@ -1485,6 +1492,7 @@ impl Engine {
             self.draw_clip(&mut passes, &t, &clip, time, &t.clip_a, now, inputs, None, 1);
             passes.push(Self::blend_pass(&t.preview, &t.clip_a, &t.clip_a, MODE_MIX, 0.0));
             self.audition = Some((clip, Some(started)));
+            self.preview_has_content = true;
         } else if self.preview_allowed && !self.previewed {
             match preview.and_then(|id| comp.find_clip(id)).and_then(|(l, c)| comp.clip(l, c)) {
                 Some(clip) => {
@@ -1495,8 +1503,12 @@ impl Engine {
                     } else {
                         self.clip_passes(&mut passes, &t.fx, clip, time, inputs, &t.preview, 1);
                     }
+                    self.preview_has_content = true;
                 }
-                None => passes.push(Pass::clear(&t.preview, wgpu::Color::BLACK)),
+                None => {
+                    passes.push(Pass::clear(&t.preview, wgpu::Color::BLACK));
+                    self.preview_has_content = false;
+                }
             }
         }
         let thumbnail_done = if self.live_thumbs { self.thumbnail_step(&mut passes, &t) } else { None };

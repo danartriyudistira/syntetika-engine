@@ -61,8 +61,7 @@ impl NotaTap {
         let version = read_u32(base, 4);
         let channels = read_u32(base, 8) as usize;
         let frames = read_u32(base, 12) as usize;
-        if magic != MAGIC || version != VERSION || channels != CHANNELS || !frames.is_power_of_two() || frames == 0
-        {
+        if magic != MAGIC || version != VERSION || channels != CHANNELS || !frames.is_power_of_two() || frames == 0 {
             // Nota is (re)creating the file: the header returns in a frame or two.
             return None;
         }
@@ -102,16 +101,8 @@ impl NotaTap {
         if len < DATA_OFFSET + CHANNELS * 4 {
             return false;
         }
-        let base = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                len,
-                libc::PROT_READ,
-                libc::MAP_SHARED,
-                file.as_raw_fd(),
-                0,
-            )
-        };
+        let base =
+            unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
         if base == libc::MAP_FAILED {
             return false;
         }

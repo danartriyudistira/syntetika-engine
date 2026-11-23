@@ -38,7 +38,9 @@ public partial class MainWindow
         bridge.VizOutput(_visualOutputShown);
         SyncVisualOutputMenu();
         if (_vm is not null)
-            _vm.StatusText = Loc.T(_visualOutputShown ? "main.visual_output_shown" : "main.visual_output_hidden");
+            _vm.StatusText = _visualOutputShown
+                ? Loc.T("main.visual_output_shown")
+                : Loc.T("main.visual_output_hidden");
         // A click before the auto-started engine has connected must not be lost: the bridge
         // replays the last request once the connection is up.
         if (_visualOutputShown && !bridge.Connected) VisualEngineProcess.Current?.Start();
@@ -60,7 +62,9 @@ public partial class MainWindow
         bridge.VizUi(_openVjShown);
         SyncOpenVjMenu();
         if (_vm is not null)
-            _vm.StatusText = Loc.T(_openVjShown ? "main.openvj_window_shown" : "main.openvj_window_hidden");
+            _vm.StatusText = _openVjShown
+                ? Loc.T("main.openvj_window_shown")
+                : Loc.T("main.openvj_window_hidden");
         if (_openVjShown && !bridge.Connected) VisualEngineProcess.Current?.Start();
     }
 
@@ -90,7 +94,9 @@ public partial class MainWindow
         bridge.VizMapping(_mappingShown);
         SyncMappingMenu();
         if (_vm is not null)
-            _vm.StatusText = Loc.T(_mappingShown ? "main.mapping_shown" : "main.mapping_hidden");
+            _vm.StatusText = _mappingShown
+                ? Loc.T("main.mapping_shown")
+                : Loc.T("main.mapping_hidden");
         if (_mappingShown && !bridge.Connected) VisualEngineProcess.Current?.Start();
     }
 
@@ -106,12 +112,12 @@ public partial class MainWindow
         {
             _vm.Settings.Current.VisualPerformanceMode = mode;
             _vm.Settings.Save();
-            _vm.StatusText = Loc.T(mode switch
+            _vm.StatusText = mode switch
             {
-                0 => "main.visual_eco",
-                1 => "main.visual_balanced",
-                _ => "main.visual_quality",
-            });
+                0 => Loc.T("main.visual_eco"),
+                1 => Loc.T("main.visual_balanced"),
+                _ => Loc.T("main.visual_quality"),
+            };
         }
         VisualBridge.Current?.VizPerf(mode);
         SyncVisualPerformanceMenu();
@@ -170,7 +176,9 @@ public partial class MainWindow
             {
                 bool audio = _session?.LaunchSlotFromVisual(layer, scene) == true;
                 if (_vm is not null)
-                    _vm.StatusText = Loc.T(audio ? "session.launched_from_openvj" : "session.visual_only_no_audio");
+                    _vm.StatusText = audio
+                        ? Loc.T("session.launched_from_openvj")
+                        : Loc.T("session.visual_only_no_audio");
             });
         }
         SyncVisualOutputMenu();

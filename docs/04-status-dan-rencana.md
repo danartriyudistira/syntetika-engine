@@ -501,6 +501,19 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 4. Pilih P1/P2 dari daftar di atas; tulis rencana singkat sebelum kode.
 5. Setelah perubahan: build → bundle → uji → `git add -A && git commit && git push`.
 
+### Hook uji (env-gated, tidak aktif tanpa env)
+
+| Env | Fungsi |
+|---|---|
+| `NOTA_VIDEO_TEST=<file>` | Impor video ke slot scene 0 (audio + visual) 8 dtk setelah start |
+| `NOTA_PAIR_TEST=layer:scene:<file>` | Simulasi drop video di openVJ → pasangkan audio ke slot |
+| `OPENVJ_CLICK_TEST=layer:col` | Simulasi klik clip di editor openVJ (launch balik ke Nota) |
+| `OPENVJ_PAIR_TEST=layer:col=<file>` | Simulasi drop video di grid openVJ (handshake `vizMediaAudio`) |
+| `OPENVJ_SCALE_TEST=0.25` | Paksa render scale adaptif (uji resize/preview) |
+| `SYNTETIKA_TAP_DEBUG=1` | Log `tap level/bands/rate/feed` sekali per detik |
+| `NOTA_OPENVJ_UI_TEST=1`, `NOTA_VISUAL_OUTPUT_TEST=1`, `NOTA_MAPPING_TEST=1` | Buka jendela editor/output/mapping saat start |
+| `NOTA_SLOT_SYNC_TEST`, `NOTA_COPY_TEST`, `NOTA_SCENE_TEST` | Uji trim/loop, copy visual, dan struktur scene |
+
 ## 10. Keputusan terbuka
 
 - Apakah repo akan menyertakan binary rilis (saat ini source-only)?
