@@ -1222,6 +1222,13 @@ impl App {
         self.clear_history();
         let target: Vec<String> = tracks.iter().rev().map(|t| t.uid.clone()).collect();
 
+        // An interrupted or older save can carry an empty uid map. The layers were written in
+        // the same track order, so adopt the target uids by position: rebuilding every layer
+        // to fix the map would silently drop all of its clips.
+        if self.layout_uids.len() != self.comp.layers.len() && self.comp.layers.len() == target.len() {
+            self.layout_uids = target.clone();
+        }
+
         // Drop layers whose track is gone (top-down so indices stay valid).
         let mut i = self.comp.layers.len();
         while i > 0 {
@@ -1292,9 +1299,10 @@ impl App {
 
         self.grid_dirty = true;
         eprintln!(
-            "openVJ: NOTA layout -> {} layers / {} columns (target {} tracks / {} scenes)",
+            "openVJ: NOTA layout -> {} layers / {} columns / {} clips (target {} tracks / {} scenes)",
             self.comp.layers.len(),
             self.comp.columns.len(),
+            self.comp.all_clips().count(),
             target.len(),
             scenes.len()
         );
@@ -1374,6 +1382,21 @@ impl App {
         }
     }
 
+    /// The uid map to save with the composition.
+    ///
+    /// Nota builds this list from its live engine, which can already be empty during a
+    /// quit-save. A missing map would orphan every visual on the next open, so fall back to
+    /// the map the engine has been maintaining from `apply_layout` messages.
+    fn saved_uid_map(incoming: Vec<String>, current: &[String], layers: usize) -> Vec<String> {
+        if incoming.len() == layers {
+            incoming
+        } else if current.len() == layers {
+            current.to_vec()
+        } else {
+            incoming
+        }
+    }
+
     /// Sends one slot's viz state (and remembers it as the last one sent).
     fn send_viz_state(&mut self, layer: usize, col: usize, seq: u64) {
         let mut value = crate::viz::state(&self.comp, layer, col);
@@ -1397,6 +1420,7 @@ impl App {
             Err(e) => { eprintln!("openVJ: viz save failed: {e}"); return; }
         };
         crate::viz::paths_relative(&mut comp, media_dirs);
+        let uids = Self::saved_uid_map(uids, &self.layout_uids, self.comp.layers.len());
         eprintln!(
             "openVJ: viz save {} clips, {} layers",
             self.comp.all_clips().count(),
@@ -1481,7 +1505,8 @@ impl App {
                 self.render_scale_at = 0.0;
                 self.clear_history();
                 eprintln!(
-                    "openVJ: viz loaded from {path} ({} layers / {} columns)",
+                    "openVJ: viz loaded from {path} ({} clips, {} layers / {} columns)",
+                    self.comp.all_clips().count(),
                     self.comp.layers.len(),
                     self.comp.columns.len()
                 );
@@ -6261,5 +6286,31 @@ fn describe_source(source: &ClipSource) -> String {
         ClipSource::Camera { device, .. } => format!("camera:{device}"),
         ClipSource::Syphon { app, server } => format!("syphon:{app}/{server}"),
         ClipSource::Router { input } => format!("router:{input:?}"),
+    }
+}
+
+#[cfg(test)]
+mod uid_map_tests {
+    use super::App;
+
+    #[test]
+    fn saving_without_nota_uids_keeps_the_engine_map() {
+        let current = vec!["pad".to_owned(), "bass".to_owned()];
+        // What a quit-save sends once Nota's engine is empty.
+        assert_eq!(App::saved_uid_map(Vec::new(), &current, 2), current);
+        // A partial map is no better than none.
+        assert_eq!(App::saved_uid_map(vec!["x".to_owned()], &current, 2), current);
+    }
+
+    #[test]
+    fn saving_with_nota_uids_trusts_nota() {
+        let current = vec!["pad".to_owned(), "bass".to_owned()];
+        let incoming = vec!["new-pad".to_owned(), "new-bass".to_owned()];
+        assert_eq!(App::saved_uid_map(incoming.clone(), &current, 2), incoming);
+    }
+
+    #[test]
+    fn saving_without_any_map_stays_empty() {
+        assert!(App::saved_uid_map(Vec::new(), &[], 3).is_empty());
     }
 }

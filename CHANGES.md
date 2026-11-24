@@ -145,6 +145,11 @@ diffs are in `patches/`.
 
 - **Quit could lose the composition**: the visual process was killed before its `vizSave`
   finished. The app now waits for the `vizSaved` acknowledgement (1.2 s) before stopping it.
+- **Quit-save could lose every visual**: while Nota's engine was shutting down it could send
+  an empty `layout_uids`, and the saved file then had no track map. Reopening rebuilt the
+  layers empty and dropped all clips. The engine now falls back to its live uid map when the
+  message is empty, and adopts the saved layer order when a file has no map but the layer
+  count still matches the tracks.
 - **Large media froze the UI**: hashing/copying a picked file now runs off the UI thread.
 - **Empty camera/Syphon lists** showed a blank dialog; they now say what is missing.
 - The FFmpeg availability probe is cached, so it is not re-run on every state poll.
@@ -154,5 +159,5 @@ diffs are in `patches/`.
 - macOS Apple Silicon is the only tested target.
 - Visuals exist per Session slot; arrangement clips show a hint.
 - Media/camera/Syphon sources are not yet in the assign picker (generators and ISF are).
-- No undo for visual parameter edits; openVJ's own undo is not exposed yet.
+- Undo/redo covers visual edits only; audio uses Nota's own history.
 - `.nota` project bundles keep the upstream `"app": "Nota"` marker for compatibility.

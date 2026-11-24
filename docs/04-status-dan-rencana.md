@@ -555,7 +555,8 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   `VizCopy` menandai sumber+tujuan (move) atau tujuan (copy). Playback sengaja tidak
   di-undo; kalau clip yang dipulihkan tidak lagi aktif, layer dibiarkan tanpa clip aktif.
 - **UI**: toolbar **Undo/Redo** di tab OpenVJ; status tombol mengikuti `vizHistory`.
-- **Bukti unit**: 4 tes history lulus (parameter, coalesce, hapus+layer, redo dibersihkan).
+- **Bukti unit**: 7 tes history lulus (parameter, coalesce, hapus+layer, redo dibersihkan,
+  copy/paste dua slot, assign media, playback+efek).
 - **Bukti end-to-end**: `NOTA_VIZ_TEST=1 NOTA_VISUAL_UNDO_TEST=1` → mark 1–5,
   `undo=2→1 redo=1`, `redo→undo=2 redo=0`; Nota melihat `canUndo/canRedo` berubah.
 - **Bukti save×GC**: `viz save cleared 4` lalu `cleared 2 visual history step(s)`; flag
@@ -564,6 +565,39 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   clip yang medianya sudah di-GC.
 - **Cakupan**: visual saja (audio memakai undo Nota); belum ada shortcut keyboard; undo
   setelah perubahan struktur scene dibersihkan (riwayat tidak dipetakan ulang).
+
+## 7t. Demo project + regresi undo/persistensi (24 Nov)
+
+- **Demo**: `~/Documents/Nota Projects/syntetika_demo.nota` (panduan di `DEMO.md`).
+  4 track (Lead/Volt, Drums/Kompakt, Bass/Operator FM Bass, Pad/Pendulum Slow Bloom),
+  124 BPM Cm, 6 scene berisi; 13 clip visual = generator (Tunnel/Bars/Rings/Plasma),
+  1 ISF (DM-NoiseCloud), 1 gambar (ikon Syntetika), 1 video (Sintel, CC BY).
+  Efek blur/kaleido/rgb_split/pixelate, sync 4–8 beat, modulasi LowMid/Bass/BassHits/HighMid,
+  blend Add/Screen. Media di `visuals/media/<sha256>.*`.
+- **Bug ditemukan saat uji quit → buka ulang**: Nota mengirim `uids` kosong saat engine-nya
+  sudah shutdown, jadi file tersimpan `layout_uids: []`. Saat dibuka, `apply_layout` menganggap
+  tidak ada layer yang cocok, membuang 4 layer dan membuat ulang kosong → **13 clip hilang**.
+  Perbaikan di engine: `viz_save` memakai `self.layout_uids` bila kiriman kosong/panjangnya
+  tidak cocok, dan `apply_layout` memakai urutan layer tersimpan bila map kosong tapi jumlah
+  layer = jumlah track. Log sekarang menyertakan jumlah clip di `viz loaded`/`NOTA layout`.
+- **Bukti**: sebelum fix `viz loaded (13 clips)` → `NOTA layout ... 0 clips`; sesudah fix
+  `viz loaded (13 clips)` → `NOTA layout ... 13 clips`, termasuk setelah quit-save
+  (`uids 4, clips 13`) dan buka ulang. Unit test baru: 3 tes fallback UID + 3 tes history
+  (copy/paste, media, playback/efek) → 51 tes `openvj-app` lulus.
+- **S2 (undo)**: mark tercatat untuk assign (generator/media/ISF), set parameter, efek,
+  playback, clear, layer, copy/paste; save membersihkan riwayat sebelum GC. Hook
+  `NOTA_VIZ_TEST=1 NOTA_VISUAL_UNDO_TEST=1`: `history mark` 1→4, save `cleared 4`,
+  edit baru `undo=1→0 redo=1`, redo `undo=1 redo=0`; flag Nota `canUndo/canRedo` ikut.
+- **S3 (regresi)**: offset **−80 ms** + Balanced tersimpan di settings dan diputar ulang
+  (`NOTA A/V offset -80 ms`, `performance mode 1 (45 fps, preview 30 fps)`; fps 44);
+  kalibrasi saat playing `NOTA calibration on` lalu `off`; Quality kembali 60 fps.
+  Engine restart/reconnect me-resume slot yang sedang playing. Save/buka ulang mempertahankan
+  13 clip + 2 media (GC tidak menghapus yang dipakai). Render ISF/gambar/video 60 fps
+  (ISF AR-Lissajous 574 ms/frame → diganti DM-NoiseCloud 98 ms frame pertama, lalu ~1,5 ms).
+  Tap live 48 kHz; jalur 44,1 kHz tetap dicakup unit test audio. Preview-clear & strobe
+  berhenti saat beat beku dicakup tes render.
+- **Catatan uji**: `launch_scene` lewat MCP hanya memicu audio; launch visual mengikuti jalur
+  UI (palette “Launch scene”) atau replay-on-reconnect. Scene lain diuji lewat replay tersebut.
 
 ## 8. Risiko
 

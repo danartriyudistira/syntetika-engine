@@ -234,4 +234,63 @@ mod tests {
         h.mark(&comp, &[(0, 0)], &[0], "b".into(), 2.0, 0.0);
         assert_eq!(h.redo_len(), 0);
     }
+
+    #[test]
+    fn undo_restores_both_slots_of_a_copy_paste() {
+        let mut comp = Composition::new(64, 36, 2, 2);
+        comp.set_clip(0, 0, ClipSource::Generator { kind: GeneratorKind::Plasma }).unwrap();
+        comp.set_clip(1, 1, ClipSource::Generator { kind: GeneratorKind::Rings }).unwrap();
+        let source = comp.clip(0, 0).unwrap().source.clone();
+        let mut h = VisualHistory::new();
+        h.mark(&comp, &[(0, 0), (1, 1)], &[0, 1], "copy".into(), 1.0, 0.0);
+        comp.set_clip(1, 1, source).unwrap();
+        h.undo(&mut comp).unwrap();
+        assert!(matches!(comp.clip(1, 1).unwrap().source, ClipSource::Generator { kind: GeneratorKind::Rings }));
+        h.redo(&mut comp).unwrap();
+        assert!(matches!(comp.clip(1, 1).unwrap().source, ClipSource::Generator { kind: GeneratorKind::Plasma }));
+    }
+
+    #[test]
+    fn undo_restores_a_media_assignment() {
+        let mut comp = comp_with_clip();
+        let image = std::path::PathBuf::from("/tmp/a.png");
+        comp.set_clip(0, 0, ClipSource::Image { path: image.clone() }).unwrap();
+        let mut h = VisualHistory::new();
+        h.mark(&comp, &[(0, 0)], &[0], "assign".into(), 1.0, 0.0);
+        comp.set_clip(0, 0, ClipSource::Video { path: "/tmp/b.mp4".into() }).unwrap();
+        h.undo(&mut comp).unwrap();
+        match &comp.clip(0, 0).unwrap().source {
+            ClipSource::Image { path } => assert_eq!(path, &image),
+            other => panic!("expected the image back, got {other:?}"),
+        }
+        h.redo(&mut comp).unwrap();
+        assert!(matches!(comp.clip(0, 0).unwrap().source, ClipSource::Video { .. }));
+    }
+
+    #[test]
+    fn undo_restores_playback_and_effects() {
+        let mut comp = comp_with_clip();
+        let mut h = VisualHistory::new();
+        h.mark(&comp, &[(0, 0)], &[0], "play".into(), 1.0, 0.0);
+        {
+            let clip = comp.clip_mut(0, 0).unwrap();
+            clip.sync_beats = Some(4.0);
+            clip.speed = 2.0;
+            clip.effects.push(openvj_core::Effect::new("kaleido"));
+        }
+        h.undo(&mut comp).unwrap();
+        {
+            let clip = comp.clip(0, 0).unwrap();
+            assert_eq!(clip.sync_beats, None);
+            assert_eq!(clip.speed, 1.0);
+            assert!(clip.effects.is_empty());
+        }
+        h.redo(&mut comp).unwrap();
+        {
+            let clip = comp.clip(0, 0).unwrap();
+            assert_eq!(clip.sync_beats, Some(4.0));
+            assert_eq!(clip.speed, 2.0);
+            assert_eq!(clip.effects.len(), 1);
+        }
+    }
 }
