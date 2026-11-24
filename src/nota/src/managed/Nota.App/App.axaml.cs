@@ -142,6 +142,7 @@ public partial class App : Avalonia.Application
                 bridge?.PublishSlotTiming();   // video follows audio trim/loop (throttled)
                 bridge?.PublishSlotPhase();    // and its playing phase
                 bridge?.ResumePlayingVisuals();
+                bridge?.SyncPlayingVisuals();  // Follow Actions / controllers change scenes without a UI launch
             });
         _visualLayout.Start();
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>

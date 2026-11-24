@@ -107,6 +107,11 @@ public sealed class VisualBridge : IDisposable
     private volatile bool _slotTimingDirty;
     /// <summary>A new engine connected while audio may be playing: launch its visuals again.</summary>
     private volatile bool _resumePending;
+    /// <summary>Last playing scene sent per track, so follow-action changes launch visuals.</summary>
+    private readonly Dictionary<int, int> _playingScene = new();
+    /// <summary>Scene a UI launch already scheduled per layer (scene + tick), so the sync does
+    /// not retrigger it; stale entries expire so a cancelled launch can't mute a later one.</summary>
+    private readonly Dictionary<int, (int Scene, long At)> _expectedLayerScene = new();
     /// <summary>Last visual performance profile (0 Eco, 1 Balanced, 2 Quality); replayed on connect.</summary>
     private volatile int _perfMode = 2;
     /// <summary>A/V offset in ms (+ delays the picture); replays on connect for the UI.</summary>
@@ -344,23 +349,57 @@ public sealed class VisualBridge : IDisposable
     {
         if (!_resumePending || !Connected) return;
         _resumePending = false;
+        _playingScene.Clear();
+        _expectedLayerScene.Clear();
+        SyncPlayingVisuals(force: true);
+    }
+
+    /// <summary>
+    /// Mirrors the audio engine's playing scene to the visual layers. UI launches send their own
+    /// `slot` messages (recorded in <see cref="_expectedLayerScene"/>); this catches every other
+    /// way a scene starts — Follow Actions, controller launch, undo — within one UI poll.
+    /// </summary>
+    public void SyncPlayingVisuals(bool force = false)
+    {
+        if (!Connected) return;
         try
         {
             var uids = CurrentLayoutUids();
             var layerOf = new Dictionary<string, int>(uids.Count, StringComparer.Ordinal);
             for (int i = 0; i < uids.Count; i++) layerOf[uids[i]] = i;
-            double at = VisualBeat(Math.Round(_engine.PositionBeats, 6));
+            double at = Math.Round(_engine.PositionBeats, 6);
             for (int i = 0; i < _engine.TrackCount; i++)
             {
                 if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type is not (0 or 1)) continue;
                 if (!layerOf.TryGetValue(Nota.Application.TrackUids.UidFor(ti.Id), out int layer)) continue;
+                int playing = -1;
                 for (int scene = 0; scene < _engine.SceneCount; scene++)
-                    if (_engine.SessionSlotState(ti.Id, scene) == 3)
+                    if (_engine.SessionSlotState(ti.Id, scene) == 3) { playing = scene; break; }
+                bool known = _playingScene.TryGetValue(ti.Id, out int prev);
+                if (playing >= 0)
+                {
+                    bool expected = false;
+                    if (_expectedLayerScene.TryGetValue(layer, out var ex))
                     {
-                        Send($"{{\"t\":\"slot\",\"layer\":{layer},\"col\":{scene},\"atBeat\":{Num(at)}}}");
-                        AppLog($"[resume] slot {ti.Id}:{scene} layer={layer}");
-                        break;
+                        expected = ex.Scene == playing && Environment.TickCount64 - ex.At < 5000;
+                        if (expected || Environment.TickCount64 - ex.At >= 5000) _expectedLayerScene.Remove(layer);
                     }
+                    if (!expected && (force || !known || prev != playing))
+                    {
+                        SendLaunch("slot", playing, atBeat: at, layer);
+                        AppLog($"[playing] slot {ti.Id}:{playing} layer={layer}");
+                    }
+                    _playingScene[ti.Id] = playing;
+                }
+                else
+                {
+                    if (known && prev >= 0)
+                    {
+                        StopLayer(layer, atBeat: at);
+                        AppLog($"[playing] stop {ti.Id} layer={layer}");
+                    }
+                    _playingScene.Remove(ti.Id);
+                }
             }
         }
         catch (ObjectDisposedException) { _resumePending = true; }
@@ -442,20 +481,38 @@ public sealed class VisualBridge : IDisposable
     // ---- commands (UI thread) ------------------------------------------------
 
     /// <summary>Launch a Session scene's visual column on the next launch quantum.</summary>
-    public void Scene(int scene) => SendLaunch("scene", scene, atBeat: NextQuantumBeat());
+    public void Scene(int scene)
+    {
+        try
+        {
+            for (int layer = 0; layer < CurrentLayoutUids().Count; layer++)
+                _expectedLayerScene[layer] = (scene, Environment.TickCount64);
+        }
+        catch (ObjectDisposedException) { }
+        SendLaunch("scene", scene, atBeat: NextQuantumBeat());
+    }
 
     /// <summary>Mirror the selected clip: openVJ selects the same slot (Preview + Properties).</summary>
     /// <summary>Launch one track's visual clip (layer, column) on the next launch quantum.</summary>
     public void Slot(int layer, int scene, double? atBeat = null)
-        => SendLaunch("slot", scene, atBeat ?? NextQuantumBeat(), layer);
+    {
+        _expectedLayerScene[layer] = (scene, Environment.TickCount64);
+        SendLaunch("slot", scene, atBeat ?? NextQuantumBeat(), layer);
+    }
 
     public void StopLayer(int layer, double? atBeat = null)
-        => Send(atBeat is { } b
+    {
+        _expectedLayerScene.Remove(layer);
+        Send(atBeat is { } b
             ? $"{{\"t\":\"stopLayer\",\"layer\":{layer},\"atBeat\":{Num(VisualBeat(b))}}}"
             : $"{{\"t\":\"stopLayer\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)}}}");
+    }
 
     public void StopAll(double? atBeat = null)
-        => Send(atBeat is { } b ? $"{{\"t\":\"stopAll\",\"atBeat\":{Num(VisualBeat(b))}}}" : "{\"t\":\"stopAll\"}");
+    {
+        _expectedLayerScene.Clear();
+        Send(atBeat is { } b ? $"{{\"t\":\"stopAll\",\"atBeat\":{Num(VisualBeat(b))}}}" : "{\"t\":\"stopAll\"}");
+    }
 
     /// <summary>The A/V offset in beats at the current tempo (+ delays the picture).</summary>
     private double OffsetBeats

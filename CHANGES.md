@@ -24,6 +24,9 @@ diffs are in `patches/`.
 - **Visual bridge** (`Nota.Infrastructure/Visuals/VisualBridge.cs`): loopback TCP, ~125 Hz
   transport, beat-scheduled launch/stop, layout snapshots, selection mirroring, viz parameter
   API, `vizSave`/`vizLoad`, single-instance file lock.
+- **Follow Actions drive visuals**: the bridge mirrors the engine's playing scene onto openVJ
+  layers, so Follow Action section changes launch (and clear) visuals too. UI launches are
+  recorded as expected, so the mirror never retriggers a clip that was just scheduled.
 - **Stable track UIDs** (`TrackUids`, `TrackDto.Uid`): a track's visual layer follows the track
   across save/load and reorder.
 - **Layout mirroring**: one openVJ layer per playable track and one column per scene, live

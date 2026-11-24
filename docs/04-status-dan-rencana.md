@@ -569,15 +569,19 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 ## 7t. Demo project + regresi undo/persistensi (24 Nov)
 
 - **Demo**: `~/Documents/Nota Projects/syntetika_demo.nota` (panduan di `DEMO.md`).
-  **Melodic techno** 124 BPM Cm: 5 track (Lead/Aurora Detuned Lead, Arp/Volt Tri Pluck,
-  Drums/Kompakt, Bass/Operator FM Bass, Pad/Pendulum Slow Bloom) + 2 return dengan sends;
-  progresi Cm–Ab–Eb–Bb, bass/arp/pad 16 beat, drum 8 beat. 6 scene berisi; **20 clip visual**
-  di 5 layer = Tunnel/Bars/Rings/Plasma + ISF DM-NoiseCloud + gambar + video, efek
-  blur/kaleido/rgb_split/pixelate/wave/mirror, sync 8–16 beat, modulasi LowMid/Bass/BassHits/
-  HighMid, blend Add/Screen. Media di `visuals/media/<sha256>.*`.
-- **Bukti versi melodic techno**: 20 clip/5 layer bertahan save → quit → buka; 12/12
-  scene × 2 putaran (launch → kill engine → load 20 clip → resume visual) lulus; keenam scene
-  berbunyi di semua track (meter Arp/Lead/Pad/Bass/Drums > 0); render video/ISF/gambar 60 fps.
+  **Atmospheric melodic house / progressive** 122 BPM F minor, **5:15** otomatis lewat Follow
+  Actions. 7 track (Lead/Aurora Detuned Lead, Arp/Volt Tri Pluck, Atmos/Aurora Glacier Pad,
+  Pad/Pendulum Slow Bloom, Bass/Monolith Taurus Bass, Drums/Kompakt, Sub/Aurora Sub Bass) +
+  2 return dengan sends. Progresi Fm–Db–Ab–Eb; bass/arp/pad/lead 16 beat, drum 8 beat.
+  7 bagian (Intro/Build/Main/Peak/Breakdown/Final/Outro) dengan follow 132/142/81/71/102/81/31
+  beat; **49 slot** audio (termasuk “Rest”) dan **42 clip visual** di 7 layer =
+  Tunnel/Bars/Rings/Plasma + ISF SM-LiquidFill/DM-NoiseCloud/AR-HarmonicVoronoi + gambar +
+  video, efek blur/kaleido/rgb_split/pixelate/wave/mirror, sync 8–16 beat, modulasi audio.
+  Media di `visuals/media/<sha256>.*`.
+- **Bukti**: 42 clip/7 layer bertahan save → quit → buka; 14/14 uji bagian × 2 putaran
+  (launch → kill engine → load 42 clip → resume visual) lulus; semua bagian berbunyi; render
+  7 layer + 3 ISF + video/gambar **60 fps**; run 5:15 otomatis: transisi 0/66/137/175/211/261/
+  301 dtk dan stop 315 dtk.
 - **Bug ditemukan saat uji quit → buka ulang**: Nota mengirim `uids` kosong saat engine-nya
   sudah shutdown, jadi file tersimpan `layout_uids: []`. Saat dibuka, `apply_layout` menganggap
   tidak ada layer yang cocok, membuang 4 layer dan membuat ulang kosong → **13 clip hilang**.
@@ -622,6 +626,22 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   `canUndo/canRedo` benar; 5 save beruntun saat scene Drop → 13 clip + 2 media tetap; 20
   launch cepat berakhir konsisten di scene terakhir; 3× save/quit/reopen → 13 clip/4 UID;
   Eco 30 fps, +200 ms offset, lalu Quality 60 fps/0 ms; demo tetap 13 clip.
+
+## 7v. Sinkron visual untuk Follow Actions (24 Nov)
+
+- **Temuan saat uji 5:15**: Follow Actions mengubah scene audio tepat waktu, tetapi visual
+  tidak ikut — bridge hanya mengirim `slot` dari aksi UI (launch scene/slot). Run otomatis
+  mencatat 0 clip visual yang di-apply.
+- **Fix** (`VisualBridge.SyncPlayingVisuals`, dipanggil timer UI 250 ms): baca scene yang
+  sedang playing per track dari engine, lalu kirim `slot`/`stopLayer` bila berubah tanpa aksi
+  UI. `_expectedLayerScene` mencatat launch UI (`Slot`/`Scene`) supaya poll tidak
+  me-retrigger clip yang baru dijadwalkan. `ResumePlayingVisuals` memakai jalur yang sama
+  setelah reconnect.
+- **Keterlambatan**: maksimal satu poll (~250 ms) pada pergantian bagian; untuk set 5:15 ini
+  tidak terasa. Launch manual tetap tepat di quantum karena pengiriman eksplisit tetap dipakai.
+- **Bukti**: run 5:15 otomatis — transisi 0/66,4/136,7/174,8/211,0/261,1/301,2 dtk, stop
+  315,3 dtk; visual yang di-apply tepat per bagian (Intro 0,1,3,4,5; Build +2; Main/Peak/Final
+  semua 7; Breakdown/Outro 0,3,4,5,6). Semua bagian punya visual; tidak ada retrigger ganda.
 
 ## 8. Risiko
 

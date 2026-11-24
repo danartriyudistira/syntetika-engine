@@ -113,8 +113,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let uids: Vec<String> = tracks.iter().map(|(_, uid)| uid.clone()).collect();
 
     let mut comp = Composition::new(width, height, tracks.len(), columns);
-    comp.name = "Syntetika Demo — Melodic Techno".into();
-    comp.bpm = 124.0;
+    comp.name = "Syntetika Demo — Atmospheric House 5:15".into();
+    comp.bpm = 122.0;
     for (i, (name, _)) in tracks.iter().enumerate() {
         comp.layers[i].name = name.clone();
     }
@@ -127,12 +127,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let find = |name: &str| tracks.iter().position(|(n, _)| n.eq_ignore_ascii_case(name));
     let scene = |word: &str, col: usize| format!("{word} {}", column_names.get(col).map(String::as_str).unwrap_or(""));
 
-    if let Some(pad) = find("Pad") {
-        comp.layers[pad].opacity = 0.85;
-        for col in 0..6 {
+    let media_dir = dir.join("visuals").join("media");
+    let image = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../assets/syntetika-icon.svg.png");
+    let image_path = if image.is_file() { Some(import_media(&media_dir, &image)?) } else { None };
+    let video = env::var_os("HOME").map(|h| PathBuf::from(h).join("Movies/Sintel_Trailer.mp4")).filter(|p| p.is_file());
+    let video_path = match video {
+        Some(video) => Some(import_media(&media_dir, &video)?),
+        None => None,
+    };
+    let has = |name: &str| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../shaders/ghost-arcade/{name}.fs")).is_file()
+    };
+
+    // Bottom layer: the sub drone as a deep tunnel through every section.
+    if let Some(sub) = find("Sub") {
+        comp.layers[sub].opacity = 0.9;
+        for col in 0..7 {
             put(
                 &mut comp,
-                pad,
+                sub,
                 col,
                 GeneratorKind::Tunnel,
                 &scene("Tunnel", col),
@@ -144,23 +157,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(bass) = find("Bass") {
-        comp.layers[bass].opacity = 0.72;
-        comp.layers[bass].blend = BlendMode::Add;
-        for col in [1, 2, 4] {
-            put(&mut comp, bass, col, GeneratorKind::Bars, &scene("Bars", col), 8.0, "kaleido", ModSource::Bass, 0.6);
-        }
-    }
-
-    let media_dir = dir.join("visuals").join("media");
-    let image = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../assets/syntetika-icon.svg.png");
-    let image_path = if image.is_file() { Some(import_media(&media_dir, &image)?) } else { None };
-    let video = env::var_os("HOME").map(|h| PathBuf::from(h).join("Movies/Sintel_Trailer.mp4")).filter(|p| p.is_file());
-    let video_path = match video {
-        Some(video) => Some(import_media(&media_dir, &video)?),
-        None => None,
-    };
-
     if let Some(drums) = find("Drums") {
         comp.layers[drums].opacity = 0.8;
         comp.layers[drums].blend = BlendMode::Screen;
@@ -168,9 +164,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(path) => put_source(
                 &mut comp,
                 drums,
-                1,
+                0,
                 ClipSource::Image { path: path.clone().into() },
-                "Glyph pulse",
+                "Glyph intro",
                 8.0,
                 "pixelate",
                 ModSource::Off,
@@ -179,16 +175,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => put(
                 &mut comp,
                 drums,
-                1,
+                0,
                 GeneratorKind::Rings,
-                "Rings pulse",
+                "Rings intro",
                 8.0,
                 "rgb_split",
                 ModSource::BassHits,
                 0.75,
             ),
         }
-        for col in [2, 4] {
+        for col in [1, 2, 3, 5] {
             put(
                 &mut comp,
                 drums,
@@ -203,34 +199,108 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if let Some(bass) = find("Bass") {
+        comp.layers[bass].opacity = 0.72;
+        comp.layers[bass].blend = BlendMode::Add;
+        for col in [1, 2, 3, 5] {
+            put(&mut comp, bass, col, GeneratorKind::Bars, &scene("Bars", col), 8.0, "kaleido", ModSource::Bass, 0.6);
+        }
+    }
+
+    if let Some(pad) = find("Pad") {
+        comp.layers[pad].opacity = 0.85;
+        if has("SM-LiquidFill") {
+            for col in 0..7 {
+                put_isf(
+                    &mut comp,
+                    pad,
+                    col,
+                    "SM-LiquidFill",
+                    &scene("Liquid", col),
+                    16.0,
+                    "wave",
+                    ModSource::LowMid,
+                    0.4,
+                );
+            }
+        } else {
+            for col in 0..7 {
+                put(
+                    &mut comp,
+                    pad,
+                    col,
+                    GeneratorKind::Plasma,
+                    &scene("Plasma", col),
+                    16.0,
+                    "wave",
+                    ModSource::LowMid,
+                    0.4,
+                );
+            }
+        }
+    }
+
+    if let Some(atmos) = find("Atmos") {
+        comp.layers[atmos].opacity = 0.55;
+        comp.layers[atmos].blend = BlendMode::Add;
+        if has("DM-NoiseCloud") {
+            for col in 0..7 {
+                put_isf(
+                    &mut comp,
+                    atmos,
+                    col,
+                    "DM-NoiseCloud",
+                    &scene("Cloud", col),
+                    16.0,
+                    "mirror",
+                    ModSource::HighMid,
+                    0.45,
+                );
+            }
+        } else {
+            for col in 0..7 {
+                put(
+                    &mut comp,
+                    atmos,
+                    col,
+                    GeneratorKind::Bars,
+                    &scene("Bars", col),
+                    16.0,
+                    "mirror",
+                    ModSource::HighMid,
+                    0.45,
+                );
+            }
+        }
+    }
+
     if let Some(arp) = find("Arp") {
-        comp.layers[arp].opacity = 0.78;
-        comp.layers[arp].blend = BlendMode::Add;
-        let isf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../shaders/ghost-arcade/DM-NoiseCloud.fs");
-        if isf.is_file() {
-            for (col, effect) in [(0, "rgb_split"), (2, "wave"), (3, "pixelate"), (4, "rgb_split"), (5, "mirror")] {
+        comp.layers[arp].opacity = 0.7;
+        comp.layers[arp].blend = BlendMode::Screen;
+        if has("AR-HarmonicVoronoi") {
+            for col in 0..7 {
                 put_isf(
                     &mut comp,
                     arp,
                     col,
-                    "DM-NoiseCloud",
-                    &scene("Noise", col),
+                    "AR-HarmonicVoronoi",
+                    &scene("Voronoi", col),
                     8.0,
-                    effect,
+                    "rgb_split",
                     ModSource::BassHits,
                     0.5,
                 );
             }
         } else {
-            for col in [0, 2, 3, 4, 5] {
+            for col in 0..7 {
                 put(
                     &mut comp,
                     arp,
                     col,
-                    GeneratorKind::Bars,
-                    &scene("Bars", col),
+                    GeneratorKind::Rings,
+                    &scene("Rings", col),
                     8.0,
-                    "wave",
+                    "rgb_split",
                     ModSource::BassHits,
                     0.5,
                 );
@@ -240,11 +310,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(lead) = find("Lead") {
         comp.layers[lead].opacity = 0.95;
+        for col in [2, 3, 5] {
+            put(
+                &mut comp,
+                lead,
+                col,
+                GeneratorKind::Plasma,
+                &scene("Plasma", col),
+                8.0,
+                "kaleido",
+                ModSource::HighMid,
+                0.5,
+            );
+        }
         match &video_path {
             Some(path) => put_source(
                 &mut comp,
                 lead,
-                3,
+                4,
                 ClipSource::Video { path: path.clone().into() },
                 "Sintel break",
                 8.0,
@@ -253,11 +336,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 0.0,
             ),
             None => {
-                put(&mut comp, lead, 3, GeneratorKind::Plasma, "Plasma break", 8.0, "kaleido", ModSource::HighMid, 0.5)
+                put(&mut comp, lead, 4, GeneratorKind::Plasma, "Plasma break", 8.0, "kaleido", ModSource::HighMid, 0.5)
             }
         }
-        put(&mut comp, lead, 4, GeneratorKind::Plasma, "Plasma drop", 8.0, "kaleido", ModSource::HighMid, 0.5);
-        put(&mut comp, lead, 5, GeneratorKind::Plasma, "Plasma outro", 16.0, "blur", ModSource::HighMid, 0.4);
+        put(&mut comp, lead, 6, GeneratorKind::Plasma, "Plasma tail", 16.0, "blur", ModSource::HighMid, 0.4);
     }
 
     let out = json!({
