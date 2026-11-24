@@ -96,6 +96,11 @@ public sealed class VisualBridge : IDisposable
     /// <summary>Set when a client connects, so it gets the current layout immediately.</summary>
     private volatile bool _layoutDirty = true;
     private string _layoutSignature = "";
+    /// <summary>Deck names + open deck. When it changes without a vizDeck* command (undo,
+    /// redo, a load), the layout poll reconciles the visual deck list.</summary>
+    private string _deckSignature = "";
+    /// <summary>A new project was created: a fresh engine must start with a clean composition.</summary>
+    private bool _compositionReset;
     /// <summary>Bumped per accepted client, so each new connection gets a layout even when the
     /// structure did not change (a send racing a disconnect must not lose the snapshot).</summary>
     private volatile int _clientEpoch;
@@ -288,6 +293,14 @@ public sealed class VisualBridge : IDisposable
             string signature = sig.ToString();
             int epoch = _clientEpoch;
             if (!_layoutDirty && signature == _layoutSignature && epoch == _sentEpoch) return;
+            // An undo/redo can add, drop, rename or switch a deck without any vizDeck* command.
+            // Names + open deck are cheap to compare; scene-count edits are already handled by
+            // the column layout below.
+            if (_projectDir is { Length: > 0 } && DeckSignature() != _deckSignature)
+            {
+                SyncDecks();
+                DeckChanged();   // clears the deck-scoped mirrors; the layout goes out next
+            }
             _layoutDirty = false;
             _layoutSignature = signature;
             _sentEpoch = epoch;
@@ -339,6 +352,16 @@ public sealed class VisualBridge : IDisposable
         return scene >= start && scene < start + count ? scene - start : -1;
     }
 
+    /// <summary>Deck names + current index: what must match between Nota and openVJ.</summary>
+    private string DeckSignature()
+    {
+        var sb = new StringBuilder();
+        for (int d = 0; d < _engine.DeckCount; d++)
+            sb.Append(_engine.GetDeckName(d)).Append('|');
+        sb.Append('#').Append(_engine.CurrentDeck);
+        return sb.ToString();
+    }
+
     /// <summary>The open deck's column for a global scene, or -1. The OpenVJ tab compares the
     /// engine's replies (local columns) against the slot it shows (global scene).</summary>
     public int ColumnForScene(int scene) => LocalCol(scene);
@@ -352,7 +375,11 @@ public sealed class VisualBridge : IDisposable
 
     /// <summary>openVJ switched decks itself (its tabs): reset the deck-scoped mirrors and
     /// resend the layout, without asking the engine to switch again.</summary>
-    public void DeckSwitchedFromOpenVJ() => DeckChanged();
+    public void DeckSwitchedFromOpenVJ()
+    {
+        _deckSignature = DeckSignature();
+        DeckChanged();
+    }
 
     /// <summary>Forgets the deck-scoped mirrors after the open deck changed.</summary>
     private void DeckChanged()
@@ -888,8 +915,15 @@ public sealed class VisualBridge : IDisposable
             SetOutputOpen(false);
             // A restarted visual engine starts with an empty/demo composition. Reload the saved
             // visuals for the open project before layout/timing/resume reach it.
-            if (_projectDir is { Length: > 0 } dir) VizLoad(dir);
-            SyncDecks();
+            if (_projectDir is { Length: > 0 } dir)
+            {
+                VizLoad(dir);
+                SyncDecks();
+            }
+            else if (_compositionReset)
+            {
+                Send("{\"t\":\"vizReset\"}");
+            }
             if (_outputWanted) Send("{\"t\":\"vizOutput\",\"show\":true}");
             if (_uiWanted) Send("{\"t\":\"vizUi\",\"show\":true}");
             if (_mappingWanted) Send("{\"t\":\"vizMapping\",\"show\":true}");
@@ -1310,13 +1344,41 @@ public sealed class VisualBridge : IDisposable
         mediaDir,
     }));
 
-    /// <summary>Loads a bundle's composition; `media/<file>` resolves inside the bundle.</summary>
-    public void VizLoad(string bundleDir) => Send(JsonSerializer.Serialize(new
+    /// <summary>A new project has no visuals: drop the previous project's clips, effects and
+    /// decks so they cannot ride along into the new bundle. The layout that follows builds the
+    /// layers and columns for the new project.</summary>
+    public void ResetComposition()
     {
-        t = "vizLoad",
-        path = Path.Combine(bundleDir, "visuals", "composition.json"),
-        mediaDir = Path.Combine(bundleDir, "visuals", "media"),
-    }));
+        _compositionReset = true;
+        Send("{\"t\":\"vizReset\"}");
+        _playingScene.Clear();
+        _expectedLayerScene.Clear();
+        _selectedScene = -1;
+        _slotTiming.Clear();
+        _slotTimingDirty = true;
+        _deckSignature = "";
+        _layoutDirty = true;
+        _resumePending = false;
+    }
+
+    /// <summary>Loads a bundle's composition; `media/<file>` resolves inside the bundle. A
+    /// project without a visuals file loads blank instead of inheriting the previous picture.</summary>
+    public void VizLoad(string bundleDir)
+    {
+        string path = Path.Combine(bundleDir, "visuals", "composition.json");
+        if (!File.Exists(path))
+        {
+            ResetComposition();
+            return;
+        }
+        _compositionReset = false;
+        Send(JsonSerializer.Serialize(new
+        {
+            t = "vizLoad",
+            path,
+            mediaDir = Path.Combine(bundleDir, "visuals", "media"),
+        }));
+    }
 
     /// <summary>Waits for the visual engine to confirm a save (used on quit).</summary>
     public bool WaitForSave(int milliseconds) => _saved.Wait(milliseconds);
@@ -1342,30 +1404,35 @@ public sealed class VisualBridge : IDisposable
     public void SwitchDeck(int index)
     {
         Send($"{{\"t\":\"vizDeck\",\"index\":{index}}}");
+        _deckSignature = DeckSignature();
         DeckChanged();
     }
 
     public void AddDeck(int index)
     {
         Send($"{{\"t\":\"vizDeckAdd\",\"index\":{index}}}");
+        _deckSignature = DeckSignature();
         DeckChanged();
     }
 
     public void RemoveDeck(int index)
     {
         Send($"{{\"t\":\"vizDeckRemove\",\"index\":{index}}}");
+        _deckSignature = DeckSignature();
         DeckChanged();
     }
 
     public void DuplicateDeck(int index)
     {
         Send($"{{\"t\":\"vizDeckDuplicate\",\"index\":{index}}}");
+        _deckSignature = DeckSignature();
         DeckChanged();
     }
 
     public void RenameDeck(int index, string name)
     {
         Send(JsonSerializer.Serialize(new { t = "vizDeckRename", index, name }));
+        _deckSignature = DeckSignature();
         _layoutDirty = true;
     }
 
@@ -1381,6 +1448,7 @@ public sealed class VisualBridge : IDisposable
             counts[i] = Math.Max(1, _engine.DeckSceneCount(i));
         }
         Send(JsonSerializer.Serialize(new { t = "vizDecks", names, counts, current = _engine.CurrentDeck }));
+        _deckSignature = DeckSignature();
     }
 
     /// <summary>Clears a slot's visual; with atBeat, waits for that beat (audio stop).</summary>

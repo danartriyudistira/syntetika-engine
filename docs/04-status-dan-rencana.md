@@ -736,6 +736,10 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Bukti**: 18 cek smoke deck (model, undo, save/load, migrasi v35) lulus; 172 tes
   openvj-core + 51 tes openvj-app lulus (termasuk duplicate & adopt by name); harness bridge
   deck menghasilkan 3 deck → duplicate → remove dengan nama/jumlah/current benar.
+- **Siklus project**: New Project mengirim `vizReset` (clip/efek/media/history/deck lama
+  dibuang, resolusi dipertahankan); membuka project tanpa `visuals/composition.json` juga
+  memuat komposisi kosong, bukan mewarisi efek project sebelumnya. Undo/redo deck
+  direkonsiliasi lewat `vizDecks` (match nama; rename memakai posisi).
 - **Belum**: undo remove deck mengembalikan audio tetapi isi visual deck mulai kosong; follow
   visual untuk deck yang tidak terbuka baru dijalankan saat deck dibuka; tool MCP/remote
   masih memakai index scene global; demo 2-deck dan rilis 0.1.4 belum.

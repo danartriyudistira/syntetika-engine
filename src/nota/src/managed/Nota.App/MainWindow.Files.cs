@@ -197,6 +197,7 @@ public partial class MainWindow
         _panLawLegacy = false;     // new projects use the Stereo pan law (set by the template)
         _projectPath = null;
         VisualBridge.Current?.SetProjectDir(null);
+        VisualBridge.Current?.ResetComposition();   // a new project starts with a blank picture
         if (_vm is not null) _vm.Browser.OpenProjectPath = null;
         _learn?.Clear();   // start with a clean MIDI-map for the new project
         _devicePages?.LoadProject(null);   // a new project has no pages of its own

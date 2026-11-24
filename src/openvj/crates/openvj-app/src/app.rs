@@ -980,6 +980,7 @@ impl App {
                 }
                 NotaCommand::VizSave { path, uids, media_dirs, gc } => self.viz_save(&path, uids, &media_dirs, gc),
                 NotaCommand::VizLoad { path, media_dir } => self.viz_load(&path, &media_dir),
+                NotaCommand::VizReset => self.reset_composition(),
                 NotaCommand::VizDeck { index } => self.deck_clicked_from_nota(index),
                 NotaCommand::VizDeckAdd { index } => self.deck_add_at(index),
                 NotaCommand::VizDeckRemove { index } => self.deck_remove_internal(index),
@@ -1488,6 +1489,25 @@ impl App {
             }
             Err(e) => eprintln!("openVJ: viz save failed: {e}"),
         }
+    }
+
+    /// A new Nota project starts with a clean picture: no clips, effects, media, history or
+    /// extra decks. The output resolution is kept (an engine preference), the layout message
+    /// that follows builds the layers/columns for the new project.
+    pub fn reset_composition(&mut self) {
+        let (w, h) = (self.comp.width.max(1), self.comp.height.max(1));
+        let layers = self.comp.layers.len().max(1);
+        self.comp = Composition::new(w, h, layers, 1);
+        self.layout_uids.clear();
+        self.selected = None;
+        self.selected_layer = 0;
+        self.last_column = None;
+        self.nota_queue.clear();
+        self.clear_history();
+        self.collect_garbage();
+        self.after_deck_change();
+        self.set_status("New project");
+        eprintln!("openVJ: composition reset");
     }
 
     /// Restores a project's visual composition. Layers are re-attached to NotA tracks by uid,

@@ -39,6 +39,11 @@ diffs are in `patches/`.
   Scheduled launches carry their deck, so a launch queued just before a deck switch can't fire
   on the new deck's same column. The OpenVJ tab compares replies against the open deck's
   column (a deck-2 slot no longer sits at "Loading the visual").
+- **New projects start with a blank picture**: New Project sends `vizReset` (clips, effects,
+  media, history and extra decks dropped; resolution kept), and opening a project whose
+  `visuals/composition.json` is missing loads blank instead of inheriting the previous
+  project's effects. Undo/redo of a deck add/remove/rename/switch is reconciled by name (and by
+  position for a rename), so the visual deck list follows the engine again.
 
 - **Visuals ride with version history and crash recovery**: a save records
   `visuals/composition.json` beside the manifest, and the content-named media files a

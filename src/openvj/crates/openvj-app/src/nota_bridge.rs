@@ -78,6 +78,8 @@ pub enum Command {
     VizCatalog { kind: String, query: String, seq: u64 },
     VizSave { path: String, uids: Vec<String>, media_dirs: Vec<String>, gc: bool },
     VizLoad { path: String, media_dir: String },
+    /// A new project: drop the previous project's clips, effects and decks.
+    VizReset,
     /// Session decks (Syntetika): switch/add/remove/duplicate/rename, and a full reconcile.
     VizDeck { index: usize },
     VizDeckAdd { index: usize },
@@ -397,6 +399,9 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
                 .unwrap_or_default();
             let current = v.get("current").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let _ = tx.send(Command::VizDecks { names, counts, current });
+        }
+        Some("vizReset") => {
+            let _ = tx.send(Command::VizReset);
         }
         Some("vizLayer") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;

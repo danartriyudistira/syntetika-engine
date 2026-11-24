@@ -1123,9 +1123,15 @@ impl Composition {
         let mut next = Vec::with_capacity(names.len());
         for (i, name) in names.iter().enumerate() {
             let want = counts.get(i).copied().unwrap_or(1).max(1);
+            let by_index = old.len() == names.len() && i < old.len() && !used[i];
             let pick = if by_name {
-                (0..old.len()).find(|&p| !used[p] && &old[p].name == name)
-            } else if i < old.len() && !used[i] {
+                (0..old.len())
+                    .find(|&p| !used[p] && &old[p].name == name)
+                    // A rename (same list length) keeps the deck's content at its position;
+                    // a list of a different length never guesses by index (a removal's undo
+                    // would otherwise hand one deck another's clips).
+                    .or_else(|| by_index.then_some(i))
+            } else if by_index {
                 Some(i)
             } else {
                 None
@@ -1753,6 +1759,17 @@ mod tests {
         let ids: Vec<ClipId> = c.every_clip().map(|x| x.id).collect();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&a) && ids.contains(&b));
+    }
+
+    #[test]
+    fn adopting_a_same_length_list_keeps_a_renamed_deck_at_its_position() {
+        let mut c = Composition::new(640, 360, 1, 1);
+        c.rename_deck(0, "Live");
+        let clip = c.set_clip(0, 0, generator(GeneratorKind::Plasma)).unwrap();
+        // Undo of a rename: the project says "Live set", the engine still "Live" — same length.
+        c.adopt_decks(&["Live set".to_string()], &[1], 0);
+        assert_eq!(c.decks[0].name, "Live set");
+        assert_eq!(c.clip(0, 0).map(|x| x.id), Some(clip));
     }
 
     #[test]
