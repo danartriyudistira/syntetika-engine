@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
 
+using Nota.Application.Midi;
+
 namespace Nota.Application;
 
 /// <summary>A transcribed note: times in seconds from the start of the audio, MIDI pitch, and
@@ -26,18 +28,98 @@ public static class Transcription
 
     /// <summary>Transcribed notes as a MIDI clip's notes: <paramref name="audioSeconds"/> of
     /// audio spans <paramref name="clipBeats"/> (so a warped clip's notes follow its tempo);
-    /// notes are kept inside the clip.</summary>
+    /// notes are kept inside the clip. The model can return the same pitch twice (a held note
+    /// split by a confidence dip) or an octave overtone of a note it also heard; those are
+    /// merged/dropped and same-pitch overlaps are trimmed, so the clip never plays a stacked
+    /// note. Different pitches may still overlap — that is the harmony.</summary>
     public static NotaNote[] ToClipNotes(IReadOnlyList<TranscribedNote> notes, double audioSeconds, double clipBeats)
     {
         double toBeat = audioSeconds > 0 ? clipBeats / audioSeconds : 0;
-        var outp = new List<NotaNote>(notes.Count);
+        var mapped = new List<NotaNote>(notes.Count);
         foreach (var n in notes)
         {
             double start = Math.Max(0, n.Start) * toBeat;
             if (start >= clipBeats) continue;
-            outp.Add(new NotaNote(n.Pitch, start, Math.Max(0.05, Math.Min(n.End * toBeat, clipBeats) - start), n.Velocity / 127f));
+            double end = Math.Min(n.End * toBeat, clipBeats);
+            mapped.Add(new NotaNote(n.Pitch, start, Math.Max(0.05, end - start), n.Velocity / 127f));
         }
-        return outp.ToArray();
+        var cleaned = MidiToolUtil.Deoverlap(DropOvertones(DropSemitoneGhosts(MergeFragments(mapped, 1.0 / 32))));
+        return MidiToolUtil.Tidy(cleaned, clipBeats).ToArray();
+    }
+
+    // A sustained note can fall just below the model's frame threshold for a frame or two and
+    // come back as two notes. Close the tiny gap when the pitch is the same and nothing else of
+    // that pitch lies between them.
+    private static List<NotaNote> MergeFragments(List<NotaNote> notes, double gapBeats)
+    {
+        var sorted = MidiToolUtil.Sorted(notes);
+        var outp = new List<NotaNote>(sorted.Count);
+        foreach (var n in sorted)
+        {
+            double prevEnd = outp.Count > 0 ? outp[^1].StartBeat + outp[^1].LengthBeats : 0;
+            if (outp.Count > 0 && outp[^1].Pitch == n.Pitch
+                && n.StartBeat >= prevEnd - 1e-6          // a gap, not two overlapping takes
+                && n.StartBeat <= prevEnd + gapBeats)
+            {
+                var p = outp[^1];
+                double end = Math.Max(p.StartBeat + p.LengthBeats, n.StartBeat + n.LengthBeats);
+                p.LengthBeats = end - p.StartBeat;
+                p.Velocity = Math.Max(p.Velocity, n.Velocity);
+                outp[^1] = p;
+                continue;
+            }
+            outp.Add(n);
+        }
+        return outp;
+    }
+
+    // Basic Pitch sometimes hears a harmonic above a note as its own note, weaker and starting
+    // together with the fundamental: the 2nd harmonic (+12), 3rd (+19), 4th (+24), 5th (+28),
+    // 6th (+31). A genuine chord tone has comparable strength; a quiet, same-length harmonic of
+    // a louder note is an overtone and is dropped. A perfect fifth (+7) is a chord interval, not
+    // a harmonic here, and stays.
+    private static List<NotaNote> DropOvertones(List<NotaNote> notes)
+    {
+        if (notes.Count < 2) return notes;
+        var drop = new bool[notes.Count];
+        for (int i = 0; i < notes.Count; i++)
+            for (int j = 0; j < notes.Count; j++)
+            {
+                if (i == j || drop[i] || drop[j]) continue;
+                var low = notes[i];
+                var high = notes[j];
+                int interval = high.Pitch - low.Pitch;
+                if (interval is not (12 or 19 or 24 or 28 or 31)) continue;
+                if (Math.Abs(high.StartBeat - low.StartBeat) > MidiToolUtil.ChordTolerance) continue;
+                if (high.Velocity >= low.Velocity * 0.8f) continue;
+                if (high.LengthBeats > low.LengthBeats * 1.25 + MidiToolUtil.MinLength) continue;
+                drop[j] = true;
+            }
+        var kept = new List<NotaNote>(notes.Count);
+        for (int i = 0; i < notes.Count; i++) if (!drop[i]) kept.Add(notes[i]);
+        return kept;
+    }
+
+    // A single pitch can split across two neighbouring semitones at the same onset when the
+    // model is unsure; the weaker one is a ghost, not a minor second. A real semitone cluster is
+    // close in strength and stays.
+    private static List<NotaNote> DropSemitoneGhosts(List<NotaNote> notes)
+    {
+        if (notes.Count < 2) return notes;
+        var drop = new bool[notes.Count];
+        for (int i = 0; i < notes.Count; i++)
+            for (int j = i + 1; j < notes.Count; j++)
+            {
+                if (drop[i] || drop[j]) continue;
+                if (Math.Abs(notes[i].Pitch - notes[j].Pitch) != 1) continue;
+                if (Math.Abs(notes[i].StartBeat - notes[j].StartBeat) > MidiToolUtil.ChordTolerance) continue;
+                if (notes[i].Velocity >= notes[j].Velocity * 0.5f
+                    && notes[j].Velocity >= notes[i].Velocity * 0.5f) continue;   // comparable: real cluster
+                drop[notes[i].Velocity < notes[j].Velocity ? i : j] = true;
+            }
+        var kept = new List<NotaNote>(notes.Count);
+        for (int i = 0; i < notes.Count; i++) if (!drop[i]) kept.Add(notes[i]);
+        return kept;
     }
 }
 

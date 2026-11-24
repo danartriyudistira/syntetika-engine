@@ -1166,6 +1166,15 @@ if (args.Length >= 1 && args[0] == "--remote")
     return failures == 0 ? 0 : 1;
 }
 
+// Audio→MIDI note hygiene alone: `--transcription`. Also part of the full run.
+if (args.Length >= 1 && args[0] == "--transcription")
+{
+    Console.WriteLine("-- ai: transcription notes --");
+    foreach (var (ok, label) in TranscriptionTests.Run()) Check(ok, label);
+    Console.WriteLine(failures == 0 ? "TRANSCRIPTION PASSED" : $"TRANSCRIPTION FAILED ({failures})");
+    return failures == 0 ? 0 : 1;
+}
+
 // One-file project container alone (fast iteration): `--container`. Also part of the full run.
 if (args.Length >= 1 && args[0] == "--container")
 {
@@ -16263,6 +16272,8 @@ foreach (var (ok, label) in ClipEditorTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: content-addressed bundle --");
 foreach (var (ok, label) in BundleContentTests.Run()) Check(ok, label);
 foreach (var (ok, label) in LanguageProjectTests.Run()) Check(ok, label);
+Console.WriteLine("-- ai: transcription notes --");
+foreach (var (ok, label) in TranscriptionTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: container --");
 foreach (var (ok, label) in ProjectContainerTests.Run()) Check(ok, label);
 Console.WriteLine("-- session decks --");

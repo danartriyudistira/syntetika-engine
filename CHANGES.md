@@ -198,6 +198,16 @@ diffs are in `patches/`.
 
 ## Fixed before the first release
 
+- **Audio → MIDI (Melody / Harmony) note cleanup**: basic-pitch can split a held note into
+  fragments, return the same pitch twice, hear a weak harmonic (octave, 12th, …) or a
+  neighbouring semitone as a note, and leave same-pitch notes stacked. Convert now merges
+  close fragments, drops exact duplicates, trims same-pitch overlaps, suppresses weak
+  harmonic/ghost notes and keeps notes inside the clip; genuine chords (octaves, fifths,
+  semitones of comparable strength) stay. Tests cover each rule. Timing is left as
+  transcribed — use the clip's Quantize tool for a grid.
+
+## Known limitations
+
 - **AI model downloads failed every time**: the pinned ONNX Runtime archive lived on
   `github.com/microsoft/onnxruntime` release assets, which now 404. The runtime comes from the
   immutable `Microsoft.ML.OnnxRuntime` 1.23.2 NuGet package (same native libraries, all six
