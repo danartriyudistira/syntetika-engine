@@ -110,8 +110,9 @@ diffs are in `patches/`.
   that queue used to grow for as long as audio played.
 - **A/V offset & calibration**: View → A/V Offset… shifts every visual launch and the video
   phase by ±200 ms (positive delays the picture) and turns on a white beat strobe on the
-  output; drag until it lands on Nota's metronome click. The value is saved and replayed to
-  the engine before it starts, so the first launch already uses it.
+  output; drag until it lands on Nota's metronome click (the strobe only runs while the
+  transport advances). The value is saved and replayed to the engine before it starts, so
+  the first launch already uses it.
 - **Visual performance profiles**: View → Visual Performance offers Eco (30 fps, preview 15),
   Balanced (45/30) and Quality (60/60). The profile is saved in Nota and applied live to the
   visual engine; a hidden editor renders no preview at all. Measured on M1: output-only

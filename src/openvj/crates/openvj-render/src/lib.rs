@@ -369,6 +369,8 @@ pub struct Engine {
     preview_has_content: bool,
     /// White strobe on every beat for A/V calibration.
     calibrate: bool,
+    /// Last beat the calibration saw; a frozen transport (same beat) must not hold the strobe.
+    calibration_beat: Option<f64>,
     /// The host's A/V offset in milliseconds; positive delays the picture.
     av_offset_ms: f32,
     /// MilkDrop engines, one per MilkDrop clip.
@@ -589,6 +591,7 @@ impl Engine {
             preview_clip: None,
             preview_has_content: false,
             calibrate: false,
+            calibration_beat: None,
             av_offset_ms: 0.0,
             milk: HashMap::new(),
             pcm: Vec::new(),
@@ -692,6 +695,7 @@ impl Engine {
     /// Shows a white frame on every beat (Nota's metronome is the reference).
     pub fn set_calibration(&mut self, on: bool) {
         self.calibrate = on;
+        self.calibration_beat = None;
     }
 
     /// Shows a clip that isn't in the composition on the Preview, from its start, instead of
@@ -1501,8 +1505,12 @@ impl Engine {
         // Calibration: a short white strobe each beat, delayed by the same offset the host puts
         // on the picture, so lining it up with the click sets the offset.
         if self.calibrate {
+            // A stopped transport keeps the beat frozen: without this check the first
+            // sub-beat frame would leave the output solid white for as long as it stays there.
+            let advancing = self.calibration_beat.is_some_and(|prev| inputs.beat > prev + 1e-9);
+            self.calibration_beat = Some(inputs.beat);
             let offset_beats = self.av_offset_ms as f64 / 1000.0 * comp.bpm as f64 / 60.0;
-            if (inputs.beat - offset_beats).rem_euclid(1.0) < 0.08 {
+            if advancing && (inputs.beat - offset_beats).rem_euclid(1.0) < 0.08 {
                 passes.push(Pass::clear(&t.output, wgpu::Color::WHITE));
             }
         }
@@ -2516,15 +2524,17 @@ mod tests {
         let at = |beat: f64| ModInputs { beat, ..Default::default() };
         e.set_calibration(true);
         e.render(&comp, 0.1, &at(0.04), None);
-        assert!(lit(&e), "the strobe fills the output on the beat");
-        e.render(&comp, 0.2, &at(0.5), None);
-        assert!(!lit(&e), "and is off between beats");
+        assert!(!lit(&e), "a stopped transport does not hold the strobe");
+        e.render(&comp, 0.2, &at(0.05), None);
+        assert!(lit(&e), "advancing into the beat flashes");
+        e.render(&comp, 0.3, &at(0.05), None);
+        assert!(!lit(&e), "a frozen beat stops the strobe");
 
-        // +100 ms at 120 BPM is 0.2 beats: beat 0.1 is quiet, beat 0.21 is the strobe.
+        // +100 ms at 120 BPM is 0.2 beats: 0.1 is quiet, 0.21 is the strobe.
         e.set_av_offset_ms(100.0);
-        e.render(&comp, 0.3, &at(0.1), None);
+        e.render(&comp, 0.4, &at(0.1), None);
         assert!(!lit(&e), "the strobe moves with the offset");
-        e.render(&comp, 0.4, &at(0.21), None);
+        e.render(&comp, 0.5, &at(0.21), None);
         assert!(lit(&e), "and fires 0.2 beats late");
     }
 

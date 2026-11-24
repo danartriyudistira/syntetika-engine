@@ -498,8 +498,9 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   gambar lebih lambat; negatif = lebih cepat.
 - **Kalibrasi**: View → A/V Offset… (slider −200..+200 ms, tick 5 ms) membuka output window,
   menyalakan metronome, dan mengirim `vizCalibrate on`. Engine menggambar strobe putih pada
-  output saat `(beat − offset_beats) mod 1 < 0,08`. Menutup dialog mematikan strobe,
-  memulihkan metronome, dan menyimpan nilai.
+  output saat `(beat − offset_beats) mod 1 < 0,08` **dan beat sedang maju** — saat transport
+  stop tidak ada strobe (dulu output bisa tertahan putih solid). Menutup dialog mematikan
+  strobe, memulihkan metronome, dan menyimpan nilai.
 - **Persistensi**: `VisualAvOffsetMs` di `settings.json`, dikirim ke bridge **sebelum** engine
   start (replay saat connect) serta setiap slider bergerak.
 - **Bukti**: offset 100 ms, Sintel + klik openVJ → `NOTA A/V offset 100 ms`,
