@@ -14,6 +14,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Nota.Application;
+using Nota.Infrastructure.Visuals;
 using Nota.Presentation;
 using Nota.Application.Localization;
 
@@ -132,6 +133,12 @@ public partial class MainWindow
     {
         OpenProject(info.BundlePath);
         _projectPath = info.OriginalPath;   // next Save targets the real bundle (null → prompt)
+        // The recovery bundle is only the audio snapshot. Point the visual bridge at the real
+        // bundle too, so a visual-engine restart reloads the project's composition instead of
+        // the recovery copy (or nothing), and Save writes visuals to the right place.
+        VisualBridge.Current?.SetProjectDir(info.OriginalPath);
+        if (info.OriginalPath is { Length: > 0 } original)
+            VisualBridge.Current?.VizLoad(original);
         UpdateWindowTitle();
         _cleanFingerprint = null;           // recovered work is unsaved until the user saves it
         if (_vm is not null) _vm.StatusText = Loc.T("main.recovery.recovered_unsaved_work");

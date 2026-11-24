@@ -154,6 +154,14 @@ diffs are in `patches/`.
 
 ## Fixed before the first release
 
+- **Closing Visual Output could lose unsaved visuals**: the hosted engine used Slint's
+  default event loop, which ends once the last visible window is hidden. Closing the output
+  window therefore killed the helper, Nota restarted it, and the fresh process reloaded the
+  last saved composition — so any visual assigned since the last Save disappeared. A hosted
+  engine now runs `run_event_loop_until_quit()`: hiding the output keeps the process, the
+  bridge and the composition alive, while a hand-started openVJ still quits with its window.
+  Crash recovery also points the visual bridge at the real bundle (`SetProjectDir`/`VizLoad`)
+  instead of the audio-recovery snapshot.
 - **Quit could lose the composition**: the visual process was killed before its `vizSave`
   finished. The app now waits for the `vizSaved` acknowledgement (1.2 s) before stopping it.
 - **Quit-save could lose every visual**: while Nota's engine was shutting down it could send

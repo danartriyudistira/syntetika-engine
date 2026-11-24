@@ -1055,7 +1055,15 @@ fn main() -> Result<()> {
         app.borrow_mut().ui_shown(true);
         ui.invoke_focus_keys();
     }
-    slint::run_event_loop()?;
+    if ui_hidden {
+        // Hosted engine: the editor is hidden and the output window may be the only visible
+        // one. Closing it must hide the picture, not end the daemon (Slint's default loop
+        // exits when no window is visible), or Nota would restart the engine and reload an
+        // older composition — losing visual edits that were not saved yet.
+        slint::run_event_loop_until_quit()?;
+    } else {
+        slint::run_event_loop()?;
+    }
     app.borrow_mut().library.save_now();
     Ok(())
 }
