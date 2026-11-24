@@ -722,6 +722,24 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - DMG `Syntetika-Engine-0.1.3-arm64.dmg` 112 MB, ad-hoc signed.
   SHA-256 `f9899939a4945da9a36a089aaf32a55b66b773800317c41910403f1bc673a2aa`.
 
+## 7ab. Session decks (24 Nov, WIP)
+
+- **Model**: deck = rentang scene global yang berurutan; track/instrument/device/mixer tetap
+  global. Engine menyimpan nama + jumlah scene per deck, `currentDeck`, dan operasi
+  add/remove/duplicate/rename/switch. Scene insert/remove menjaga partisi; follow action
+  dibatasi ke deck aktif; switch tidak menyentuh player; remove menghentikan player deck itu.
+- **Format**: v36 (`session.decks`, `currentDeck`), v35 → satu deck. API native + managed +
+  UI deck bar (tab, + Deck, context menu) dan grid yang hanya menampilkan baris deck aktif.
+- **Visual**: bridge memetakan scene global → kolom deck aktif; `vizDeck*` dan `vizDecks`
+  (rekonsiliasi nama/jumlah/current, match by name untuk undo) di openVJ; duplicate deck
+  menyalin kolom+clip dengan clip id baru; switch mempertahankan clip yang berbunyi.
+- **Bukti**: 18 cek smoke deck (model, undo, save/load, migrasi v35) lulus; 172 tes
+  openvj-core + 51 tes openvj-app lulus (termasuk duplicate & adopt by name); harness bridge
+  deck menghasilkan 3 deck → duplicate → remove dengan nama/jumlah/current benar.
+- **Belum**: undo remove deck mengembalikan audio tetapi isi visual deck mulai kosong; follow
+  visual untuk deck yang tidak terbuka baru dijalankan saat deck dibuka; tool MCP/remote
+  masih memakai index scene global; demo 2-deck dan rilis 0.1.4 belum.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

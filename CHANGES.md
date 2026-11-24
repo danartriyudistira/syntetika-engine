@@ -23,6 +23,15 @@ diffs are in `patches/`.
 
 ## Nota fork
 
+- **Session decks**: a Nota deck is a page of scene rows that shares the tracks, instruments,
+  devices and mixer. The deck bar sits under the Session grid (tabs left, **+ Deck** right;
+  right-click a tab for Rename / Duplicate / Remove; the last deck stays). Switching decks
+  never stops a playing clip, and Follow Actions stay inside the open deck. The project format
+  is v36 (`session.decks` + `currentDeck`); a v35 file loads as one deck. openVJ mirrors the
+  deck list (`vizDeck*` + `vizDecks`): one visual deck per Nota deck, one column per scene,
+  duplicate copies the visual deck, remove drops it, and a deletion's undo restores the audio
+  deck while its visual content starts empty (documented limitation).
+
 - **Visuals ride with version history and crash recovery**: a save records
   `visuals/composition.json` beside the manifest, and the content-named media files a
   composition references are pinned by the versions that use them (the save's prune keeps

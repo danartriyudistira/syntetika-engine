@@ -1104,6 +1104,72 @@ impl Composition {
         }
     }
 
+    /// Makes the deck list match a project's (names, scene counts, open deck). Decks are
+    /// matched by name first, so an edit that only moved or renamed tabs keeps their clips;
+    /// when no name matches at all (a project opened over an older file) the index is used.
+    /// A deck the project no longer has is dropped — its clips go with it.
+    pub fn adopt_decks(&mut self, names: &[String], counts: &[usize], current: usize) {
+        if names.is_empty() {
+            return;
+        }
+        let cur = self.current_deck;
+        if cur < self.decks.len() {
+            self.decks[cur].columns = self.columns.clone();
+            self.decks[cur].clips = self.layers.iter().map(|l| l.clips.clone()).collect();
+        }
+        let mut old = std::mem::take(&mut self.decks);
+        let by_name = names.iter().any(|n| old.iter().any(|d| &d.name == n));
+        let mut used = vec![false; old.len()];
+        let mut next = Vec::with_capacity(names.len());
+        for (i, name) in names.iter().enumerate() {
+            let want = counts.get(i).copied().unwrap_or(1).max(1);
+            let pick = if by_name {
+                (0..old.len()).find(|&p| !used[p] && &old[p].name == name)
+            } else if i < old.len() && !used[i] {
+                Some(i)
+            } else {
+                None
+            };
+            let mut deck = match pick {
+                Some(p) => {
+                    used[p] = true;
+                    std::mem::replace(&mut old[p], Deck::named(""))
+                }
+                None => Deck::named(name.clone()),
+            };
+            deck.name = name.clone();
+            while deck.columns.len() < want {
+                let column = format!("{}", deck.columns.len() + 1);
+                deck.columns.push(Column { name: column });
+            }
+            deck.columns.truncate(want);
+            let cols = deck.columns.len();
+            deck.clips.resize_with(self.layers.len(), Vec::new);
+            for row in &mut deck.clips {
+                row.resize(cols, None);
+            }
+            next.push(deck);
+        }
+        self.decks = next;
+        self.current_deck = current.min(self.decks.len() - 1);
+
+        // Load the open deck into the live grid (the same move switch_deck makes; held clips
+        // from decks that survived keep playing).
+        self.columns = std::mem::take(&mut self.decks[self.current_deck].columns);
+        let mut rows = std::mem::take(&mut self.decks[self.current_deck].clips);
+        if self.columns.is_empty() {
+            self.columns.push(Column { name: "1".into() });
+        }
+        rows.resize_with(self.layers.len(), Vec::new);
+        let cols = self.columns.len();
+        for (layer, mut row) in self.layers.iter_mut().zip(rows) {
+            row.resize(cols, None);
+            layer.clips = row;
+            let back: Vec<ClipId> = layer.clips.iter().flatten().map(|c| c.id).collect();
+            layer.held.retain(|c| !back.contains(&c.id));
+        }
+    }
+
     /// Copies a deck (its columns and clips) right after it and opens the copy. The clips in
     /// the copy get fresh ids, so held/live tracking can never confuse the two decks.
     pub fn duplicate_deck(&mut self, index: usize) -> usize {
@@ -1687,6 +1753,26 @@ mod tests {
         let ids: Vec<ClipId> = c.every_clip().map(|x| x.id).collect();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&a) && ids.contains(&b));
+    }
+
+    #[test]
+    fn adopting_a_deck_list_matches_by_name_and_keeps_the_clips() {
+        let mut c = Composition::new(640, 360, 1, 1);
+        c.rename_deck(0, "Intro");
+        c.add_deck();
+        c.rename_deck(1, "Drop");
+        let drop_clip = c.set_clip(0, 0, generator(GeneratorKind::Rings)).unwrap();
+
+        // The project keeps only Drop: its clips follow the name (no index guessing).
+        c.adopt_decks(&["Drop".to_string()], &[1], 0);
+        assert_eq!(c.decks.len(), 1);
+        assert_eq!(c.decks[0].name, "Drop");
+        assert_eq!(c.clip(0, 0).map(|x| x.id), Some(drop_clip));
+
+        // A deck the file doesn't have starts empty, and the requested deck is opened.
+        c.adopt_decks(&["Drop".to_string(), "New".to_string()], &[1, 1], 1);
+        assert_eq!((c.decks.len(), c.current_deck), (2, 1));
+        assert!(c.clip(0, 0).is_none());
     }
 
     #[test]
