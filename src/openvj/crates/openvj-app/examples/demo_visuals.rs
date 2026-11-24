@@ -146,19 +146,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = env::args().nth(1).ok_or("usage: demo_visuals <project.nota>")?;
     let dir = Path::new(&dir);
     let path = dir.join("visuals").join("composition.json");
-    let doc: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
-    let old = &doc["composition"];
-    let width = old["width"].as_u64().unwrap_or(1280) as u32;
-    let height = old["height"].as_u64().unwrap_or(720) as u32;
-    let columns = old["columns"].as_array().map(|a| a.len()).unwrap_or(8).max(8);
-    let column_names: Vec<String> = old["columns"]
-        .as_array()
-        .map(|a| a.iter().map(|c| c["name"].as_str().unwrap_or("").to_owned()).collect())
-        .unwrap_or_default();
-    let scenes = column_names.iter().take_while(|n| !n.is_empty()).count().clamp(1, LOOKS.len());
 
     // Playable tracks, bottom of the visual stack first (Nota lists top-to-bottom).
     let project: Value = serde_json::from_str(&fs::read_to_string(dir.join("project.json"))?)?;
+
+    // A fresh bundle has no composition yet, so the project's Session scenes name the
+    // columns; an existing composition wins, since it may carry names the user edited.
+    let seed: Option<Value> = fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .map(|v| v["composition"].clone());
+    let old = seed.as_ref();
+    let width = old.and_then(|o| o["width"].as_u64()).unwrap_or(1280) as u32;
+    let height = old.and_then(|o| o["height"].as_u64()).unwrap_or(720) as u32;
+    let mut column_names: Vec<String> = old
+        .and_then(|o| o["columns"].as_array())
+        .map(|a| a.iter().map(|c| c["name"].as_str().unwrap_or("").to_owned()).collect())
+        .unwrap_or_default();
+    let session_scenes = project["session"]["scenes"].as_array().cloned().unwrap_or_default();
+    let columns = column_names.len().max(session_scenes.len()).max(8);
+    column_names.resize(columns, String::new());
+    for scene in &session_scenes {
+        let (Some(index), Some(name)) = (scene["index"].as_u64(), scene["name"].as_str()) else { continue };
+        if let Some(slot) = column_names.get_mut(index as usize)
+            && slot.is_empty()
+        {
+            *slot = name.to_owned();
+        }
+    }
+    let scenes = column_names.iter().take_while(|n| !n.is_empty()).count().clamp(1, LOOKS.len());
     let mut tracks: Vec<(String, String)> = project["tracks"]
         .as_array()
         .map(|a| {

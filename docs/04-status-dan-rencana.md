@@ -667,6 +667,28 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - DMG `Syntetika-Engine-0.1.2-arm64.dmg` 112 MB, ad-hoc signed.
   SHA-256 `6bb256fbc968f6e54d09a2324547667bf88934bb2a2342dbefa26f8632d286ce`.
 
+## 7y. Visual Output close + demo yang bisa dibangun ulang (24 Nov)
+
+- **Bug**: menutup Visual Output menghentikan helper karena Slint keluar saat window
+  terakhir yang terlihat hilang. Helper baru memuat `composition.json` lama, sehingga
+  visual yang di-assign setelah Save terakhir hilang. Perbaikan: engine hosted memakai
+  `run_event_loop_until_quit()`; openVJ manual tetap keluar. Recovery juga diarahkan ke
+  bundle asli (`SetProjectDir` + `VizLoad`), bukan snapshot audio.
+- **Bukti**: bridge palsu mengirim `vizLoad` → `vizOutput show` → `vizOutput hide` →
+  `vizSave`. Helper lama exit sebelum save (`connection reset`); helper baru tetap hidup,
+  menjawab `vizSaved`, dan menulis komposisi.
+- **Insiden**: folder `Nota Projects` terhapus dari luar app saat project masih terbuka
+  (birth time folder = waktu engine reconnect). Jembatan visual membuat ulang folder dan,
+  saat quit, menulis komposisi kosong. Project audio dipulihkan dari autosave
+  `recovery/project.nota/backups/project-20261124-162342.json` (5 track, 15 slot, 8 scene);
+  `.history` tidak bisa dipulihkan.
+- **Demo reproducible**: `demo/project.json` (manifest kanonik) + `scripts/make-demo.sh`.
+  Skrip menyalin manifest lalu menjalankan contoh `demo_visuals`, yang kini bisa membuat
+  komposisi dari nol (nama kolom diambil dari Session scenes project) tanpa perlu
+  `composition.json` awal. Hasil: `~/Documents/Nota Projects/Syntetika Demo.nota`
+  (5 track, 15 slot, 3 layer, 15 clip, 5 look, ink shader). Setelah dibuka, Save sekali
+  untuk mengisi `.history` dan sidecar.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |
