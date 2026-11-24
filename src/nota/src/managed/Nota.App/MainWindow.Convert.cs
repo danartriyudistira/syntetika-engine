@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Nota.Application;
@@ -231,6 +232,10 @@ public partial class MainWindow
         prog.Report(ProgressReport.At(0, Loc.T("main.convert.listening_for_notes")));
         var p = new Progress<double>(f => prog.Report(ProgressReport.At(f, Loc.T("main.convert.listening_for_notes"))));
         var heard = await Task.Run(() => Ai.Transcribe(mono, sr, p));
+        // The strength floor goes first: Monophonic picks by amplitude × length, and a weak,
+        // long note must not win a place that a stronger short one should have had.
+        if (options.MinStrength > 0)
+            heard = heard.Where(n => n.Amplitude >= options.MinStrength).ToList();
         if (melody) heard = Transcription.Monophonic(heard);
         var notes = Transcription.ToClipNotes(heard, mono.Length / sr, clipBeats, options);
         if (notes.Length == 0) { Status(Loc.F("main.convert.no_found", what)); return; }
