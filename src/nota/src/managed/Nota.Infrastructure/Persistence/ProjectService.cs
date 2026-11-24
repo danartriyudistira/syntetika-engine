@@ -1178,6 +1178,18 @@ public sealed class ProjectService
         try { File.Delete(Path.Combine(bundleDir, LegacySectionsSidecar)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
+    /// <summary>Drops unreferenced samples, plugin states and visual media after the visual
+    /// engine has written the saved composition. A no-op when the history can't be read.</summary>
+    public static void PruneUnreferenced(string bundleDir, IAudioEngine engine, TransportState transport)
+    {
+        try
+        {
+            var doc = Capture(engine, transport, new List<string>());
+            BundleContent.PruneUnreferenced(bundleDir, doc);
+        }
+        catch { /* best-effort: the next save retries */ }
+    }
+
     /// <summary>Where builds before specs/016 kept the arrangement sections, next to the manifest.</summary>
     public const string LegacySectionsSidecar = "sections.json";
 

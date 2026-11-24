@@ -505,6 +505,10 @@ public partial class MainWindow
             bool visualsSaved = true;
             if (bridge is not null)
                 visualsSaved = bridge.Connected && await Task.Run(() => bridge.WaitForSave(1200));
+            // Staged media is copied in before the composition is written; prune what this
+            // composition (and older versions) does not use so a new project does not carry the
+            // previous project's videos.
+            if (visualsSaved) ProjectService.PruneUnreferenced(dir!, Engine, TransportSnapshot());
             string? historyNote = RecordVersion(dir!, previousPath, note);   // after every sidecar is written
             // The container is the actual file: pack only after every sidecar and the new
             // history version are in the working folder.
