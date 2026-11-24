@@ -220,10 +220,11 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 
 ### P4 — Editing lanjutan (±5–8 hari)
 
-- Undo/redo parameter visual (di NotA) dan/atau undo openVJ.
-- Preset visual per clip/layer + browser.
-- MIDI mapping parameter visual (belajar dari tab).
-- Color picker & XY pad untuk ISF color/point2D.
+- [x] **Undo/redo visual** (engine-side snapshot clip+layer; mark otomatis sebelum edit,
+  coalesce 0,6–0,8 dtk; tombol Undo/Redo di tab OpenVJ; riwayat dibersihkan saat layout/load).
+- [ ] Preset visual per clip/layer + browser.
+- [ ] MIDI mapping parameter visual (belajar dari tab).
+- [ ] Color picker & XY pad untuk ISF color/point2D.
 - Kriteria: edit aman diulang; preset tersimpan di bundle.
 
 ### P5 — Arrangement & output (±1–2 minggu)
@@ -538,6 +539,23 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   build. Setelah sertifikat tersedia: jalankan `notarize-mac.sh`, lalu ganti aset rilis.
 - CI `release.yml` belum: butuh runner arm64 + token dengan scope `workflow`.
 
+## 7s. Undo/redo visual (24 Nov)
+
+- **Desain**: engine (openVJ) yang memiliki komposisi juga memiliki riwayat. Sebelum setiap
+  perintah visual yang mengubah state (`vizSet`, `vizPlayback`, `vizFx`, `vizAssign`,
+  `vizClear`, `vizCopy`, `vizLayer`), engine menyimpan snapshot `Clip` + opacity/blend/bypass
+  layer. Mark per kontrol digabung (0,6–0,8 dtk) supaya satu drag slider = satu langkah.
+  Stack maksimal 100; edit baru menghapus redo; layout/load komposisi membersihkan riwayat.
+- **Bridge**: `vizUndo`/`vizRedo` dari Nota; engine membalas `vizHistory {undo,redo}`.
+  `VizCopy` menandai sumber+tujuan (move) atau tujuan (copy). Playback sengaja tidak
+  di-undo; kalau clip yang dipulihkan tidak lagi aktif, layer dibiarkan tanpa clip aktif.
+- **UI**: toolbar **Undo/Redo** di tab OpenVJ; status tombol mengikuti `vizHistory`.
+- **Bukti unit**: 4 tes history lulus (parameter, coalesce, hapus+layer, redo dibersihkan).
+- **Bukti end-to-end**: `NOTA_VIZ_TEST=1 NOTA_VISUAL_UNDO_TEST=1` → mark 1–5,
+  `undo=2→1 redo=1`, `redo→undo=2 redo=0`; Nota melihat `canUndo/canRedo` berubah.
+- **Cakupan**: visual saja (audio memakai undo Nota); belum ada shortcut keyboard; undo
+  setelah perubahan struktur scene dibersihkan (riwayat tidak dipetakan ulang).
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |
@@ -569,6 +587,7 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 | `OPENVJ_PAIR_TEST=layer:col=<file>` | Simulasi drop video di grid openVJ (handshake `vizMediaAudio`) |
 | `OPENVJ_SCALE_TEST=0.25` | Paksa render scale adaptif (uji resize/preview) |
 | `SYNTETIKA_TAP_DEBUG=1` | Log `tap level/bands/rate/feed` sekali per detik |
+| `NOTA_VISUAL_UNDO_TEST=1` | Kirim undo/redo visual 20/23 dtk setelah start (uji bridge) |
 | `NOTA_AV_CAL_TEST=1` | Buka dialog A/V offset + kalibrasi 16 dtk setelah start |
 | `NOTA_VISUAL_PORT=<port>` | Pindahkan bridge visual (instance dev di samping app terpasang) |
 | `NOTA_OPENVJ_UI_TEST=1`, `NOTA_VISUAL_OUTPUT_TEST=1`, `NOTA_MAPPING_TEST=1` | Buka jendela editor/output/mapping saat start |

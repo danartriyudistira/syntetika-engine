@@ -4,6 +4,7 @@ mod app;
 mod browser;
 mod discover;
 mod finder_drop;
+mod history;
 mod library;
 mod link;
 mod mapping;

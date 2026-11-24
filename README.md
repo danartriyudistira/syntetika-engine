@@ -53,6 +53,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   lock-free shared ring, so shaders, MilkDrop and audio-modulated parameters follow the DAW.
 - **A/V offset & calibration** — View → A/V Offset shifts the picture ±200 ms with a beat
   strobe, so a projector or slow display lines up with the sound.
+- **Visual undo/redo** — the OpenVJ tab has Undo/Redo for clip sources, parameters, playback,
+  effects and layer settings; slider drags count as one step.
 - **Performance** — hidden engine ~3% CPU (audio tap included), output-only ~24% at 60 fps; editor work is
   capped at 30 fps and the output path skips UI sync. View → Visual Performance selects Eco
   (30 fps, ~6.5% output), Balanced (45) or Quality (60). A visual that takes far over budget

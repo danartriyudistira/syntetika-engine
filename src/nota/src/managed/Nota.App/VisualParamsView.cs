@@ -43,12 +43,42 @@ public sealed class VisualParamsView : UserControl
     private Action<JsonElement>? _catalogPick;
     private ListBox? _catalogList;
     private readonly List<(string Kind, string Id, string Name)> _catalogItems = new();
+    private readonly Button _undoBtn;
+    private readonly Button _redoBtn;
 
     private static VisualBridge? Bridge => VisualBridge.Current;
 
     public VisualParamsView()
     {
-        Content = new ScrollViewer { Content = _root, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        _undoBtn = new Button
+        {
+            Content = Loc.T("common.undo"),
+            Padding = new Thickness(10, 4),
+            FontSize = 12,
+            IsEnabled = false,
+        };
+        _redoBtn = new Button
+        {
+            Content = Loc.T("common.redo"),
+            Padding = new Thickness(10, 4),
+            FontSize = 12,
+            IsEnabled = false,
+        };
+        _undoBtn.Click += (_, _) => Bridge?.VisualUndo();
+        _redoBtn.Click += (_, _) => Bridge?.VisualRedo();
+        var tools = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Margin = new Thickness(14, 10, 14, 0),
+        };
+        tools.Children.Add(_undoBtn);
+        tools.Children.Add(_redoBtn);
+        var dock = new DockPanel();
+        DockPanel.SetDock(tools, Dock.Top);
+        dock.Children.Add(tools);
+        dock.Children.Add(new ScrollViewer { Content = _root, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        Content = dock;
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Background, (_, _) => Pump());
         AttachedToVisualTree += (_, _) => _timer.Start();
         DetachedFromVisualTree += (_, _) =>
@@ -96,6 +126,8 @@ public sealed class VisualParamsView : UserControl
 
     private void Pump()
     {
+        _undoBtn.IsEnabled = Bridge is { Connected: true, CanUndo: true };
+        _redoBtn.IsEnabled = Bridge is { Connected: true, CanRedo: true };
         if (Bridge is not { Connected: true })
         {
             _wasConnected = false;

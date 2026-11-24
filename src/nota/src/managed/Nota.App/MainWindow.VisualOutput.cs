@@ -258,5 +258,18 @@ public partial class MainWindow
         }
         if (Environment.GetEnvironmentVariable("NOTA_AV_CAL_TEST") is { Length: > 0 })
             DispatcherTimer.RunOnce(ShowAvOffset, TimeSpan.FromSeconds(16));
+        if (Environment.GetEnvironmentVariable("NOTA_VISUAL_UNDO_TEST") is { Length: > 0 })
+        {
+            DispatcherTimer.RunOnce(() => VisualBridge.Current?.VisualUndo(), TimeSpan.FromSeconds(20));
+            DispatcherTimer.RunOnce(
+                () => System.Console.Error.WriteLine(
+                    $"[undo-test] after undo canUndo={VisualBridge.Current?.CanUndo} canRedo={VisualBridge.Current?.CanRedo}"),
+                TimeSpan.FromSeconds(21));
+            DispatcherTimer.RunOnce(() => VisualBridge.Current?.VisualRedo(), TimeSpan.FromSeconds(23));
+            DispatcherTimer.RunOnce(
+                () => System.Console.Error.WriteLine(
+                    $"[undo-test] after redo canUndo={VisualBridge.Current?.CanUndo} canRedo={VisualBridge.Current?.CanRedo}"),
+                TimeSpan.FromSeconds(24));
+        }
     }
 }

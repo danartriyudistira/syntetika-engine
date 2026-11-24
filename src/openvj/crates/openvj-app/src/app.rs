@@ -420,6 +420,8 @@ pub struct App {
 
     /// Syntetika Engine: Nota's transport + launches (None when running standalone).
     nota: Option<NotaBridge>,
+    /// Undo/redo for visual edits (clip + layer snapshots, engine side).
+    history: crate::history::VisualHistory,
     /// Launches waiting for their beat, from the Nota bridge.
     nota_queue: Vec<(f64, NotaCommand)>,
     /// Smoothed local beat while following Nota (a PLL, not a hard sync each frame).
@@ -598,6 +600,7 @@ impl App {
             library: crate::library::AppLibrary::load(),
             frame_time: 0.0,
             nota: None,
+            history: crate::history::VisualHistory::new(),
             nota_queue: Vec::new(),
             nota_beat: None,
             nota_slew_max: 0.0,
@@ -686,6 +689,7 @@ impl App {
     // ---------------------------------------------------------------- composition
 
     pub fn set_composition(&mut self, comp: Composition, file: Option<PathBuf>) {
+        self.clear_history();
         self.decoders.clear();
         self.live_retry.clear();
         self.thumbs.clear();
@@ -805,6 +809,79 @@ impl App {
         }
     }
 
+    // ---------------------------------------------------------------- undo/redo
+
+    /// Records the affected slots/layers before a bridge edit. `coalesce` folds repeated
+    /// changes from one control (a slider drag) into a single step.
+    fn mark_visual_edit(&mut self, slots: &[(usize, usize)], layers: &[usize], key: String, coalesce: f64) {
+        let now = self.now();
+        if self.history.mark(&self.comp, slots, layers, key.clone(), now, coalesce) {
+            eprintln!("openVJ: history mark {key} undo={} redo={}", self.history.undo_len(), self.history.redo_len());
+            self.send_history();
+        }
+    }
+
+    fn undo_visual(&mut self) {
+        if let Some(edit) = self.history.undo(&mut self.comp) {
+            eprintln!("openVJ: undo -> undo={} redo={}", self.history.undo_len(), self.history.redo_len());
+            self.after_history(&edit);
+        }
+    }
+
+    fn redo_visual(&mut self) {
+        if let Some(edit) = self.history.redo(&mut self.comp) {
+            eprintln!("openVJ: redo -> undo={} redo={}", self.history.undo_len(), self.history.redo_len());
+            self.after_history(&edit);
+        }
+    }
+
+    /// Reloads media a step brought back, drops media it removed, and echoes the slot state.
+    fn after_history(&mut self, edit: &crate::history::VisualEdit) {
+        for slot in &edit.slots {
+            let Some(clip) = self.comp.clip(slot.layer, slot.col).cloned() else { continue };
+            if let Some(path) = clip.source.media_path() {
+                let video = matches!(clip.source, ClipSource::Video { .. });
+                let loaded =
+                    if video { self.decoders.contains_key(&clip.id) } else { self.media.contains_key(&clip.id) };
+                if !loaded {
+                    self.start_load(clip.id, path.to_owned(), video);
+                }
+            }
+        }
+        self.collect_garbage();
+        self.grid_dirty = true;
+        self.props_dirty = true;
+        self.images_dirty = true;
+        let target = edit.slots.first().map(|s| (s.layer, s.col)).or_else(|| {
+            let layer = edit.layers.first()?.layer;
+            let col = self.selected.filter(|(l, _)| *l == layer).map_or(0, |(_, c)| c);
+            Some((layer, col))
+        });
+        if let Some((layer, col)) = target {
+            self.send_viz_state(layer, col, 0);
+        }
+        self.send_history();
+    }
+
+    fn send_history(&self) {
+        if let Some(bridge) = &self.nota {
+            bridge.send(
+                &serde_json::json!({
+                    "t": "vizHistory",
+                    "undo": self.history.undo_len(),
+                    "redo": self.history.redo_len(),
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    fn clear_history(&mut self) {
+        if self.history.clear() {
+            self.send_history();
+        }
+    }
+
     /// Drain bridge commands, then apply the ones whose beat has arrived. Launches are
     /// scheduled by absolute beat, so packet jitter never moves the cut.
     fn nota_tick(&mut self, now: f64, beat: f64, ui: &MainWindow, out: &OutputWindow) {
@@ -815,6 +892,7 @@ impl App {
             self.nota_connected = connected;
             if connected {
                 self.send_ui_state();
+                self.send_history();
             }
         }
         // Structural and selection messages are not musical events: apply them on arrival so
@@ -843,21 +921,34 @@ impl App {
                     }
                 }
                 NotaCommand::VizGet { layer, col, seq } => self.send_viz_state(layer, col, seq),
+                NotaCommand::VizUndo => self.undo_visual(),
+                NotaCommand::VizRedo => self.redo_visual(),
                 NotaCommand::VizSet { layer, col, group, key, value } => {
+                    self.mark_visual_edit(&[(layer, col)], &[layer], format!("set:{layer}:{col}:{group}:{key}"), 0.8);
                     crate::viz::set(&mut self.comp, layer, col, &group, &key, value);
                     self.send_viz_state(layer, col, 0);
                 }
                 NotaCommand::VizPlayback { layer, col, speed, sync, play_mode, trigger } => {
+                    self.mark_visual_edit(&[(layer, col)], &[layer], format!("play:{layer}:{col}"), 0.8);
                     crate::viz::set_playback(
-                        &mut self.comp, layer, col, speed, sync, play_mode.as_deref(), trigger.as_deref(),
+                        &mut self.comp,
+                        layer,
+                        col,
+                        speed,
+                        sync,
+                        play_mode.as_deref(),
+                        trigger.as_deref(),
                     );
                     self.send_viz_state(layer, col, 0);
                 }
                 NotaCommand::VizFx { layer, col, op, a, b, id, value } => {
+                    let coalesce = if matches!(op.as_str(), "mix" | "bypass") { 0.6 } else { 0.0 };
+                    self.mark_visual_edit(&[(layer, col)], &[layer], format!("fx:{layer}:{col}:{op}:{id}"), coalesce);
                     crate::viz::fx_op(&mut self.comp, layer, col, &op, a, b, &id, value);
                     self.send_viz_state(layer, col, 0);
                 }
                 NotaCommand::VizAssign { layer, col, kind, id, path, app, server } => {
+                    self.mark_visual_edit(&[(layer, col)], &[layer], format!("assign:{layer}:{col}"), 0.0);
                     let created = if kind == "video" || kind == "image" {
                         let clip = crate::viz::assign_media(&mut self.comp, layer, col, &kind, &path);
                         if let Some(id) = clip {
@@ -880,6 +971,7 @@ impl App {
                     if at_beat.is_some_and(|b| b.is_finite() && b > beat + 1e-9) {
                         self.nota_queue.push((at_beat.unwrap(), NotaCommand::VizClear { layer, col, at_beat: None }));
                     } else {
+                        self.mark_visual_edit(&[(layer, col)], &[layer], format!("clear:{layer}:{col}"), 0.0);
                         crate::viz::clear(&mut self.comp, layer, col);
                         self.grid_dirty = true;
                         self.send_viz_state(layer, col, 0);
@@ -889,10 +981,17 @@ impl App {
                 NotaCommand::VizSave { path, uids, media_dirs } => self.viz_save(&path, uids, &media_dirs),
                 NotaCommand::VizLoad { path, media_dir } => self.viz_load(&path, &media_dir),
                 NotaCommand::VizLayer { layer, opacity, blend, bypass } => {
+                    self.mark_visual_edit(&[], &[layer], format!("layer:{layer}"), 0.8);
                     if let Some(l) = self.comp.layers.get_mut(layer) {
-                        if let Some(o) = opacity { l.opacity = o.clamp(0.0, 1.0); }
-                        if let Some(b) = blend.as_deref().and_then(crate::viz::blend_by_name) { l.blend = b; }
-                        if let Some(x) = bypass { l.bypass = x; }
+                        if let Some(o) = opacity {
+                            l.opacity = o.clamp(0.0, 1.0);
+                        }
+                        if let Some(b) = blend.as_deref().and_then(crate::viz::blend_by_name) {
+                            l.blend = b;
+                        }
+                        if let Some(x) = bypass {
+                            l.bypass = x;
+                        }
                     }
                     self.grid_dirty = true;
                     // Echo the layer the edit belongs to; openVJ's selection may be elsewhere.
@@ -932,10 +1031,19 @@ impl App {
                 }
                 NotaCommand::VizCopy { from_layer, from_col, to_layer, to_col, moving } => {
                     if (from_layer, from_col) != (to_layer, to_col) {
+                        let mut slots = vec![(to_layer, to_col)];
+                        if moving {
+                            slots.push((from_layer, from_col));
+                        }
+                        self.mark_visual_edit(
+                            &slots,
+                            &[from_layer, to_layer],
+                            format!("copy:{from_layer}:{from_col}:{to_layer}:{to_col}:{moving}"),
+                            0.0,
+                        );
                         let source = self.comp.clip(from_layer, from_col).cloned();
                         let copied = match &source {
-                            Some(_) if moving =>
-                                self.comp.move_clip_over((from_layer, from_col), (to_layer, to_col)),
+                            Some(_) if moving => self.comp.move_clip_over((from_layer, from_col), (to_layer, to_col)),
                             Some(_) => self.comp.copy_clip_to((from_layer, from_col), (to_layer, to_col)),
                             None => {
                                 // The source audio had no visual: the target must end up empty.
@@ -962,6 +1070,7 @@ impl App {
                     }
                 }
                 NotaCommand::VizColumnInsert { index } => {
+                    self.clear_history();
                     let at = self.comp.insert_column(index);
                     self.columns_inserted(at);
                     self.grid_dirty = true;
@@ -969,6 +1078,7 @@ impl App {
                     eprintln!("openVJ: NOTA insert column {at}");
                 }
                 NotaCommand::VizColumnRemove { index } => {
+                    self.clear_history();
                     let before = self.comp.columns.len();
                     self.comp.remove_column(index);
                     if self.comp.columns.len() < before {
@@ -979,6 +1089,7 @@ impl App {
                     }
                 }
                 NotaCommand::VizColumnMove { from, to } => {
+                    self.clear_history();
                     self.comp.move_column(from, to);
                     self.columns_moved(from, to);
                     self.grid_dirty = true;
@@ -1039,6 +1150,7 @@ impl App {
                         eprintln!("openVJ: NOTA stop all at={at_beat:.3} drift={drift_ms:.2}ms");
                     }
                     NotaCommand::VizClear { layer, col, .. } => {
+                        self.mark_visual_edit(&[(layer, col)], &[layer], format!("clear:{layer}:{col}"), 0.0);
                         crate::viz::clear(&mut self.comp, layer, col);
                         self.send_viz_state(layer, col, 0);
                         eprintln!("openVJ: NOTA clear visual {layer}:{col} at={at_beat:.3} drift={drift_ms:.2}ms");
@@ -1106,6 +1218,8 @@ impl App {
     /// it), removed tracks lose their layer for good, and there is one column per scene.
     /// NotA sends the list top-to-bottom; openVJ layer 0 is the bottom of the mix.
     fn apply_layout(&mut self, tracks: Vec<crate::nota_bridge::LayoutTrack>, scenes: Vec<String>) {
+        // Track/scene indices can move under the history.
+        self.clear_history();
         let target: Vec<String> = tracks.iter().rev().map(|t| t.uid.clone()).collect();
 
         // Drop layers whose track is gone (top-down so indices stay valid).
@@ -1359,6 +1473,7 @@ impl App {
                 self.render_scale = 1.0;
                 self.render_avg_ms = 0.0;
                 self.render_scale_at = 0.0;
+                self.clear_history();
                 eprintln!(
                     "openVJ: viz loaded from {path} ({} layers / {} columns)",
                     self.comp.layers.len(),

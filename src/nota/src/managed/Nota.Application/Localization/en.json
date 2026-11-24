@@ -831,6 +831,7 @@
     "common.try_again": "Try again",
     "common.type_value": "Type value…",
     "common.undo": "Undo",
+    "common.redo": "Redo",
     "common.unpacking": "Unpacking {0}…",
     "common.update": "Update",
     "common.velocity": "Velocity",

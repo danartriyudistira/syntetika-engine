@@ -31,6 +31,9 @@
 //                    {"t":"vizMediaAudio","layer":0,"col":3,"path":"/path/clip.mp4"}
 //                    {"t":"vizOffset","ms":100}
 //                    {"t":"vizCalibrate","on":true}
+//                    {"t":"vizUndo"}
+//                    {"t":"vizRedo"}
+//   visual -> Nota : {"t":"vizHistory","undo":1,"redo":0}
 //
 // No audio ever crosses this channel; only musical time and commands.
 
@@ -57,6 +60,13 @@ public sealed class VisualBridge : IDisposable
 
     /// <summary>Raised on the UI thread after a layout snapshot was sent.</summary>
     public event Action? LayoutChanged;
+
+    private volatile bool _canUndo;
+    private volatile bool _canRedo;
+
+    /// <summary>Whether the visual engine has a visual edit to undo/redo.</summary>
+    public bool CanUndo => _canUndo;
+    public bool CanRedo => _canRedo;
 
     /// <summary>Loopback port the visual engine connects to. 47810 is not used by Nota itself.</summary>
     public const int DefaultPort = 47810;
@@ -713,6 +723,8 @@ public sealed class VisualBridge : IDisposable
             _clientEpoch++;
             _slotTimingDirty = true;
             _resumePending = true;
+            _canUndo = false;
+            _canRedo = false;
             Send("{\"t\":\"hello\",\"v\":2}");
             Send($"{{\"t\":\"vizPerf\",\"mode\":{_perfMode}}}");
             Send($"{{\"t\":\"vizOffset\",\"ms\":{_avOffsetMs.ToString(CultureInfo.InvariantCulture)}}}");
@@ -823,6 +835,10 @@ public sealed class VisualBridge : IDisposable
         Send($"{{\"t\":\"vizPerf\",\"mode\":{_perfMode.ToString(CultureInfo.InvariantCulture)}}}");
     }
 
+    /// <summary>Undo or redo the last visual edit (the engine owns the history).</summary>
+    public void VisualUndo() => Send("{\"t\":\"vizUndo\"}");
+    public void VisualRedo() => Send("{\"t\":\"vizRedo\"}");
+
     /// <summary>Copy or move a slot's visual with its Session clip (copy/paste, duplicate, drag).</summary>
     public void VizCopy(int fromLayer, int fromCol, int toLayer, int toCol, bool move)
         => Send($"{{\"t\":\"vizCopy\",\"fromLayer\":{fromLayer.ToString(CultureInfo.InvariantCulture)},\"fromCol\":{fromCol.ToString(CultureInfo.InvariantCulture)},\"toLayer\":{toLayer.ToString(CultureInfo.InvariantCulture)},\"toCol\":{toCol.ToString(CultureInfo.InvariantCulture)},\"move\":{(move ? "true" : "false")}}}");
@@ -854,6 +870,20 @@ public sealed class VisualBridge : IDisposable
                 AppLog($"[viz<-] launchSlot L{layer} C{scene}");
                 try { SlotLaunchRequested?.Invoke(layer, scene); }
                 catch (Exception ex) { AppLog("launch request handler failed: " + ex.Message); }
+                return true;
+            }
+            catch (JsonException) { return false; }
+        }
+        // Undo/redo availability from the engine (it owns the visual history).
+        if (line.Contains("\"vizHistory\"", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var v = doc.RootElement;
+                if (!v.TryGetProperty("t", out var t) || t.GetString() != "vizHistory") return false;
+                _canUndo = v.TryGetProperty("undo", out var u) && u.GetInt32() > 0;
+                _canRedo = v.TryGetProperty("redo", out var r) && r.GetInt32() > 0;
                 return true;
             }
             catch (JsonException) { return false; }

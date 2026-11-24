@@ -18,6 +18,8 @@
 //!   {"t":"vizPerf","mode":2}
 //!   {"t":"vizOffset","ms":100}
 //!   {"t":"vizCalibrate","on":true}
+//!   {"t":"vizUndo"}
+//!   {"t":"vizRedo"}
 //!   {"t":"vizMediaAudio","layer":0,"col":3,"path":"/path/clip.mp4"}
 //!   {"t":"vizSlotTiming","layer":0,"col":0,"beats":8,"loop":true}
 //!   {"t":"vizSlotPhase","layer":0,"col":0,"phase":3.5}
@@ -65,6 +67,9 @@ pub enum Command {
     Select { layer: usize, col: usize },
     /// OpenVJ tab: read or edit one slot's visual.
     VizGet { layer: usize, col: usize, seq: u64 },
+    /// Undo/redo the last visual edit; the engine answers with `vizHistory` counts.
+    VizUndo,
+    VizRedo,
     VizSet { layer: usize, col: usize, group: String, key: String, value: f32 },
     VizPlayback { layer: usize, col: usize, speed: Option<f32>, sync: Option<Option<f32>>, play_mode: Option<String>, trigger: Option<String> },
     VizFx { layer: usize, col: usize, op: String, a: usize, b: usize, id: String, value: f32 },
@@ -271,6 +276,12 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let _ = tx.send(Command::Select { layer, col });
+        }
+        Some("vizUndo") => {
+            let _ = tx.send(Command::VizUndo);
+        }
+        Some("vizRedo") => {
+            let _ = tx.send(Command::VizRedo);
         }
         Some("vizGet") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;

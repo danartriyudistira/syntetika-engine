@@ -115,6 +115,10 @@ diffs are in `patches/`.
   names the exact source (`isf:<id>`, `milk:<preset>`, `gen:<kind>`), its effects and the size.
   The bridge also stopped queueing per-track phase messages while the OpenVJ tab is closed —
   that queue used to grow for as long as audio played.
+- **Visual undo/redo**: the engine keeps the last 100 visual edits (clip source, parameters,
+  playback, effects, and the layer's opacity/blend/bypass) and the OpenVJ tab gets Undo/Redo
+  buttons. Every visual command marks automatically; slider drags coalesce into one step.
+  Layout or composition changes clear the history, and undo never changes what is playing.
 - **A/V offset & calibration**: View → A/V Offset… shifts every visual launch and the video
   phase by ±200 ms (positive delays the picture) and turns on a white beat strobe on the
   output; drag until it lands on Nota's metronome click (the strobe only runs while the
