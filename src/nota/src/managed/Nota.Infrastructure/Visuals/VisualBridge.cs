@@ -1300,7 +1300,7 @@ public sealed class VisualBridge : IDisposable
     }
 
     /// <summary>Saves the composition into a bundle; media paths become `media/<file>`.</summary>
-    public void VizSave(string bundleDir)
+    public void VizSave(string bundleDir, string? extraMediaDir = null)
     {
         _saved.Reset();
         string staging = NotaPaths.SubDir("media-staging");
@@ -1321,6 +1321,9 @@ public sealed class VisualBridge : IDisposable
 
         var dirs = new List<string> { staging };
         dirs.Add(bundleMedia);
+        // A Save As migration: the live clips still point at the legacy folder's media; they
+        // must become `media/<file>` in the new project too.
+        if (extraMediaDir is { Length: > 0 }) dirs.Add(extraMediaDir);
         Send(JsonSerializer.Serialize(new
         {
             t = "vizSave",

@@ -497,7 +497,8 @@ public partial class MainWindow
             _projectFile = container;
             var bridge = VisualBridge.Current;
             bridge?.SetProjectDir(dir!);
-            bridge?.VizSave(dir!);
+            string? legacyMedia = migratedFrom is { Length: > 0 } ? System.IO.Path.Combine(migratedFrom, "visuals", "media") : null;
+            bridge?.VizSave(dir!, legacyMedia);
             // The engine writes composition.json after it answers, so wait for that
             // acknowledgement before claiming the save. A restart in this window would
             // otherwise keep the old visuals on disk while the audio moved on.
@@ -508,6 +509,9 @@ public partial class MainWindow
             // The container is the actual file: pack only after every sidecar and the new
             // history version are in the working folder.
             if (container is not null) ProjectContainer.Pack(dir!, container);
+            // The migrated engine still holds the legacy folder's absolute media paths in
+            // memory; reload the packed working copy so the next save writes portable paths.
+            if (migratedFrom is { Length: > 0 }) bridge?.VizLoad(dir!);
             string display = ProjectDisplayPath ?? dir!;
             if (migratedFrom is { Length: > 0 }) ForgetRecentProject(migratedFrom);
             RecordRecentProject(display);    // surface it on the welcome screen next launch
