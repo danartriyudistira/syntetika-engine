@@ -119,7 +119,8 @@ diffs are in `patches/`.
 - **Visual undo/redo**: the engine keeps the last 100 visual edits (clip source, parameters,
   playback, effects, and the layer's opacity/blend/bypass) and the OpenVJ tab gets Undo/Redo
   buttons. Every visual command marks automatically; slider drags coalesce into one step.
-  Layout or composition changes clear the history, and undo never changes what is playing.
+  Layout, composition changes and a successful save clear the history (before unused media
+  is pruned), and undo never changes what is playing.
 - **A/V offset & calibration**: View → A/V Offset… shifts every visual launch and the video
   phase by ±200 ms (positive delays the picture) and turns on a white beat strobe on the
   output; drag until it lands on Nota's metronome click (the strobe only runs while the

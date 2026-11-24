@@ -260,16 +260,24 @@ public partial class MainWindow
             DispatcherTimer.RunOnce(ShowAvOffset, TimeSpan.FromSeconds(16));
         if (Environment.GetEnvironmentVariable("NOTA_VISUAL_UNDO_TEST") is { Length: > 0 })
         {
-            DispatcherTimer.RunOnce(() => VisualBridge.Current?.VisualUndo(), TimeSpan.FromSeconds(20));
+            // The viz test saves around 15-18 s; its successful save must clear the history.
+            DispatcherTimer.RunOnce(
+                () => System.Console.Error.WriteLine(
+                    $"[undo-test] after save canUndo={VisualBridge.Current?.CanUndo} canRedo={VisualBridge.Current?.CanRedo}"),
+                TimeSpan.FromSeconds(21));
+            // A new edit after the save must be undoable again.
+            DispatcherTimer.RunOnce(
+                () => VisualBridge.Current?.VizLayer(0, 0.6f, null, null), TimeSpan.FromSeconds(22));
+            DispatcherTimer.RunOnce(() => VisualBridge.Current?.VisualUndo(), TimeSpan.FromSeconds(24));
             DispatcherTimer.RunOnce(
                 () => System.Console.Error.WriteLine(
                     $"[undo-test] after undo canUndo={VisualBridge.Current?.CanUndo} canRedo={VisualBridge.Current?.CanRedo}"),
-                TimeSpan.FromSeconds(21));
-            DispatcherTimer.RunOnce(() => VisualBridge.Current?.VisualRedo(), TimeSpan.FromSeconds(23));
+                TimeSpan.FromSeconds(25));
+            DispatcherTimer.RunOnce(() => VisualBridge.Current?.VisualRedo(), TimeSpan.FromSeconds(27));
             DispatcherTimer.RunOnce(
                 () => System.Console.Error.WriteLine(
                     $"[undo-test] after redo canUndo={VisualBridge.Current?.CanUndo} canRedo={VisualBridge.Current?.CanRedo}"),
-                TimeSpan.FromSeconds(24));
+                TimeSpan.FromSeconds(28));
         }
     }
 }

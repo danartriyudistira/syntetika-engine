@@ -1422,8 +1422,14 @@ impl App {
         match std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, target)) {
             Ok(()) => {
                 eprintln!("openVJ: viz saved to {path}");
-                // Only after a successful write: the host copies staging media in first, and a
-                // failed save must keep the old composition (and its files) intact.
+                // The save is now the source of truth: media the composition no longer uses is
+                // pruned below, so an undo step could otherwise bring a clip back whose file was
+                // just deleted. Drop the visual history before the GC (a failed save keeps it).
+                let had = self.history.undo_len() + self.history.redo_len();
+                if had > 0 {
+                    self.clear_history();
+                    eprintln!("openVJ: viz save cleared {had} visual history step(s)");
+                }
                 if let Some(media_dir) = Path::new(path).parent().map(|d| d.join("media")).filter(|d| d.is_dir()) {
                     let removed = crate::viz::gc_media(&media_dir, &comp);
                     if removed > 0 {

@@ -172,6 +172,8 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 6. **Clock jitter** → PLL 8%/frame, snap hanya jika error >0.25 beat.
 7. **Stall thumbnail readback** → thumbnail statis di performance mode.
 8. **Command struktural tertahan antrean beat** → sekarang dieksekusi langsung.
+9. **Undo setelah save bisa memulihkan clip yang medianya sudah di-GC** → riwayat visual
+   dibersihkan setelah `composition.json` berhasil ditulis, sebelum GC media.
 
 ---
 
@@ -547,6 +549,8 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   `vizClear`, `vizCopy`, `vizLayer`), engine menyimpan snapshot `Clip` + opacity/blend/bypass
   layer. Mark per kontrol digabung (0,6–0,8 dtk) supaya satu drag slider = satu langkah.
   Stack maksimal 100; edit baru menghapus redo; layout/load komposisi membersihkan riwayat.
+  Save yang berhasil juga membersihkan riwayat **sebelum GC media**, supaya undo tidak
+  mengembalikan clip yang file bundle-nya baru saja dihapus.
 - **Bridge**: `vizUndo`/`vizRedo` dari Nota; engine membalas `vizHistory {undo,redo}`.
   `VizCopy` menandai sumber+tujuan (move) atau tujuan (copy). Playback sengaja tidak
   di-undo; kalau clip yang dipulihkan tidak lagi aktif, layer dibiarkan tanpa clip aktif.
@@ -554,6 +558,10 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Bukti unit**: 4 tes history lulus (parameter, coalesce, hapus+layer, redo dibersihkan).
 - **Bukti end-to-end**: `NOTA_VIZ_TEST=1 NOTA_VISUAL_UNDO_TEST=1` → mark 1–5,
   `undo=2→1 redo=1`, `redo→undo=2 redo=0`; Nota melihat `canUndo/canRedo` berubah.
+- **Bukti save×GC**: `viz save cleared 4` lalu `cleared 2 visual history step(s)`; flag
+  `canUndo=False canRedo=False` setelah save; layer edit baru setelah save bisa
+  `undo=1→0 redo=1` lalu `redo→undo=1`, flag ikut berubah. Tidak ada undo yang mengembalikan
+  clip yang medianya sudah di-GC.
 - **Cakupan**: visual saja (audio memakai undo Nota); belum ada shortcut keyboard; undo
   setelah perubahan struktur scene dibersihkan (riwayat tidak dipetakan ulang).
 
