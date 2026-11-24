@@ -116,7 +116,17 @@ public partial class App : Avalonia.Application
         try
         {
             var bridge = Services.GetRequiredService<VisualBridge>();
-            bridge.Start();
+            // The bridge port can be moved for a dev instance running beside the installed app.
+            int visualPort = int.TryParse(Environment.GetEnvironmentVariable("NOTA_VISUAL_PORT"), out int p)
+                             && p is > 0 and < 65536
+                ? p
+                : VisualBridge.DefaultPort;
+            bridge.Start(visualPort);
+            // Replay the saved visual settings before the engine connects, so its very first
+            // launch already uses the right profile and A/V offset.
+            var visualSettings = Services.GetRequiredService<ISettingsService>();
+            bridge.VizPerf(visualSettings.Current.VisualPerformanceMode);
+            bridge.VizOffset(visualSettings.Current.VisualAvOffsetMs);
             // NotA owns the visual engine: start it unless one is already connected.
             var visual = Services.GetRequiredService<VisualEngineProcess>();
             if (visual.AutoStart) visual.Start();

@@ -20,6 +20,10 @@ public partial class MainWindow
     private bool _openVjShown;
     private bool _mappingShown;
     private bool _visualOutputAttached;
+    /// <summary>The A/V offset dialog, while it is open.</summary>
+    private VisualOffsetWindow? _offsetWindow;
+    /// <summary>The metronome state before calibration, restored when the dialog closes.</summary>
+    private bool _offsetMetronomeWasOn;
 
     private void ToggleVisualOutput()
     {
@@ -105,6 +109,52 @@ public partial class MainWindow
         if (MenuItemFor("view.mapping") is { } mi) mi.IsChecked = _mappingShown;
     }
 
+    /// <summary>
+    /// View → A/V Offset: a slider for the picture/sound offset plus a calibration strobe.
+    /// Opening it turns the metronome on and opens the output window (the strobe is drawn there);
+    /// closing it puts everything back.
+    /// </summary>
+    private void ShowAvOffset()
+    {
+        if (_vm is null) return;
+        if (VisualBridge.Current is not { } bridge)
+        {
+            _vm.StatusText = Loc.T("main.visual_output_offline");
+            return;
+        }
+        if (_offsetWindow is { } open)
+        {
+            open.Activate();
+            return;
+        }
+
+        int ms = Math.Clamp(_vm.Settings.Current.VisualAvOffsetMs, -200, 200);
+        if (!_visualOutputShown) ToggleVisualOutput();
+        _offsetMetronomeWasOn = _vm.Transport.MetronomeOn;
+        _vm.Transport.MetronomeOn = true;
+        bridge.VizOffset(ms);
+        bridge.VizCalibrate(true);
+
+        var window = new VisualOffsetWindow(ms);
+        window.OffsetChanged += v =>
+        {
+            _vm.Settings.Current.VisualAvOffsetMs = v;
+            _vm.Settings.Save();
+            bridge.VizOffset(v);
+            _vm.StatusText = Loc.F("visual.av_offset_status", v);
+        };
+        window.CalibrationToggled += on => bridge.VizCalibrate(on);
+        window.Closed += (_, _) =>
+        {
+            bridge.VizCalibrate(false);
+            _vm.Transport.MetronomeOn = _offsetMetronomeWasOn;
+            _vm.Settings.Save();
+            _offsetWindow = null;
+        };
+        _offsetWindow = window;
+        window.Show(this);
+    }
+
     private void SetVisualPerformance(int mode)
     {
         mode = Math.Clamp(mode, 0, 2);
@@ -186,6 +236,7 @@ public partial class MainWindow
         SyncMappingMenu();
         SyncVisualPerformanceMenu();
         VisualBridge.Current?.VizPerf(_vm?.Settings.Current.VisualPerformanceMode ?? 2);
+        VisualBridge.Current?.VizOffset(_vm?.Settings.Current.VisualAvOffsetMs ?? 0);
 
         if (Environment.GetEnvironmentVariable("NOTA_VISUAL_OUTPUT_TEST") is { Length: > 0 } mode)
         {
@@ -205,5 +256,7 @@ public partial class MainWindow
             if (mappingMode != "1")
                 DispatcherTimer.RunOnce(ToggleMapping, TimeSpan.FromSeconds(9));
         }
+        if (Environment.GetEnvironmentVariable("NOTA_AV_CAL_TEST") is { Length: > 0 })
+            DispatcherTimer.RunOnce(ShowAvOffset, TimeSpan.FromSeconds(16));
     }
 }

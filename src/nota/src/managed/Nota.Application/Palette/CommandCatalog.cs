@@ -63,6 +63,7 @@ public static class CommandCatalog
         C("view.visualEco", Loc.T("main.visual_eco"), Loc.T("commands.view"), "", "openvj performance profile 30 fps preview 15 battery integrated gpu"),
         C("view.visualBalanced", Loc.T("main.visual_balanced"), Loc.T("commands.view"), "", "openvj performance profile 45 fps preview 30"),
         C("view.visualQuality", Loc.T("main.visual_quality"), Loc.T("commands.view"), "", "openvj performance profile 60 fps preview 60"),
+        C("view.avOffset", Loc.T("commands.av_offset"), Loc.T("commands.view"), "", "openvj av offset delay picture sound sync projector calibration latency"),
         C("view.connectPhone", Loc.T("commands.connect_phone"), Loc.T("commands.view"), "", "remote mobile qr"),
         C("view.articulationMaps", Loc.T("commands.articulation_maps"), Loc.T("commands.view"), "", "expression map keyswitch articulation manager library"),
         C("view.toggleBrowser", Loc.T("commands.toggle_browser"), Loc.T("commands.view"), "", "library sidebar"),

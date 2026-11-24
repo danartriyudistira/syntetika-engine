@@ -100,6 +100,9 @@ public sealed class Settings
     /// <summary>openVJ render profile: 0 Eco (30 fps, preview 15), 1 Balanced (45/30), 2 Quality
     /// (60/60). Controlled by View → Visual Performance.</summary>
     public int VisualPerformanceMode { get; set; } = 2;
+    /// <summary>Picture vs sound offset in milliseconds, -200..+200 (positive delays the
+    /// picture). Set from View → A/V Offset; replayed to the visual engine on connect.</summary>
+    public int VisualAvOffsetMs { get; set; }
     /// <summary>The Mixer was shown when the user last showed or hid it; restored on launch
     /// (specs/054). Quitting the app does not count as hiding it.</summary>
     public bool MixerShown { get; set; }

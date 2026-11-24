@@ -29,6 +29,8 @@
 //                    {"t":"vizMappingState","open":true}
 //                    {"t":"launchSlot","layer":0,"col":3}
 //                    {"t":"vizMediaAudio","layer":0,"col":3,"path":"/path/clip.mp4"}
+//                    {"t":"vizOffset","ms":100}
+//                    {"t":"vizCalibrate","on":true}
 //
 // No audio ever crosses this channel; only musical time and commands.
 
@@ -97,6 +99,8 @@ public sealed class VisualBridge : IDisposable
     private volatile bool _resumePending;
     /// <summary>Last visual performance profile (0 Eco, 1 Balanced, 2 Quality); replayed on connect.</summary>
     private volatile int _perfMode = 2;
+    /// <summary>A/V offset in ms (+ delays the picture); replays on connect for the UI.</summary>
+    private volatile int _avOffsetMs;
     private long _slotTimingAt;
     /// <summary>openVJ reported that its output window is on screen (`vizOut`).</summary>
     private volatile bool _outputOpen;
@@ -149,7 +153,11 @@ public sealed class VisualBridge : IDisposable
             // macOS lets a second listener bind the same port with SO_REUSEADDR (unlike Linux),
             // so a leftover dev instance silently stole openVJ's connection. A named mutex makes
             // ownership explicit across processes: the newest instance does not steal the bridge.
-            _owner = new Mutex(initiallyOwned: true, name: "studio.syntetika.notaopenvj.visual-bridge", out bool createdNew);
+            // A non-default test port gets its own mutex so a dev instance can run beside the app.
+            string ownerName = port == DefaultPort
+                ? "studio.syntetika.notaopenvj.visual-bridge"
+                : $"studio.syntetika.notaopenvj.visual-bridge-{port}";
+            _owner = new Mutex(initiallyOwned: true, name: ownerName, out bool createdNew);
             if (!createdNew)
             {
                 _owner.Dispose();
@@ -312,6 +320,8 @@ public sealed class VisualBridge : IDisposable
                 if (len <= 0) continue;
                 double pos = _engine.SessionSlotPosition(ti.Id);
                 double phase = pos - Math.Floor(pos / len) * len;
+                phase = (phase - OffsetBeats) % len;
+                if (phase < 0) phase += len;
                 Send($"{{\"t\":\"vizSlotPhase\",\"layer\":{layer},\"col\":{playing},\"phase\":{Num(phase)},\"beat\":{Num(_engine.PositionBeats)}}}");
             }
         }
@@ -329,7 +339,7 @@ public sealed class VisualBridge : IDisposable
             var uids = CurrentLayoutUids();
             var layerOf = new Dictionary<string, int>(uids.Count, StringComparer.Ordinal);
             for (int i = 0; i < uids.Count; i++) layerOf[uids[i]] = i;
-            double at = Math.Round(_engine.PositionBeats, 6);
+            double at = VisualBeat(Math.Round(_engine.PositionBeats, 6));
             for (int i = 0; i < _engine.TrackCount; i++)
             {
                 if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type is not (0 or 1)) continue;
@@ -431,11 +441,38 @@ public sealed class VisualBridge : IDisposable
 
     public void StopLayer(int layer, double? atBeat = null)
         => Send(atBeat is { } b
-            ? $"{{\"t\":\"stopLayer\",\"layer\":{layer},\"atBeat\":{Num(b)}}}"
+            ? $"{{\"t\":\"stopLayer\",\"layer\":{layer},\"atBeat\":{Num(VisualBeat(b))}}}"
             : $"{{\"t\":\"stopLayer\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)}}}");
 
     public void StopAll(double? atBeat = null)
-        => Send(atBeat is { } b ? $"{{\"t\":\"stopAll\",\"atBeat\":{Num(b)}}}" : "{\"t\":\"stopAll\"}");
+        => Send(atBeat is { } b ? $"{{\"t\":\"stopAll\",\"atBeat\":{Num(VisualBeat(b))}}}" : "{\"t\":\"stopAll\"}");
+
+    /// <summary>The A/V offset in beats at the current tempo (+ delays the picture).</summary>
+    private double OffsetBeats
+    {
+        get
+        {
+            try { return _avOffsetMs / 1000.0 * _engine.Bpm / 60.0; }
+            catch (ObjectDisposedException) { return 0; }
+        }
+    }
+
+    /// <summary>An audio beat shifted to when the picture should show it.</summary>
+    private double VisualBeat(double beat) => beat + OffsetBeats;
+
+    /// <summary>
+    /// A/V offset in milliseconds, -200..+200. Positive delays the picture relative to the
+    /// sound; the visual launches and the video phase are shifted by it.
+    /// </summary>
+    public void VizOffset(int milliseconds)
+    {
+        _avOffsetMs = Math.Clamp(milliseconds, -200, 200);
+        Send($"{{\"t\":\"vizOffset\",\"ms\":{_avOffsetMs.ToString(CultureInfo.InvariantCulture)}}}");
+    }
+
+    /// <summary>Calibration strobe on openVJ's output (metronome click stays in Nota).</summary>
+    public void VizCalibrate(bool on)
+        => Send($"{{\"t\":\"vizCalibrate\",\"on\":{(on ? "true" : "false")}}}");
 
     /// <summary>
     /// The beat the engine will actually apply a launch on, matching SessionPlayer's
@@ -478,7 +515,7 @@ public sealed class VisualBridge : IDisposable
 
     private void SendLaunch(string kind, int col, double atBeat, int layer = 0)
     {
-        string b = Num(atBeat);
+        string b = Num(VisualBeat(atBeat));
         string c = col.ToString(CultureInfo.InvariantCulture);
         string json = kind == "scene"
             ? $"{{\"t\":\"scene\",\"col\":{c},\"atBeat\":{b}}}"
@@ -678,6 +715,7 @@ public sealed class VisualBridge : IDisposable
             _resumePending = true;
             Send("{\"t\":\"hello\",\"v\":2}");
             Send($"{{\"t\":\"vizPerf\",\"mode\":{_perfMode}}}");
+            Send($"{{\"t\":\"vizOffset\",\"ms\":{_avOffsetMs.ToString(CultureInfo.InvariantCulture)}}}");
             // A fresh engine starts with its output window hidden. Restore the state the user
             // asked for, so "View ▸ Visual Output" survives an engine restart.
             SetOutputOpen(false);
@@ -1025,7 +1063,7 @@ public sealed class VisualBridge : IDisposable
     /// <summary>Clears a slot's visual; with atBeat, waits for that beat (audio stop).</summary>
     public void VizClear(int layer, int scene, double? atBeat = null)
         => Send(atBeat is { } b
-            ? $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{scene},\"atBeat\":{Num(b)}}}"
+            ? $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{scene},\"atBeat\":{Num(VisualBeat(b))}}}"
             : $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{scene}}}");
 
     public void VizCatalog(string kind, string query, long tag)

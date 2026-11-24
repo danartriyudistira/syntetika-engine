@@ -51,6 +51,8 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   Nota slot, unless the slot already has sound.
 - **Audio-reactive visuals** — the visual engine analyses Nota's master output through a
   lock-free shared ring, so shaders, MilkDrop and audio-modulated parameters follow the DAW.
+- **A/V offset & calibration** — View → A/V Offset shifts the picture ±200 ms with a beat
+  strobe, so a projector or slow display lines up with the sound.
 - **Performance** — hidden engine ~3% CPU (audio tap included), output-only ~24% at 60 fps; editor work is
   capped at 30 fps and the output path skips UI sync. View → Visual Performance selects Eco
   (30 fps, ~6.5% output), Balanced (45) or Quality (60). A visual that takes far over budget

@@ -91,6 +91,7 @@
                 </NativeMenu>
               </NativeMenuItem.Menu>
             </NativeMenuItem>
+            <NativeMenuItem Header="{app:T 'main.av_offset'}" app:Commands.Id="view.avOffset"/>
             <NativeMenuItem Header="{app:T 'main.mapping'}" app:Commands.Id="view.mapping" ToggleType="CheckBox"/>
             <NativeMenuItem Header="{app:T 'main.connect_phone'}" app:Commands.Id="view.connectPhone"/>
             <NativeMenuItem Header="{app:T 'main.articulation_maps'}" app:Commands.Id="view.articulationMaps"/>

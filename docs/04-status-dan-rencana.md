@@ -54,6 +54,8 @@ Tidak berafiliasi dengan/endorse oleh kedua proyek upstream. Detail di `ATTRIBUT
 - **Audio tap**: master NotA ditulis ke ring file-backed (`audio-tap.shm`) tanpa lock; openVJ
   menganalisisnya dengan FFT yang sama seperti input device, jadi parameter audio-reactive
   mengikuti suara DAW (track, plugin, master chain) tanpa routing tambahan.
+- **A/V offset**: offset ±200 ms menggeser launch visual dan phase video (bukan audio) agar
+  gambar pas dengan suara di proyektor; kalibrasi memakai strobe di output + metronome.
 - **Layout mirror**: 1 layer = 1 track audio/MIDI, 1 kolom = 1 scene; tambah/hapus/urut/rename
   live (≤250 ms). Track memakai **UID permanen** (`TrackDto.Uid` + `TrackUids`), jadi isi
   visual mengikuti track saat reorder/save/reload.
@@ -188,7 +190,7 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 
 ### P2 — Sinkronisasi A/V & reaktivitas audio (±5–7 hari)
 
-- [ ] Slider offset A/V ±200 ms + kalibrasi (flash/klik).
+- [x] Slider offset A/V ±200 ms + kalibrasi (flash/klik).
 - [x] Tap audio master NotA → shared memory → band/hits openVJ (tanpa BlackHole).
 - Kriteria: offset < 20 ms; visual bereaksi ke kick/bass; tidak menambah stall.
 
@@ -488,6 +490,25 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Sisa**: clip lambat belum diidentifikasi namanya (komposisi tidak tersimpan). Log baru akan
   menyebutkannya saat diputar lagi; kandidat bisa dioptimalkan atau diberi peringatan.
 
+## 7q. Offset A/V + kalibrasi (24 Nov)
+
+- **Offset di host**: `VisualBridge` menggeser timestamp visual — launch scene/slot, stop
+  layer/all, resume, dan `vizClear` — dengan `offset_ms/1000 × BPM / 60` beat. `vizSlotPhase`
+  dikirim dengan `phase − offset_beats` (mod panjang loop). Audio tidak berubah. Positif =
+  gambar lebih lambat; negatif = lebih cepat.
+- **Kalibrasi**: View → A/V Offset… (slider −200..+200 ms, tick 5 ms) membuka output window,
+  menyalakan metronome, dan mengirim `vizCalibrate on`. Engine menggambar strobe putih pada
+  output saat `(beat − offset_beats) mod 1 < 0,08`. Menutup dialog mematikan strobe,
+  memulihkan metronome, dan menyimpan nilai.
+- **Persistensi**: `VisualAvOffsetMs` di `settings.json`, dikirim ke bridge **sebelum** engine
+  start (replay saat connect) serta setiap slider bergerak.
+- **Bukti**: offset 100 ms, Sintel + klik openVJ → `NOTA A/V offset 100 ms`,
+  `NOTA clip 0:0 at=0.200` (beat audio 0 + 0,2 beat), applied 0.226, drift 13,2 ms,
+  `NOTA calibration on`, fps 60, drops 0. Tes render
+  `calibration_strobe_follows_the_offset` lulus (43 tes render).
+- **Hook**: `NOTA_AV_CAL_TEST=1` membuka dialog 16 dtk setelah start; `NOTA_VISUAL_PORT`
+  memindahkan bridge (mutex per port) untuk instance dev di samping app terpasang.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |
@@ -519,6 +540,8 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 | `OPENVJ_PAIR_TEST=layer:col=<file>` | Simulasi drop video di grid openVJ (handshake `vizMediaAudio`) |
 | `OPENVJ_SCALE_TEST=0.25` | Paksa render scale adaptif (uji resize/preview) |
 | `SYNTETIKA_TAP_DEBUG=1` | Log `tap level/bands/rate/feed` sekali per detik |
+| `NOTA_AV_CAL_TEST=1` | Buka dialog A/V offset + kalibrasi 16 dtk setelah start |
+| `NOTA_VISUAL_PORT=<port>` | Pindahkan bridge visual (instance dev di samping app terpasang) |
 | `NOTA_OPENVJ_UI_TEST=1`, `NOTA_VISUAL_OUTPUT_TEST=1`, `NOTA_MAPPING_TEST=1` | Buka jendela editor/output/mapping saat start |
 | `NOTA_SLOT_SYNC_TEST`, `NOTA_COPY_TEST`, `NOTA_SCENE_TEST` | Uji trim/loop, copy visual, dan struktur scene |
 

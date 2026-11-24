@@ -903,6 +903,14 @@ impl App {
                 NotaCommand::VizUi { show } => self.show_ui_window(ui, show),
                 NotaCommand::VizMapping { show } => self.show_mapping_window(show),
                 NotaCommand::VizPerf { mode } => self.performance_mode_picked(mode),
+                NotaCommand::VizOffset { ms } => {
+                    self.engine.set_av_offset_ms(ms as f32);
+                    eprintln!("openVJ: NOTA A/V offset {ms} ms");
+                }
+                NotaCommand::VizCalibrate { on } => {
+                    self.engine.set_calibration(on);
+                    eprintln!("openVJ: NOTA calibration {}", if on { "on" } else { "off" });
+                }
                 NotaCommand::VizSlotTiming { layer, col, beats, bpm, looped, start } => {
                     if beats > 0.0
                         && let Some(clip) = self.comp.clip_mut(layer, col)

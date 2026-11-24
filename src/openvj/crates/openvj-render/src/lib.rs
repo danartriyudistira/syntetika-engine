@@ -367,6 +367,10 @@ pub struct Engine {
     preview_clip: Option<ClipId>,
     /// Whether the preview target holds a picture that must be cleared when its source goes.
     preview_has_content: bool,
+    /// White strobe on every beat for A/V calibration.
+    calibrate: bool,
+    /// The host's A/V offset in milliseconds; positive delays the picture.
+    av_offset_ms: f32,
     /// MilkDrop engines, one per MilkDrop clip.
     milk: HashMap<ClipId, MilkClip>,
     /// This frame's audio for MilkDrop: mono samples, their rate and the Reactivity gain.
@@ -584,6 +588,8 @@ impl Engine {
             preview_at: f64::NEG_INFINITY,
             preview_clip: None,
             preview_has_content: false,
+            calibrate: false,
+            av_offset_ms: 0.0,
             milk: HashMap::new(),
             pcm: Vec::new(),
             pcm_rate: 48_000,
@@ -675,6 +681,17 @@ impl Engine {
     pub fn set_preview_interval(&mut self, seconds: f64) {
         self.preview_interval = seconds.max(0.0);
         self.preview_at = f64::NEG_INFINITY;
+    }
+
+    /// The host's A/V offset. The host already shifts launches and video phase; the strobe
+    /// uses it too so a calibration flash lands when the delayed picture would.
+    pub fn set_av_offset_ms(&mut self, ms: f32) {
+        self.av_offset_ms = ms.clamp(-200.0, 200.0);
+    }
+
+    /// Shows a white frame on every beat (Nota's metronome is the reference).
+    pub fn set_calibration(&mut self, on: bool) {
+        self.calibrate = on;
     }
 
     /// Shows a clip that isn't in the composition on the Preview, from its start, instead of
@@ -1481,6 +1498,14 @@ impl Engine {
         let mixed = self.effect_chain(&mut passes, &t.fx, t.comp[cur].clone(), &comp.effects, now, inputs);
         self.write_route(&mut passes, RouterInput::Composition, &mixed);
         passes.push(Self::blend_pass(&t.output, &mixed, &mixed, MODE_MASTER, comp.master_value(inputs)));
+        // Calibration: a short white strobe each beat, delayed by the same offset the host puts
+        // on the picture, so lining it up with the click sets the offset.
+        if self.calibrate {
+            let offset_beats = self.av_offset_ms as f64 / 1000.0 * comp.bpm as f64 / 60.0;
+            if (inputs.beat - offset_beats).rem_euclid(1.0) < 0.08 {
+                passes.push(Pass::clear(&t.output, wgpu::Color::WHITE));
+            }
+        }
         if let Some(shared) = &self.shared {
             passes.push(Self::blend_pass(shared, &t.output, &t.output, MODE_MIX, 0.0));
         }
@@ -2478,6 +2503,29 @@ mod tests {
         assert_eq!(e.last_pass_count(), with_thumbs);
         // An idle composition is a handful of passes, whatever the grid holds.
         assert!(e.last_pass_count() - 8 <= 4, "{} passes", e.last_pass_count());
+    }
+
+    #[test]
+    fn calibration_strobe_follows_the_offset() {
+        let Some(mut e) = engine(64, 36) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let comp = Composition::new(64, 36, 1, 1);
+        let lit = |e: &Engine| mean(&e.read_target(e.output()))[0] > 200.0;
+        let at = |beat: f64| ModInputs { beat, ..Default::default() };
+        e.set_calibration(true);
+        e.render(&comp, 0.1, &at(0.04), None);
+        assert!(lit(&e), "the strobe fills the output on the beat");
+        e.render(&comp, 0.2, &at(0.5), None);
+        assert!(!lit(&e), "and is off between beats");
+
+        // +100 ms at 120 BPM is 0.2 beats: beat 0.1 is quiet, beat 0.21 is the strobe.
+        e.set_av_offset_ms(100.0);
+        e.render(&comp, 0.3, &at(0.1), None);
+        assert!(!lit(&e), "the strobe moves with the offset");
+        e.render(&comp, 0.4, &at(0.21), None);
+        assert!(lit(&e), "and fires 0.2 beats late");
     }
 
     #[test]
