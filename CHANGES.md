@@ -39,6 +39,10 @@ diffs are in `patches/`.
   Scheduled launches carry their deck, so a launch queued just before a deck switch can't fire
   on the new deck's same column. The OpenVJ tab compares replies against the open deck's
   column (a deck-2 slot no longer sits at "Loading the visual").
+- **Video/image clips reload with the project**: opening a project (or switching to a deck)
+  only deserialized the composition — the media behind video/image clips was never requested,
+  so the clip was on the grid but black until it was replaced. Every load and deck switch now
+  asks for the missing media (thumbnails, video lengths and decoders included).
 - **New projects start with a blank picture**: New Project sends `vizReset` (clips, effects,
   media, history and extra decks dropped; resolution kept), and opening a project whose
   `visuals/composition.json` is missing loads blank instead of inheriting the previous

@@ -1546,6 +1546,8 @@ impl App {
                 self.render_avg_ms = 0.0;
                 self.render_scale_at = 0.0;
                 self.clear_history();
+                self.collect_garbage();
+                self.load_missing_media();
                 eprintln!(
                     "openVJ: viz loaded from {path} ({} clips, {} layers / {} columns)",
                     self.comp.all_clips().count(),
@@ -1758,6 +1760,26 @@ impl App {
         });
     }
 
+    /// Loads the media behind every video/image clip that isn't in memory yet. A project load
+    /// only deserializes the composition; without this the clips are on the grid but black.
+    /// Deck switches also bring clips that were stored in another deck.
+    fn load_missing_media(&mut self) {
+        let clips: Vec<(ClipId, PathBuf, bool)> = self
+            .comp
+            .every_clip()
+            .filter_map(|c| match &c.source {
+                ClipSource::Video { path } => Some((c.id, path.clone(), true)),
+                ClipSource::Image { path } => Some((c.id, path.clone(), false)),
+                _ => None,
+            })
+            .collect();
+        for (id, path, is_video) in clips {
+            if !self.media.contains_key(&id) {
+                self.start_load(id, path, is_video);
+            }
+        }
+    }
+
     fn poll_loads(&mut self) {
         while let Ok((id, result)) = self.load_rx.try_recv() {
             if !self.media.contains_key(&id) {
@@ -1792,6 +1814,7 @@ impl App {
                     self.media.insert(id, Media::Ready { video: m.video, detail });
                 }
                 Err(e) => {
+                    eprintln!("openVJ: media failed for {id:?}: {e}");
                     self.set_status(format!("Could not load media: {e}"));
                     self.media.insert(id, Media::Failed(e));
                 }
@@ -3159,6 +3182,7 @@ impl App {
         self.last_column = None;
         self.grid_dirty = true;
         self.props_dirty = true;
+        self.load_missing_media();
         self.set_status(format!("Deck: {}", self.comp.deck_name()));
     }
 
