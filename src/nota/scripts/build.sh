@@ -10,7 +10,8 @@ cd "$(dirname "$0")/.."
 export PATH="/opt/homebrew/bin:$PATH"
 
 echo "==> Building native engine (universal arm64+x86_64)"
-cmake -G Ninja -S src/native/nota.engine -B src/native/nota.engine/build \
+# Reuse the configured generator (Ninja where installed, Unix Makefiles otherwise).
+cmake -S src/native/nota.engine -B src/native/nota.engine/build \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build src/native/nota.engine/build
 

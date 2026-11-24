@@ -27,7 +27,7 @@ Tidak berafiliasi dengan/endorse oleh kedua proyek upstream. Detail di `ATTRIBUT
 
 ### 2.1 Fondasi & build (M0)
 
-- Toolchain user-local tanpa sudo: Rust, .NET 10, CMake 4.5.1, Ninja.
+- Toolchain user-local tanpa sudo: Rust, .NET 10, CMake 4.5.1 (Ninja atau Makefiles).
 - Nota engine (arm64) + app managed berhasil dibangun dengan CLT/clang 14; satu patch
   portability (P1091) disimpan di `patches/0001`.
 - openVJ berhasil dibangun dan berjalan di Metal M1.

@@ -108,7 +108,15 @@ public sealed class VisualEngineProcess : IDisposable
             psi.Environment["SYNTETIKA_EXIT_ON_DISCONNECT"] = "1";
             // Keep GPU diagnostics in the app's log folder, not on the system console.
             string logs = NotaPaths.SubDir("logs");
-            _log = new StreamWriter(Path.Combine(logs, "visual-engine.log"), append: true) { AutoFlush = true };
+            string logPath = Path.Combine(logs, "visual-engine.log");
+            try
+            {
+                var info = new FileInfo(logPath);
+                if (info.Exists && info.Length >= 10 * 1024 * 1024)
+                    File.Move(logPath, logPath + ".1", overwrite: true);
+            }
+            catch { /* a held or read-only log must not stop the engine */ }
+            _log = new StreamWriter(logPath, append: true) { AutoFlush = true };
 
             var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
             process.OutputDataReceived += (_, e) => WriteLog(e.Data);

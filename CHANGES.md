@@ -104,6 +104,8 @@ diffs are in `patches/`.
   ships `Syphon.framework` and declares camera usage.
 - **Performance**: static grid thumbnails (no GPU readback during a show), pipeline prewarm,
   PLL clock smoothing, stopped-transport freeze.
+- **Engine log rotation**: `visual-engine.log` rolls to `.1` at 10 MB when the engine restarts,
+  so a long-running installation cannot grow it without bound.
 - **Measured performance**: hidden editor/output ≈3% CPU with the audio tap (folder watchers at
   5 s, 10 fps
   tick), output-only ≈24% at 60 fps, editor+output ≈48% (the editor window's renderer
