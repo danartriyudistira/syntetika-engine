@@ -770,6 +770,26 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Belum**: ekstraksi ulang setiap open (belum ada cache), tidak ada export `.openvj` / import
   folder lain, dan ukuran file membesar karena history ikut.
 
+## 7ae. Download model AI + Audio → MIDI (25 Nov)
+
+- **Download model**: URL arsip ONNX Runtime di GitHub sudah 404. Runtime sekarang diambil dari
+  paket NuGet immutable `Microsoft.ML.OnnxRuntime` 1.23.2 (library native untuk semua RID,
+  ukuran + SHA dipin); error instalasi juga masuk `nota-*.log`. Uji live: runtime + basic-pitch
+  terunduh, ONNX Runtime dimuat, nada A4 dikenali sebagai A4 (69).
+- **Audio → MIDI**: Melody/Harmony sekarang membuka dialog **Audio to MIDI**:
+  - **Timing**: snap start (opsional end) ke grid 1/32–1/4, straight atau triplet; default
+    mengikuti langkah Quantize piano roll (1/16).
+  - **Density**: minimum strength (default 35%), shortest note (1/32), dan max voices per chord
+    (4). Catatan lemah, harmonik, dan re-attack dibuang; chord asli tetap.
+  - Pipeline lama tetap: fragmen digabung, duplikat dibuang, overlap pitch sama dipangkas,
+    harmonik +12/+19/+24/+28/+31 dan ghost semitone lemah dihilangkan.
+- **Bukti pada stem asli** (`stemdemo.syntetika`, 325 beat @120 BPM):
+  Vocals 572 note mentah → 426 setelah hygiene → 386 dengan default dialog; Other 909 → 797 →
+  691. Setelah quantize 1/16, 100% start berada di grid; chord terbesar 3 (vocals) dan 4 (other).
+  Unit test mencakup tiap kontrol dialog.
+- **Belum**: belum ada konversi batch semua stem sekaligus, belum ada auto key/scale, dan
+  fallback DSP (tanpa model) tidak berubah.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |
