@@ -599,6 +599,26 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Catatan uji**: `launch_scene` lewat MCP hanya memicu audio; launch visual mengikuti jalur
   UI (palette “Launch scene”) atau replay-on-reconnect. Scene lain diuji lewat replay tersebut.
 
+## 7u. Restart engine visual: budget & pemulihan (24 Nov)
+
+- **Bug ditemukan saat stress**: `_restarts` di `VisualEngineProcess` hanya bertambah dan
+  tidak pernah pulih. Setelah 3 exit sepanjang sesi app (walau berjam-jam terpisah), engine
+  tidak dihidupkan lagi sampai app di-restart; visual mati tanpa pesan. Stress kill tiap
+  ~6 dtk memunculkannya setelah 4 kill.
+- **Fix**: run sehat ≥15 dtk mengisi ulang budget (crash loop startup tetap dibatasi 3
+  restart), `Start()` eksplisit (launch app / View ▸ Visual Output/OpenVJ) mereset budget,
+  dan log menulis `visual engine exited 4 times without a healthy run; staying down` saat
+  menyerah.
+- **Bukti**: 5× `SIGKILL` dengan uptime 16–19 dtk → 5/5 restart; 4× kill cepat → 3 restart
+  lalu berhenti (proteksi crash loop tetap); buka **View ▸ Visual Output** → helper baru;
+  kill berikutnya setelah 16 dtk → auto-restart. Proses akhir: 1 app + 1 helper, RSS ~145 MB,
+  0 panic/exception.
+- **Stress lain**: 18/18 kombinasi 6 scene × 3 putaran (launch → kill engine → load 13 clip →
+  resume slot) lulus; 3× `NOTA_VIZ_TEST`+`NOTA_VISUAL_UNDO_TEST` lulus dengan flag
+  `canUndo/canRedo` benar; 5 save beruntun saat scene Drop → 13 clip + 2 media tetap; 20
+  launch cepat berakhir konsisten di scene terakhir; 3× save/quit/reopen → 13 clip/4 UID;
+  Eco 30 fps, +200 ms offset, lalu Quality 60 fps/0 ms; demo tetap 13 clip.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

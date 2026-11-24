@@ -150,6 +150,10 @@ diffs are in `patches/`.
   layers empty and dropped all clips. The engine now falls back to its live uid map when the
   message is empty, and adopts the saved layer order when a file has no map but the layer
   count still matches the tracks.
+- **Visuals stopped after a few crashes**: the restart budget was lifetime and never refilled,
+  so three engine exits over a long session left the visuals down until the app restarted.
+  A run of 15 s now refills the budget, and an explicit View start resets it; a sustained
+  startup crash loop is still capped at three restarts.
 - **Large media froze the UI**: hashing/copying a picked file now runs off the UI thread.
 - **Empty camera/Syphon lists** showed a blank dialog; they now say what is missing.
 - The FFmpeg availability probe is cached, so it is not re-run on every state poll.

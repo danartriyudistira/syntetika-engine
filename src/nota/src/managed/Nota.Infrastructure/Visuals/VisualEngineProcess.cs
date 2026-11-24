@@ -19,12 +19,15 @@ public sealed class VisualEngineProcess : IDisposable
 {
     public const string BinaryName = "syntetika-visual";
     private const int MaxRestarts = 3;
+    /// A run this long is not part of a startup crash loop, so the restart budget refills.
+    private static readonly TimeSpan HealthyRun = TimeSpan.FromSeconds(15);
 
     private readonly VisualBridge _bridge;
     private readonly object _gate = new();
     private Process? _process;
     private bool _stopping;
     private int _restarts;
+    private long _startedAtTicks;
     private Timer? _restartTimer;
     private StreamWriter? _log;
 
@@ -82,6 +85,9 @@ public sealed class VisualEngineProcess : IDisposable
             string? path = FindBinary();
             if (path is null) return;
             _stopping = false;
+            // An explicit start (app launch or View ▸ Visual Output) is a fresh intent: give
+            // the engine a full restart budget even after a crash loop used it up.
+            Interlocked.Exchange(ref _restarts, 0);
             StartCore(path);
         }
     }
@@ -130,6 +136,7 @@ public sealed class VisualEngineProcess : IDisposable
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             _process = process;
+            Interlocked.Exchange(ref _startedAtTicks, DateTime.UtcNow.Ticks);
             WriteLog($"started {path} (pid {process.Id})");
             Current = this;
         }
@@ -155,8 +162,17 @@ public sealed class VisualEngineProcess : IDisposable
         }
         dead?.Dispose();
         if (_stopping || !AutoStart) return;
-        // A crashed engine takes the visuals with it; try a few times, then stay down.
-        if (Interlocked.Increment(ref _restarts) > MaxRestarts) return;
+        // A crash loop at startup must not hammer the GPU, but a long healthy run is not part
+        // of that loop: refill the budget so three crashes over a session never leave the
+        // visuals permanently down.
+        long started = Interlocked.Exchange(ref _startedAtTicks, 0);
+        if (started != 0 && DateTime.UtcNow.Ticks - started >= HealthyRun.Ticks)
+            Interlocked.Exchange(ref _restarts, 0);
+        if (Interlocked.Increment(ref _restarts) > MaxRestarts)
+        {
+            WriteLog($"visual engine exited {MaxRestarts + 1} times without a healthy run; staying down");
+            return;
+        }
         _restartTimer?.Dispose();
         _restartTimer = new Timer(_ =>
         {
@@ -173,6 +189,7 @@ public sealed class VisualEngineProcess : IDisposable
     public void Stop()
     {
         _stopping = true;
+        Interlocked.Exchange(ref _startedAtTicks, 0);
         _restartTimer?.Dispose();
         _restartTimer = null;
         Process? p;
