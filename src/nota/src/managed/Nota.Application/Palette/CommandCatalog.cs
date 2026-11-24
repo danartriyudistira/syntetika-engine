@@ -24,7 +24,7 @@ public static class CommandCatalog
         // ---- File -------------------------------------------------------------------------
         C("file.new", Loc.T("common.new_project"), Loc.T("common.file"), Shortcut.Cmd('N'), "create blank empty"),
         C("file.open", Loc.T("commands.open_project"), Loc.T("common.file"), Shortcut.Cmd('O'), "load"),
-        C("file.openLegacy", Loc.T("main.open_legacy"), Loc.T("common.file"), "", "open legacy nota folder bundle"),
+        C("file.openLegacy", Loc.T("main.open_legacy"), Loc.T("common.file"), "", ""),
         C("file.save", Loc.T("commands.save_project"), Loc.T("common.file"), Shortcut.Cmd('S'), "store write"),
         C("file.saveAs", Loc.T("commands.save_project_as"), Loc.T("common.file"), Shortcut.CmdShift('S'), "copy rename"),
         C("file.saveVersion", Loc.T("commands.save_version_with_note"), Loc.T("common.file"), Shortcut.CmdAlt('S'), "snapshot history commit"),

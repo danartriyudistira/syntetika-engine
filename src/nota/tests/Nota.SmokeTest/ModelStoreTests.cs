@@ -16,10 +16,11 @@ internal static class ModelStoreTests
 {
     public static IEnumerable<(bool Ok, string Label)> Run()
     {
-        yield return (ModelCatalog.RuntimeFor("osx-arm64") is { Asset.Entry: "libonnxruntime.1.23.2.dylib" }
+        yield return (ModelCatalog.RuntimeFor("osx-arm64") is { Asset.Entry: "libonnxruntime.dylib" }
                       && ModelCatalog.RuntimeFor("win-x64") is { Asset.Archive: "zip", Asset.Entry: "onnxruntime.dll" }
-                      && ModelCatalog.RuntimeFor("linux-aarch64") is { Asset.Entry: "libonnxruntime.so.1.23.2" }
-                      && ModelCatalog.RuntimeFor("freebsd-x64") is null,
+                      && ModelCatalog.RuntimeFor("linux-aarch64") is { Asset.Entry: "libonnxruntime.so" }
+                      && ModelCatalog.RuntimeFor("freebsd-x64") is null
+                      && ModelCatalog.RuntimeFor("osx-arm64")!.Asset.Url.Contains("api.nuget.org"),
             "every platform Nota ships on has a runtime; others have none");
         yield return (ModelCatalog.RuntimeFor(ModelCatalog.Rid()) is not null, $"…including this one ({ModelCatalog.Rid()})");
         yield return (ModelCatalog.Models.All(m => m.Asset.Sha256.Length == 64 && m.Asset.Size > 0 && m.Asset.Url.StartsWith("https://")),

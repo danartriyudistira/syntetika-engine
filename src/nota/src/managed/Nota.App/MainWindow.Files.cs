@@ -459,7 +459,7 @@ public partial class MainWindow
         if (saveAs || unnamed)
         {
             string? file = await PickContainerPathAsync(Loc.T("main.files.save_nota_project"),
-                ProjectDisplayName() + ProjectContainer.Extension);
+                ProjectDisplayName());
             if (file is null) return false;
             container = file;
             if (dir is null) dir = ProjectContainer.NewWorkingDir();

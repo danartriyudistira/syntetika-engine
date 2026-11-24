@@ -4,9 +4,10 @@
 // The AI models Nota can download, pinned in code: there are only a few, and each goes with
 // the C# that runs it (StemSeparator, PitchTranscriber), so a new model ships with a new Nota
 // rather than through a registry index. Every asset is fixed to a URL, size and sha256.
-//   ONNX Runtime 1.23.2 — microsoft/onnxruntime's own release archives. 1.23 is the last
-//     release with builds for all six targets (Intel Macs included); only the library and its
-//     license files are kept out of each archive.
+//   ONNX Runtime 1.23.2 — Microsoft.ML.OnnxRuntime's NuGet package (one immutable .nupkg with
+//     every RID's native library; 1.23 is the last release with builds for all six targets,
+//     Intel Macs included). The GitHub release archives are gone, so the package is the pinned
+//     source; only the library and its license files are kept.
 //   htdemucs — Demucs v4 (Meta, MIT) exported to ONNX without its STFT by
 //     nota-daw/nota-models/scripts/export_htdemucs.py, published on that repo's releases.
 //   basic-pitch — nmp.onnx straight from spotify/basic-pitch at the v0.4.0 tag.
@@ -38,7 +39,10 @@ public sealed record CatalogModel(StoreModel Info, ModelAsset Asset);
 public static class ModelCatalog
 {
     private const string OrtVersion = "1.23.2";
-    private const string OrtRelease = "https://github.com/microsoft/onnxruntime/releases/download/v" + OrtVersion + "/";
+    private const string OrtNuGet =
+        "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.23.2/microsoft.ml.onnxruntime.1.23.2.nupkg";
+    private const string OrtNuGetSha = "25fe172f7fcdf34f2b5b02c8b997f6b88abc282956849d4af4335af23d0c4e4a";
+    private const long OrtNuGetSize = 123_371_574;
 
     /// <summary>The models and this computer's runtime (null when ONNX Runtime has no build for it).</summary>
     public static (IReadOnlyList<CatalogModel> Models, CatalogModel? Runtime) ForThisPlatform()
@@ -97,14 +101,25 @@ public static class ModelCatalog
             _ => null,
         };
         if (a is not { } r) return null;
-        bool win = rid.StartsWith("win", StringComparison.Ordinal);
-        string dir = $"onnxruntime-{rid}-{OrtVersion}/";
-        string file = $"onnxruntime-{rid}-{OrtVersion}" + (win ? ".zip" : ".tgz");
+        // NuGet's RIDs differ from ONNX Runtime's release archive names.
+        string nugetRid = rid switch
+        {
+            "osx-x86_64" => "osx-x64",
+            "linux-aarch64" => "linux-arm64",
+            _ => rid,
+        };
+        string libName = rid switch
+        {
+            "osx-arm64" or "osx-x86_64" => "libonnxruntime.dylib",
+            "win-x64" or "win-arm64" => "onnxruntime.dll",
+            _ => "libonnxruntime.so",
+        };
+        string lib = $"runtimes/{nugetRid}/native/{libName}";
         return new(new StoreModel(AiModels.Runtime, "ONNX Runtime", Loc.T("model_store.model_catalog.ai_runtime"),
                 Loc.T("model_store.model_catalog.the_library_notas_ai_models"),
-                "Microsoft", "MIT", "https://github.com/microsoft/onnxruntime",
-                r.Size, r.LibSize + 340_000),
-            new ModelAsset(OrtRelease + file, r.Sha, r.Size, win ? "zip" : "tar",
-                [dir + r.Lib, dir + "LICENSE", dir + "ThirdPartyNotices.txt"], Path.GetFileName(r.Lib)));
+                "Microsoft", "MIT", "https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.23.2",
+                OrtNuGetSize, r.LibSize + 340_000),
+            new ModelAsset(OrtNuGet, OrtNuGetSha, OrtNuGetSize, "zip",
+                [lib, "LICENSE", "ThirdPartyNotices.txt"], libName));
     }
 }

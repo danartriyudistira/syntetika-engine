@@ -83,7 +83,12 @@ internal sealed class DownloadJobs
             // Quitting: nothing to show. Otherwise the user pressed Cancel.
             if (!_app.IsCancellationRequested) result = Loc.F("download_jobs.installing_was_cancelled", name);
         }
-        catch (StoreException e) { result = e.Message; sticky = true; }
+        catch (StoreException e)
+        {
+            App.Services.GetRequiredService<ILogSink>().Error($"Installing {key} failed", e);
+            result = e.Message;
+            sticky = true;
+        }
         catch (Exception e)
         {
             App.Services.GetRequiredService<ILogSink>().Error($"Installing {key} failed", e);
@@ -106,7 +111,12 @@ internal sealed class DownloadJobs
         string? result;
         bool sticky = false;
         try { result = await remove(); }
-        catch (StoreException e) { result = e.Message; sticky = true; }
+        catch (StoreException e)
+        {
+            App.Services.GetRequiredService<ILogSink>().Error($"Removing {key} failed", e);
+            result = e.Message;
+            sticky = true;
+        }
         catch (Exception e)
         {
             App.Services.GetRequiredService<ILogSink>().Error($"Removing {key} failed", e);

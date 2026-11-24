@@ -198,6 +198,17 @@ diffs are in `patches/`.
 
 ## Fixed before the first release
 
+- **AI model downloads failed every time**: the pinned ONNX Runtime archive lived on
+  `github.com/microsoft/onnxruntime` release assets, which now 404. The runtime comes from the
+  immutable `Microsoft.ML.OnnxRuntime` 1.23.2 NuGet package (same native libraries, all six
+  RIDs, pinned size and SHA); the first model installs it as before. Download failures now reach
+  the log, not only the status line. Verified live: runtime + basic-pitch install and transcribe
+  an A4 tone.
+- **Save As repeated the container extension**: the suggested name already ended in
+  `.syntetika` and the dialog appended another. The name is suggested without an extension.
+
+## Known limitations
+
 - **Visual writes could resurrect a deleted bundle**: if the project folder was deleted or
   moved while open, the bridge recreated `visuals/` and the quit-save wrote an empty
   composition into it, leaving a folder that looked like a project but had no `project.json`.
