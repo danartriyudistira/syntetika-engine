@@ -569,11 +569,15 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 ## 7t. Demo project + regresi undo/persistensi (24 Nov)
 
 - **Demo**: `~/Documents/Nota Projects/syntetika_demo.nota` (panduan di `DEMO.md`).
-  4 track (Lead/Volt, Drums/Kompakt, Bass/Operator FM Bass, Pad/Pendulum Slow Bloom),
-  124 BPM Cm, 6 scene berisi; 13 clip visual = generator (Tunnel/Bars/Rings/Plasma),
-  1 ISF (DM-NoiseCloud), 1 gambar (ikon Syntetika), 1 video (Sintel, CC BY).
-  Efek blur/kaleido/rgb_split/pixelate, sync 4–8 beat, modulasi LowMid/Bass/BassHits/HighMid,
-  blend Add/Screen. Media di `visuals/media/<sha256>.*`.
+  **Melodic techno** 124 BPM Cm: 5 track (Lead/Aurora Detuned Lead, Arp/Volt Tri Pluck,
+  Drums/Kompakt, Bass/Operator FM Bass, Pad/Pendulum Slow Bloom) + 2 return dengan sends;
+  progresi Cm–Ab–Eb–Bb, bass/arp/pad 16 beat, drum 8 beat. 6 scene berisi; **20 clip visual**
+  di 5 layer = Tunnel/Bars/Rings/Plasma + ISF DM-NoiseCloud + gambar + video, efek
+  blur/kaleido/rgb_split/pixelate/wave/mirror, sync 8–16 beat, modulasi LowMid/Bass/BassHits/
+  HighMid, blend Add/Screen. Media di `visuals/media/<sha256>.*`.
+- **Bukti versi melodic techno**: 20 clip/5 layer bertahan save → quit → buka; 12/12
+  scene × 2 putaran (launch → kill engine → load 20 clip → resume visual) lulus; keenam scene
+  berbunyi di semua track (meter Arp/Lead/Pad/Bass/Drums > 0); render video/ISF/gambar 60 fps.
 - **Bug ditemukan saat uji quit → buka ulang**: Nota mengirim `uids` kosong saat engine-nya
   sudah shutdown, jadi file tersimpan `layout_uids: []`. Saat dibuka, `apply_layout` menganggap
   tidak ada layer yang cocok, membuang 4 layer dan membuat ulang kosong → **13 clip hilang**.

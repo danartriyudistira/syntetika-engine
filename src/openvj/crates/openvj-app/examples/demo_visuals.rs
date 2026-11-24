@@ -1,9 +1,9 @@
 //! Writes the Syntetika demo's visual composition into an open project.
 //!
-//! The audio session is built separately (the Session grid); this fills the matching four
-//! visual layers with generative clips per scene, plus effects and audio modulation. It reads
-//! the project's existing `visuals/composition.json` only for the layout UIDs, size, columns
-//! and layer names, so it works with whatever track order the project saved.
+//! The audio session is built separately (the Session grid); this maps one visual layer to
+//! every playable track and fills the demo's scenes with generative clips, plus effects and
+//! audio modulation. Layers are matched to tracks by name (bottom of the stack first), so it
+//! works with whatever track order the project saved.
 //!
 //! Run:
 //!   cargo run --release -p openvj-app --example demo_visuals -- \
@@ -86,107 +86,178 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = Path::new(&dir);
     let path = dir.join("visuals").join("composition.json");
     let doc: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
-    let mut uids: Vec<String> = doc["layout_uids"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
-        .unwrap_or_default();
-    if uids.is_empty() {
-        // A quit-save before the uid-map fix could write `layout_uids: []`. The project's
-        // track uids still identify the layers, bottom of the stack first.
-        let project: Value = serde_json::from_str(&fs::read_to_string(dir.join("project.json"))?)?;
-        uids = project["tracks"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter(|t| matches!(t["type"].as_u64(), Some(0 | 1)))
-                    .filter_map(|t| t["uid"].as_str().map(str::to_owned))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        uids.reverse();
-    }
     let old = &doc["composition"];
     let width = old["width"].as_u64().unwrap_or(1280) as u32;
     let height = old["height"].as_u64().unwrap_or(720) as u32;
     let columns = old["columns"].as_array().map(|a| a.len()).unwrap_or(8).max(8);
-    let layer_names: Vec<String> = old["layers"]
+    let column_names: Vec<String> = old["columns"]
         .as_array()
-        .map(|a| a.iter().map(|l| l["name"].as_str().unwrap_or("").to_owned()).collect())
+        .map(|a| a.iter().map(|c| c["name"].as_str().unwrap_or("").to_owned()).collect())
         .unwrap_or_default();
 
-    let mut comp = Composition::new(width, height, 4, columns);
-    comp.name = "Syntetika Demo".into();
+    // Playable tracks, bottom of the visual stack first (Nota lists top-to-bottom).
+    let project: Value = serde_json::from_str(&fs::read_to_string(dir.join("project.json"))?)?;
+    let mut tracks: Vec<(String, String)> = project["tracks"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|t| matches!(t["type"].as_u64(), Some(0 | 1)))
+                .filter_map(|t| Some((t["name"].as_str()?.to_owned(), t["uid"].as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default();
+    tracks.reverse();
+    if tracks.is_empty() {
+        return Err("no playable tracks in project.json".into());
+    }
+    let uids: Vec<String> = tracks.iter().map(|(_, uid)| uid.clone()).collect();
+
+    let mut comp = Composition::new(width, height, tracks.len(), columns);
+    comp.name = "Syntetika Demo — Melodic Techno".into();
     comp.bpm = 124.0;
-    for (i, name) in layer_names.iter().take(4).enumerate() {
+    for (i, (name, _)) in tracks.iter().enumerate() {
         comp.layers[i].name = name.clone();
     }
-    comp.layers[0].opacity = 0.85;
-    comp.layers[1].opacity = 0.75;
-    comp.layers[1].blend = BlendMode::Add;
-    comp.layers[2].opacity = 0.8;
-    comp.layers[2].blend = BlendMode::Screen;
-    comp.layers[3].opacity = 0.9;
-
-    // Layer order is bottom -> top: Pad, Bass, Drums, Lead (the project tracks reversed).
-    for (col, name) in [(0, "Void intro"), (3, "Void break"), (4, "Void drop"), (5, "Void outro")] {
-        put(&mut comp, 0, col, GeneratorKind::Tunnel, name, 8.0, "blur", ModSource::LowMid, 0.35);
-    }
-    for (col, name) in [(2, "Bars groove"), (4, "Bars drop")] {
-        put(&mut comp, 1, col, GeneratorKind::Bars, name, 4.0, "kaleido", ModSource::Bass, 0.6);
-    }
-    for (col, name) in [(2, "Rings groove"), (4, "Rings drop")] {
-        put(&mut comp, 2, col, GeneratorKind::Rings, name, 4.0, "rgb_split", ModSource::BassHits, 0.75);
-    }
-    for (col, name) in [(2, "Plasma arp"), (4, "Plasma drop")] {
-        put(&mut comp, 3, col, GeneratorKind::Plasma, name, 4.0, "kaleido", ModSource::HighMid, 0.5);
+    for (i, name) in column_names.iter().take(columns).enumerate() {
+        if let Some(col) = comp.columns.get_mut(i) {
+            col.name = name.clone();
+        }
     }
 
-    // One clip of each media kind, so the demo shows every source type beside the generators.
+    let find = |name: &str| tracks.iter().position(|(n, _)| n.eq_ignore_ascii_case(name));
+    let scene = |word: &str, col: usize| format!("{word} {}", column_names.get(col).map(String::as_str).unwrap_or(""));
+
+    if let Some(pad) = find("Pad") {
+        comp.layers[pad].opacity = 0.85;
+        for col in 0..6 {
+            put(
+                &mut comp,
+                pad,
+                col,
+                GeneratorKind::Tunnel,
+                &scene("Tunnel", col),
+                16.0,
+                "blur",
+                ModSource::LowMid,
+                0.35,
+            );
+        }
+    }
+
+    if let Some(bass) = find("Bass") {
+        comp.layers[bass].opacity = 0.72;
+        comp.layers[bass].blend = BlendMode::Add;
+        for col in [1, 2, 4] {
+            put(&mut comp, bass, col, GeneratorKind::Bars, &scene("Bars", col), 8.0, "kaleido", ModSource::Bass, 0.6);
+        }
+    }
+
     let media_dir = dir.join("visuals").join("media");
-    let isf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../shaders/ghost-arcade/DM-NoiseCloud.fs");
-    if isf.is_file() {
-        put_isf(&mut comp, 1, 1, "DM-NoiseCloud", "Noise pulse", 4.0, "rgb_split", ModSource::BassHits, 0.5);
-        println!("ISF: {}", isf.display());
-    } else {
-        put(&mut comp, 1, 1, GeneratorKind::Bars, "Bars pulse", 4.0, "kaleido", ModSource::Bass, 0.6);
-    }
-
     let image = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../assets/syntetika-icon.svg.png");
-    if image.is_file() {
-        let path = import_media(&media_dir, &image)?;
-        put_source(
-            &mut comp,
-            2,
-            1,
-            ClipSource::Image { path: path.clone().into() },
-            "Glyph pulse",
-            4.0,
-            "pixelate",
-            ModSource::Off,
-            0.0,
-        );
-        println!("image: {path}");
-    } else {
-        put(&mut comp, 2, 1, GeneratorKind::Rings, "Rings pulse", 4.0, "rgb_split", ModSource::BassHits, 0.75);
+    let image_path = if image.is_file() { Some(import_media(&media_dir, &image)?) } else { None };
+    let video = env::var_os("HOME").map(|h| PathBuf::from(h).join("Movies/Sintel_Trailer.mp4")).filter(|p| p.is_file());
+    let video_path = match video {
+        Some(video) => Some(import_media(&media_dir, &video)?),
+        None => None,
+    };
+
+    if let Some(drums) = find("Drums") {
+        comp.layers[drums].opacity = 0.8;
+        comp.layers[drums].blend = BlendMode::Screen;
+        match &image_path {
+            Some(path) => put_source(
+                &mut comp,
+                drums,
+                1,
+                ClipSource::Image { path: path.clone().into() },
+                "Glyph pulse",
+                8.0,
+                "pixelate",
+                ModSource::Off,
+                0.0,
+            ),
+            None => put(
+                &mut comp,
+                drums,
+                1,
+                GeneratorKind::Rings,
+                "Rings pulse",
+                8.0,
+                "rgb_split",
+                ModSource::BassHits,
+                0.75,
+            ),
+        }
+        for col in [2, 4] {
+            put(
+                &mut comp,
+                drums,
+                col,
+                GeneratorKind::Rings,
+                &scene("Rings", col),
+                8.0,
+                "rgb_split",
+                ModSource::BassHits,
+                0.75,
+            );
+        }
     }
 
-    let video = env::var_os("HOME").map(|h| PathBuf::from(h).join("Movies/Sintel_Trailer.mp4")).filter(|p| p.is_file());
-    if let Some(video) = video {
-        let path = import_media(&media_dir, &video)?;
-        put_source(
-            &mut comp,
-            3,
-            3,
-            ClipSource::Video { path: path.clone().into() },
-            "Sintel break",
-            8.0,
-            "kaleido",
-            ModSource::Off,
-            0.0,
-        );
-        println!("video: {path}");
-    } else {
-        put(&mut comp, 3, 3, GeneratorKind::Plasma, "Plasma break", 4.0, "kaleido", ModSource::HighMid, 0.5);
+    if let Some(arp) = find("Arp") {
+        comp.layers[arp].opacity = 0.78;
+        comp.layers[arp].blend = BlendMode::Add;
+        let isf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../shaders/ghost-arcade/DM-NoiseCloud.fs");
+        if isf.is_file() {
+            for (col, effect) in [(0, "rgb_split"), (2, "wave"), (3, "pixelate"), (4, "rgb_split"), (5, "mirror")] {
+                put_isf(
+                    &mut comp,
+                    arp,
+                    col,
+                    "DM-NoiseCloud",
+                    &scene("Noise", col),
+                    8.0,
+                    effect,
+                    ModSource::BassHits,
+                    0.5,
+                );
+            }
+        } else {
+            for col in [0, 2, 3, 4, 5] {
+                put(
+                    &mut comp,
+                    arp,
+                    col,
+                    GeneratorKind::Bars,
+                    &scene("Bars", col),
+                    8.0,
+                    "wave",
+                    ModSource::BassHits,
+                    0.5,
+                );
+            }
+        }
+    }
+
+    if let Some(lead) = find("Lead") {
+        comp.layers[lead].opacity = 0.95;
+        match &video_path {
+            Some(path) => put_source(
+                &mut comp,
+                lead,
+                3,
+                ClipSource::Video { path: path.clone().into() },
+                "Sintel break",
+                8.0,
+                "kaleido",
+                ModSource::Off,
+                0.0,
+            ),
+            None => {
+                put(&mut comp, lead, 3, GeneratorKind::Plasma, "Plasma break", 8.0, "kaleido", ModSource::HighMid, 0.5)
+            }
+        }
+        put(&mut comp, lead, 4, GeneratorKind::Plasma, "Plasma drop", 8.0, "kaleido", ModSource::HighMid, 0.5);
+        put(&mut comp, lead, 5, GeneratorKind::Plasma, "Plasma outro", 16.0, "blur", ModSource::HighMid, 0.4);
     }
 
     let out = json!({
@@ -195,6 +266,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "composition": serde_json::to_value(&comp)?,
     });
     fs::write(&path, serde_json::to_string_pretty(&out)?)?;
+    if let Some(path) = &image_path {
+        println!("image: {path}");
+    }
+    if let Some(path) = &video_path {
+        println!("video: {path}");
+    }
     println!(
         "wrote {} ({} layers, {} columns, {} clips)",
         path.display(),
