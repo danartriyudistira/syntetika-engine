@@ -67,6 +67,16 @@ else
   echo "   (visual engine not found at ${VISUAL_BIN}; the app will look for one at runtime)"
 fi
 
+# ISF shaders (the Ghost Arcade pack plus Syntetika's own). The engine looks in
+# Contents/Resources/shaders at runtime, so a distributed bundle needs its own copy.
+SHADERS_SRC="${NOTA_SHADERS_DIR:-$(pwd)/../openvj/shaders}"
+if [ -d "${SHADERS_SRC}" ]; then
+  mkdir -p "${CONTENTS}/Resources/shaders"
+  ditto "${SHADERS_SRC}" "${CONTENTS}/Resources/shaders"
+else
+  echo "   (shader folder not found at ${SHADERS_SRC})"
+fi
+
 # FFmpeg (decode-only, LGPL) sits next to the visual engine; `tool_path` finds it there.
 FFMPEG_SRC="${NOTA_FFMPEG_DIR:-$(pwd)/../openvj/target/ffmpeg}"
 if [ -x "${FFMPEG_SRC}/bin/ffmpeg" ]; then

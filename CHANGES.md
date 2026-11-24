@@ -17,6 +17,8 @@ diffs are in `patches/`.
 - `scripts/package-dmg-syntetika.sh` wraps the built bundle in a drag-to-Applications
   `.dmg` (hdiutil only) with a checksum; it carries the product version and a Gatekeeper
   note. Ad-hoc signed and not notarized, so another Mac needs **Open Anyway** once.
+- ISF shaders (the Ghost Arcade pack and Syntetika's own) ship inside the bundle at
+  `Contents/Resources/shaders`; `bundle-mac.sh` copies them next to the app.
 - MCP server name is `Syntetika Engine`; default port 3910 (3900 is a stock Nota install).
 
 ## Nota fork
@@ -141,6 +143,9 @@ diffs are in `patches/`.
 - **Performance**: `set_live_thumbnails(false)` in performance mode with a one-shot static
   paint; prewarm queue; slow-render diagnostics; stopped-transport PLL fix.
 - **Branding**: window title and wordmark “Syntetika Visual”; binary `syntetika-visual`.
+- **Shader pack**: Ghost Arcade ISF plus Syntetika's `ink-kaleido` — an eight-fold monochrome
+  ink kaleidoscope (rings, shards, snake bands, star, smoke, grain) used by the industrial
+  demo.
 - **Output window**: always on top, and Nota can show/hide it over the bridge (`vizOutput`),
   with `vizOut` reports keeping the menu checkmark in step.
 

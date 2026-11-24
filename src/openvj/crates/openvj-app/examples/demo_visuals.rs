@@ -1,9 +1,8 @@
-//! Writes the Syntetika demo's visual composition into an open project.
+//! Writes the 3-layer industrial demo's visuals into an open project.
 //!
-//! The audio session is built separately (the Session grid); this maps one visual layer to
-//! every playable track and fills the demo's scenes with generative clips, plus effects and
-//! audio modulation. Layers are matched to tracks by name (bottom of the stack first), so it
-//! works with whatever track order the project saved.
+//! One layer per playable track (bottom of the stack first). Each layer plays the bespoke
+//! `ink-kaleido` shader with its own zoom, phase, hatching and blend, covering the five
+//! sections. Falls back to built-in generators when the shader pack isn't present.
 //!
 //! Run:
 //!   cargo run --release -p openvj-app --example demo_visuals -- \
@@ -12,73 +11,37 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use openvj_core::{BlendMode, ClipSource, Composition, Effect, GeneratorKind, ModSource, Modulation, PlayMode};
+use openvj_core::{BlendMode, ClipSource, Composition, Effect, GeneratorKind, ModSource, Modulation, Param, PlayMode};
 use serde_json::{Value, json};
 
-fn put_source(
+fn add_clip(
     comp: &mut Composition,
     layer: usize,
     col: usize,
     source: ClipSource,
     name: &str,
     sync: f32,
-    effect: &str,
+    effect: Option<&str>,
     source_mod: ModSource,
     amount: f32,
+    params: &[(&str, f32)],
 ) {
+    let mut source = source;
+    if let ClipSource::Isf { generator } = &mut source {
+        for (key, value) in params {
+            generator.params.insert((*key).to_owned(), Param::new(*value));
+        }
+    }
     let Some(_) = comp.set_clip(layer, col, source) else { return };
     let Some(clip) = comp.clip_mut(layer, col) else { return };
     clip.name = name.to_owned();
     clip.sync_beats = Some(sync);
     clip.play_mode = PlayMode::Loop;
-    clip.effects.push(Effect::new(effect));
-    clip.mods[0] = Modulation { source: source_mod, amount, ..Default::default() };
-}
-
-fn put(
-    comp: &mut Composition,
-    layer: usize,
-    col: usize,
-    kind: GeneratorKind,
-    name: &str,
-    sync: f32,
-    effect: &str,
-    source: ModSource,
-    amount: f32,
-) {
-    put_source(comp, layer, col, ClipSource::Generator { kind }, name, sync, effect, source, amount);
-}
-
-/// Copies a file into the bundle's content-addressed media folder and returns its
-/// `media/<sha256>.<ext>` path, the form `vizLoad` resolves inside the project.
-fn import_media(media_dir: &Path, src: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let out = Command::new("shasum").arg("-a").arg("256").arg(src).output()?;
-    if !out.status.success() {
-        return Err(format!("shasum failed for {}", src.display()).into());
+    if let Some(effect) = effect {
+        clip.effects.push(Effect::new(effect));
     }
-    let hash = String::from_utf8(out.stdout)?.split_whitespace().next().ok_or("empty shasum output")?.to_owned();
-    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("bin");
-    let name = format!("{hash}.{ext}");
-    fs::create_dir_all(media_dir)?;
-    fs::copy(src, media_dir.join(&name))?;
-    Ok(format!("media/{name}"))
-}
-
-/// An ISF clip references the shader by id; the app's bundled shader pack supplies it.
-fn put_isf(
-    comp: &mut Composition,
-    layer: usize,
-    col: usize,
-    id: &str,
-    name: &str,
-    sync: f32,
-    effect: &str,
-    source: ModSource,
-    amount: f32,
-) {
-    put_source(comp, layer, col, ClipSource::Isf { generator: Effect::new(id) }, name, sync, effect, source, amount);
+    clip.mods[0] = Modulation { source: source_mod, amount, ..Default::default() };
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -113,8 +76,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let uids: Vec<String> = tracks.iter().map(|(_, uid)| uid.clone()).collect();
 
     let mut comp = Composition::new(width, height, tracks.len(), columns);
-    comp.name = "Syntetika Demo — Atmospheric House 5:15".into();
-    comp.bpm = 122.0;
+    comp.name = "Syntetika Demo — Ink Industrial 2:59".into();
+    comp.bpm = 105.0;
     for (i, (name, _)) in tracks.iter().enumerate() {
         comp.layers[i].name = name.clone();
     }
@@ -124,222 +87,102 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let shader = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../shaders/syntetika/ink-kaleido.fs");
+    let has_ink = shader.is_file();
     let find = |name: &str| tracks.iter().position(|(n, _)| n.eq_ignore_ascii_case(name));
     let scene = |word: &str, col: usize| format!("{word} {}", column_names.get(col).map(String::as_str).unwrap_or(""));
 
-    let media_dir = dir.join("visuals").join("media");
-    let image = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../assets/syntetika-icon.svg.png");
-    let image_path = if image.is_file() { Some(import_media(&media_dir, &image)?) } else { None };
-    let video = env::var_os("HOME").map(|h| PathBuf::from(h).join("Movies/Sintel_Trailer.mp4")).filter(|p| p.is_file());
-    let video_path = match video {
-        Some(video) => Some(import_media(&media_dir, &video)?),
-        None => None,
-    };
-    let has = |name: &str| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../shaders/ghost-arcade/{name}.fs")).is_file()
-    };
-
-    // Bottom layer: the sub drone as a deep tunnel through every section.
-    if let Some(sub) = find("Sub") {
-        comp.layers[sub].opacity = 0.9;
-        for col in 0..7 {
-            put(
+    // Five sections: Intro, Drop 1, Break, Drop 2, Outro.
+    for col in 0..5 {
+        if let Some(layer) = find("DrumBrute") {
+            comp.layers[layer].opacity = 0.95;
+            let source = if has_ink {
+                ClipSource::Isf { generator: Effect::new("ink-kaleido") }
+            } else {
+                ClipSource::Generator { kind: GeneratorKind::Rings }
+            };
+            add_clip(
                 &mut comp,
-                sub,
+                layer,
                 col,
-                GeneratorKind::Tunnel,
-                &scene("Tunnel", col),
-                16.0,
-                "blur",
-                ModSource::LowMid,
-                0.35,
+                source,
+                &scene("Brute ink", col),
+                8.0,
+                None,
+                ModSource::BassHits,
+                0.3,
+                &[
+                    ("speed", 0.20),
+                    ("zoom", 1.55),
+                    ("phase", 0.0),
+                    ("hatch", 0.72),
+                    ("grain", 0.33),
+                    ("contrast", 2.05),
+                    ("smoke", 0.55),
+                    ("star", 0.60),
+                ],
             );
         }
-    }
-
-    if let Some(drums) = find("Drums") {
-        comp.layers[drums].opacity = 0.8;
-        comp.layers[drums].blend = BlendMode::Screen;
-        match &image_path {
-            Some(path) => put_source(
+        if let Some(layer) = find("Model D") {
+            comp.layers[layer].opacity = 0.25;
+            comp.layers[layer].blend = BlendMode::Normal;
+            let source = if has_ink {
+                ClipSource::Isf { generator: Effect::new("ink-kaleido") }
+            } else {
+                ClipSource::Generator { kind: GeneratorKind::Bars }
+            };
+            add_clip(
                 &mut comp,
-                drums,
-                0,
-                ClipSource::Image { path: path.clone().into() },
-                "Glyph intro",
-                8.0,
-                "pixelate",
-                ModSource::Off,
-                0.0,
-            ),
-            None => put(
-                &mut comp,
-                drums,
-                0,
-                GeneratorKind::Rings,
-                "Rings intro",
-                8.0,
-                "rgb_split",
-                ModSource::BassHits,
-                0.75,
-            ),
-        }
-        for col in [1, 2, 3, 5] {
-            put(
-                &mut comp,
-                drums,
+                layer,
                 col,
-                GeneratorKind::Rings,
-                &scene("Rings", col),
+                source,
+                &scene("Bass ink", col),
                 8.0,
-                "rgb_split",
-                ModSource::BassHits,
-                0.75,
+                None,
+                ModSource::Bass,
+                0.2,
+                &[
+                    ("speed", 0.20),
+                    ("zoom", 1.55),
+                    ("phase", 0.00),
+                    ("hatch", 0.72),
+                    ("grain", 0.33),
+                    ("contrast", 2.05),
+                    ("smoke", 0.55),
+                    ("star", 0.60),
+                ],
             );
         }
-    }
-
-    if let Some(bass) = find("Bass") {
-        comp.layers[bass].opacity = 0.72;
-        comp.layers[bass].blend = BlendMode::Add;
-        for col in [1, 2, 3, 5] {
-            put(&mut comp, bass, col, GeneratorKind::Bars, &scene("Bars", col), 8.0, "kaleido", ModSource::Bass, 0.6);
-        }
-    }
-
-    if let Some(pad) = find("Pad") {
-        comp.layers[pad].opacity = 0.85;
-        if has("SM-LiquidFill") {
-            for col in 0..7 {
-                put_isf(
-                    &mut comp,
-                    pad,
-                    col,
-                    "SM-LiquidFill",
-                    &scene("Liquid", col),
-                    16.0,
-                    "wave",
-                    ModSource::LowMid,
-                    0.4,
-                );
-            }
-        } else {
-            for col in 0..7 {
-                put(
-                    &mut comp,
-                    pad,
-                    col,
-                    GeneratorKind::Plasma,
-                    &scene("Plasma", col),
-                    16.0,
-                    "wave",
-                    ModSource::LowMid,
-                    0.4,
-                );
-            }
-        }
-    }
-
-    if let Some(atmos) = find("Atmos") {
-        comp.layers[atmos].opacity = 0.55;
-        comp.layers[atmos].blend = BlendMode::Add;
-        if has("DM-NoiseCloud") {
-            for col in 0..7 {
-                put_isf(
-                    &mut comp,
-                    atmos,
-                    col,
-                    "DM-NoiseCloud",
-                    &scene("Cloud", col),
-                    16.0,
-                    "mirror",
-                    ModSource::HighMid,
-                    0.45,
-                );
-            }
-        } else {
-            for col in 0..7 {
-                put(
-                    &mut comp,
-                    atmos,
-                    col,
-                    GeneratorKind::Bars,
-                    &scene("Bars", col),
-                    16.0,
-                    "mirror",
-                    ModSource::HighMid,
-                    0.45,
-                );
-            }
-        }
-    }
-
-    if let Some(arp) = find("Arp") {
-        comp.layers[arp].opacity = 0.7;
-        comp.layers[arp].blend = BlendMode::Screen;
-        if has("AR-HarmonicVoronoi") {
-            for col in 0..7 {
-                put_isf(
-                    &mut comp,
-                    arp,
-                    col,
-                    "AR-HarmonicVoronoi",
-                    &scene("Voronoi", col),
-                    8.0,
-                    "rgb_split",
-                    ModSource::BassHits,
-                    0.5,
-                );
-            }
-        } else {
-            for col in 0..7 {
-                put(
-                    &mut comp,
-                    arp,
-                    col,
-                    GeneratorKind::Rings,
-                    &scene("Rings", col),
-                    8.0,
-                    "rgb_split",
-                    ModSource::BassHits,
-                    0.5,
-                );
-            }
-        }
-    }
-
-    if let Some(lead) = find("Lead") {
-        comp.layers[lead].opacity = 0.95;
-        for col in [2, 3, 5] {
-            put(
+        if let Some(layer) = find("Kobol") {
+            comp.layers[layer].opacity = 0.22;
+            comp.layers[layer].blend = BlendMode::Normal;
+            let source = if has_ink {
+                ClipSource::Isf { generator: Effect::new("ink-kaleido") }
+            } else {
+                ClipSource::Generator { kind: GeneratorKind::Plasma }
+            };
+            add_clip(
                 &mut comp,
-                lead,
+                layer,
                 col,
-                GeneratorKind::Plasma,
-                &scene("Plasma", col),
+                source,
+                &scene("Kobol ink", col),
                 8.0,
-                "kaleido",
+                None,
                 ModSource::HighMid,
-                0.5,
+                0.25,
+                &[
+                    ("speed", 0.20),
+                    ("zoom", 1.55),
+                    ("phase", 0.00),
+                    ("hatch", 0.72),
+                    ("grain", 0.33),
+                    ("contrast", 2.05),
+                    ("smoke", 0.55),
+                    ("star", 0.60),
+                ],
             );
         }
-        match &video_path {
-            Some(path) => put_source(
-                &mut comp,
-                lead,
-                4,
-                ClipSource::Video { path: path.clone().into() },
-                "Sintel break",
-                8.0,
-                "kaleido",
-                ModSource::Off,
-                0.0,
-            ),
-            None => {
-                put(&mut comp, lead, 4, GeneratorKind::Plasma, "Plasma break", 8.0, "kaleido", ModSource::HighMid, 0.5)
-            }
-        }
-        put(&mut comp, lead, 6, GeneratorKind::Plasma, "Plasma tail", 16.0, "blur", ModSource::HighMid, 0.4);
     }
 
     let out = json!({
@@ -348,18 +191,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "composition": serde_json::to_value(&comp)?,
     });
     fs::write(&path, serde_json::to_string_pretty(&out)?)?;
-    if let Some(path) = &image_path {
-        println!("image: {path}");
-    }
-    if let Some(path) = &video_path {
-        println!("video: {path}");
-    }
     println!(
-        "wrote {} ({} layers, {} columns, {} clips)",
+        "wrote {} ({} layers, {} columns, {} clips, ink shader: {})",
         path.display(),
         comp.layers.len(),
         comp.columns.len(),
-        comp.all_clips().count()
+        comp.all_clips().count(),
+        has_ink
     );
     Ok(())
 }

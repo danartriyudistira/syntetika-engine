@@ -569,19 +569,16 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 ## 7t. Demo project + regresi undo/persistensi (24 Nov)
 
 - **Demo**: `~/Documents/Nota Projects/syntetika_demo.nota` (panduan di `DEMO.md`).
-  **Atmospheric melodic house / progressive** 122 BPM F minor, **5:15** otomatis lewat Follow
-  Actions. 7 track (Lead/Aurora Detuned Lead, Arp/Volt Tri Pluck, Atmos/Aurora Glacier Pad,
-  Pad/Pendulum Slow Bloom, Bass/Monolith Taurus Bass, Drums/Kompakt, Sub/Aurora Sub Bass) +
-  2 return dengan sends. Progresi Fm–Db–Ab–Eb; bass/arp/pad/lead 16 beat, drum 8 beat.
-  7 bagian (Intro/Build/Main/Peak/Breakdown/Final/Outro) dengan follow 132/142/81/71/102/81/31
-  beat; **49 slot** audio (termasuk “Rest”) dan **42 clip visual** di 7 layer =
-  Tunnel/Bars/Rings/Plasma + ISF SM-LiquidFill/DM-NoiseCloud/AR-HarmonicVoronoi + gambar +
-  video, efek blur/kaleido/rgb_split/pixelate/wave/mirror, sync 8–16 beat, modulasi audio.
-  Media di `visuals/media/<sha256>.*`.
-- **Bukti**: 42 clip/7 layer bertahan save → quit → buka; 14/14 uji bagian × 2 putaran
-  (launch → kill engine → load 42 clip → resume visual) lulus; semua bagian berbunyi; render
-  7 layer + 3 ISF + video/gambar **60 fps**; run 5:15 otomatis: transisi 0/66/137/175/211/261/
-  301 dtk dan stop 315 dtk.
+  **Ink Industrial** 105 BPM F minor, **2:59** otomatis lewat Follow Actions. 3 layer:
+  DrumBrute (drum rack Volta), Model D (Monolith Reese Bass, unison detune, Valve+Crush),
+  Kobol (Monolith Portamento) + 2 return. Follow presisi 61,25/64,75/92,75/70/24,5 beat
+  (total 313,25 ≈ 2:59); **15 slot** audio dan **15 clip visual** di 3 layer memakai shader
+  baru `syntetika/ink-kaleido` (kaleidoskop tinta 8 arah, monokrom, cincin/pecahan/ular/
+  bintang, asap, grain). Versi 5:15 atmospheric house disimpan sebagai
+  `syntetika_atmospheric_5m15.nota`.
+- **Bukti**: 15 clip/3 layer bertahan save → quit → buka; run otomatis transisi
+  35,3/72,6/125,0/165,3 dtk dan stop 179,4 dtk; visual semua kolom 0–4 ter-apply; render
+  3 layer ISF **60 fps**; semua layer berbunyi di tiap bagian.
 - **Bug ditemukan saat uji quit → buka ulang**: Nota mengirim `uids` kosong saat engine-nya
   sudah shutdown, jadi file tersimpan `layout_uids: []`. Saat dibuka, `apply_layout` menganggap
   tidak ada layer yang cocok, membuang 4 layer dan membuat ulang kosong → **13 clip hilang**.
@@ -604,8 +601,8 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   (ISF AR-Lissajous 574 ms/frame → diganti DM-NoiseCloud 98 ms frame pertama, lalu ~1,5 ms).
   Tap live 48 kHz; jalur 44,1 kHz tetap dicakup unit test audio. Preview-clear & strobe
   berhenti saat beat beku dicakup tes render.
-- **Catatan uji**: `launch_scene` lewat MCP hanya memicu audio; launch visual mengikuti jalur
-  UI (palette “Launch scene”) atau replay-on-reconnect. Scene lain diuji lewat replay tersebut.
+- **Catatan uji**: launch scene lewat MCP kini juga menyinkronkan visual (poll 250 ms);
+  launch UI tetap mengirim di quantum.
 
 ## 7u. Restart engine visual: budget & pemulihan (24 Nov)
 
@@ -642,6 +639,19 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Bukti**: run 5:15 otomatis — transisi 0/66,4/136,7/174,8/211,0/261,1/301,2 dtk, stop
   315,3 dtk; visual yang di-apply tepat per bagian (Intro 0,1,3,4,5; Build +2; Main/Peak/Final
   semua 7; Breakdown/Outro 0,3,4,5,6). Semua bagian punya visual; tidak ada retrigger ganda.
+
+## 7w. Shader tinta + bundling ISF (24 Nov)
+
+- **Visual**: shader ISF baru `shaders/syntetika/ink-kaleido.fs` — kaleidoskop 8 arah
+  monokrom: cincin jalinan, pecahan geometris, gelombang ular, bintang 8, asap fbm, sinar
+  radial, arsiran, grain; input speed/zoom/phase/hatch/grain/contrast/smoke/star.
+- **Gap packaging ditemukan**: `bundle-mac.sh` tidak pernah menyalin folder shader; app
+  terpasang hanya bisa memuat ISF karena path repo pengembangan masih ada. Sekarang bundle
+  menyalin `../openvj/shaders` ke `Contents/Resources/shaders` (termasuk pak Ghost Arcade).
+- **Bukti**: `check_isf` 1 generator, 0 error; render frame uji via
+  `openvj-render/examples/render_isf.rs` + `render_column.rs`; 3 layer di app 60 fps;
+  shader ada di bundle terpasang. Run 2:59 transisi 35,3/72,6/125,0/165,3 dtk, stop 179,4 dtk;
+  semua kolom visual 0–4 ter-apply.
 
 ## 8. Risiko
 
