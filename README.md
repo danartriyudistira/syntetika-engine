@@ -31,8 +31,11 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 - **Selection mirroring** — selecting a clip in NotA selects and previews it in openVJ.
 - **OpenVJ tab** — the selected clip's visual parameters, transform and full effect chain,
   edited with Nota's own sliders; two-way with openVJ's UI.
+- **One-file projects** — save a whole project (audio, visuals, media, version history) as a
+  single `.syntetika` file; copy it to another Mac and open it. Legacy `.nota` folders still
+  open and migrate on Save As.
 - **Media sources** — generators, ISF, images, video (bundled decode-only FFmpeg), cameras and
-  Syphon; media is copied into the project bundle so it travels with the `.nota` file.
+  Syphon; media is copied into the project bundle so it travels with the project.
 - **Video clips with sound in Nota** — drop a video on an audio Session slot: its audio is
   extracted into the slot and its picture becomes the slot's visual, beat-synced to the clip.
   Trimming the audio's start/end or looping it retimes and trims the video with it, with

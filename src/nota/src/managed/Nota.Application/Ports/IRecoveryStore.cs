@@ -20,5 +20,6 @@ public interface IRecoveryStore
     /// <summary>Removes the snapshot after the user restores or discards it.</summary>
     void ClearRecovery();
     /// <summary>Autosaves a snapshot if the project changed since the last one.</summary>
-    void Autosave(IAudioEngine engine, TransportState transport, string? originalPath);
+    void Autosave(IAudioEngine engine, TransportState transport, string? originalPath,
+                  string? sourceBundle = null);
 }

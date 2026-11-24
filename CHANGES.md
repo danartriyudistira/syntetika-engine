@@ -23,6 +23,16 @@ diffs are in `patches/`.
 
 ## Nota fork
 
+- **One-file projects (`.syntetika`)**: a project can be a single ZIP container holding the
+  bundle Nota already wrote — `project.json`, sidecars, samples, plugin states, visuals/media
+  and the version history — plus a small `.package/manifest.json`. Opening extracts it to a
+  working folder and the rest of the app keeps using a bundle; saving writes the folder and
+  packs it back atomically (temp + rename). New projects and Save As use the file; a legacy
+  `.nota` folder opens from File → **Open Legacy .nota Folder…**, saves as a folder, and is
+  copied into a working folder when Save As migrates it to a container (the old folder stays as
+  a backup). Recent Projects, the Projects browser, version switches and crash recovery know
+  both forms. Media already compressed is stored in the zip; JSON/samples deflate.
+
 - **Session decks**: a Nota deck is a page of scene rows that shares the tracks, instruments,
   devices and mixer. The deck bar sits under the Session grid (tabs left, **+ Deck** right;
   right-click a tab for Rename / Duplicate / Remove; the last deck stays). Switching decks

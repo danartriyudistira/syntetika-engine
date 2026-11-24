@@ -6,6 +6,7 @@
 // touching the engine, and cached by the manifest's write time and size so a folder of
 // projects is read once. The cache is disposable: missing or corrupt, it is rebuilt.
 
+using System.IO.Compression;
 using System.Text.Json;
 using Nota.Application.Browser;
 
@@ -33,6 +34,7 @@ public sealed class ProjectSummaryReader : IProjectSummaries
 
     public ProjectSummary? Get(string bundlePath)
     {
+        if (ProjectContainer.IsContainer(bundlePath)) return GetContainer(bundlePath);
         var manifest = Path.Combine(bundlePath, ProjectDates.ManifestName);
         FileInfo fi;
         try { fi = new FileInfo(manifest); if (!fi.Exists) return null; }
@@ -57,6 +59,44 @@ public sealed class ProjectSummaryReader : IProjectSummaries
         return sum;
     }
 
+    /// <summary>The summary of a one-file project: the manifest is a zip entry.</summary>
+    private ProjectSummary? GetContainer(string file)
+    {
+        FileInfo fi;
+        try { fi = new FileInfo(file); if (!fi.Exists) return null; }
+        catch { return null; }
+        string stamp = $"{fi.LastWriteTimeUtc.Ticks}:{fi.Length}";
+        lock (_gate)
+        {
+            var cache = Load();
+            if (cache.TryGetValue(file, out var hit) && hit.Stamp == stamp)
+                return new ProjectSummary(hit.Bpm, hit.Key, hit.Tracks, hit.LengthBeats);
+        }
+        ProjectSummary? sum = null;
+        try
+        {
+            using ZipArchive zip = ZipFile.OpenRead(file);
+            ZipArchiveEntry? entry = zip.GetEntry(ProjectDates.ManifestName);
+            if (entry is not null)
+            {
+                using Stream s = entry.Open();
+                using var ms = new MemoryStream();
+                s.CopyTo(ms);
+                using var doc = JsonDocument.Parse(ms.ToArray());
+                sum = ReadRoot(doc.RootElement, null);
+            }
+        }
+        catch { return null; }
+        if (sum is null) return null;
+        lock (_gate)
+        {
+            var cache = Load();
+            cache[file] = new Entry { Stamp = stamp, Bpm = sum.Bpm, Key = sum.Key, Tracks = sum.TrackCount, LengthBeats = sum.LengthBeats };
+            Save(cache);
+        }
+        return sum;
+    }
+
     /// <summary>Reads the summary of one bundle (no cache); null when its manifest is missing
     /// or not a project.</summary>
     public static ProjectSummary? Read(string bundlePath)
@@ -64,8 +104,15 @@ public sealed class ProjectSummaryReader : IProjectSummaries
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(bundlePath, ProjectDates.ManifestName)));
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
+            return ReadRoot(doc.RootElement, bundlePath);
+        }
+        catch { return null; }
+    }
+
+    // The manifest body; `bundlePath` is null for a container (no side files to inspect).
+    private static ProjectSummary? ReadRoot(JsonElement root, string? bundlePath)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
             double bpm = 120;
             string? key = null;
             if (Prop(root, "transport") is { ValueKind: JsonValueKind.Object } tr)
@@ -91,14 +138,12 @@ public sealed class ProjectSummaryReader : IProjectSummaries
                 }
             }
             return new ProjectSummary(bpm, key, tracks, end);
-        }
-        catch { return null; }
     }
 
     // How many beats an audio clip covers: a warped clip says so in beats; an unwarped one
     // plays its frames at the file's rate (read from the WAV header when the clip runs to
     // the end of its sample).
-    private static double AudioBeats(string bundle, JsonElement c, double bpm)
+    private static double AudioBeats(string? bundle, JsonElement c, double bpm)
     {
         if (Num(c, "warpEnabled") != 0)
         {
@@ -107,7 +152,8 @@ public sealed class ProjectSummaryReader : IProjectSummaries
         }
         long frames = (long)Num(c, "lengthFrames");
         string? sample = Prop(c, "sample") is { ValueKind: JsonValueKind.String } s ? s.GetString() : null;
-        var (rate, total) = sample is { Length: > 0 } ? WavInfo(Path.Combine(bundle, sample)) : (0, 0L);
+        var (rate, total) = sample is { Length: > 0 } && bundle is { Length: > 0 }
+            ? WavInfo(Path.Combine(bundle, sample)) : (0, 0L);
         if (frames <= 0) frames = Math.Max(0, total - (long)Num(c, "sourceOffsetFrames"));
         if (rate <= 0) rate = 48000;
         // Transposing an unwarped clip resamples it, as the engine does: +12 st plays it in half the time.

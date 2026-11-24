@@ -36,7 +36,7 @@ public partial class MainWindow
     {
         if (_vm is null) return;
         NoteDirtySince();
-        try { _recovery.Autosave(Engine, TransportSnapshot(), _projectPath); }
+        try { _recovery.Autosave(Engine, TransportSnapshot(), ProjectDisplayPath, _projectPath); }
         catch { /* autosave is best-effort — never disrupt the session */ }
     }
 
@@ -132,24 +132,38 @@ public partial class MainWindow
     /// bundle. Clears the snapshot so it isn't offered again.</summary>
     private void ApplyPendingRecovery(RecoveryInfo info)
     {
-        OpenProject(info.BundlePath, recordRecent: false);
-        _projectPath = info.OriginalPath;   // next Save targets the real bundle (null → prompt)
-        // The recovery bundle is only a snapshot. Point the visual bridge at the real bundle,
-        // and restore the snapshot's composition (with its media copied somewhere durable —
-        // the snapshot is deleted below) so unsaved visual work survives the crash too.
-        VisualBridge.Current?.SetProjectDir(info.OriginalPath);
-        if (info.OriginalPath is { Length: > 0 } original)
+        string? original = info.OriginalPath;
+        if (original is { Length: > 0 } && ProjectContainer.IsContainer(original))
         {
-            if (!RestoreSnapshotVisuals(info.BundlePath, System.IO.Path.Combine(original, "visuals", "media")))
-                VisualBridge.Current?.VizLoad(original);
-            VisualBridge.Current?.SyncDecks();
-            RecordRecentProject(original);   // the recovery copy is about to be deleted
+            // The working folder is deleted with the snapshot: copy the snapshot into a fresh
+            // one, then open that copy as the project the container will save back into.
+            string working = ProjectContainer.NewWorkingDir();
+            CopyDirectory(info.BundlePath, working);
+            OpenProject(working, recordRecent: false, containerFile: original);
+            if (_projectPath == working) RecordRecentProject(original);
+            else try { System.IO.Directory.Delete(working, recursive: true); } catch { }
         }
         else
         {
-            // Never saved: the save will prompt for a bundle, so keep the media in the staging
-            // folder VizSave already rewrites into the new bundle.
-            RestoreSnapshotVisuals(info.BundlePath, NotaPaths.SubDir("media-staging"));
+            OpenProject(info.BundlePath, recordRecent: false);
+            _projectPath = original;   // next Save targets the real bundle (null → prompt)
+            // The recovery bundle is only a snapshot. Point the visual bridge at the real
+            // bundle, and restore the snapshot's composition (with its media copied somewhere
+            // durable — the snapshot is deleted below) so unsaved visual work survives too.
+            VisualBridge.Current?.SetProjectDir(original);
+            if (original is { Length: > 0 } real)
+            {
+                if (!RestoreSnapshotVisuals(info.BundlePath, System.IO.Path.Combine(real, "visuals", "media")))
+                    VisualBridge.Current?.VizLoad(real);
+                VisualBridge.Current?.SyncDecks();
+                RecordRecentProject(real);   // the recovery copy is about to be deleted
+            }
+            else
+            {
+                // Never saved: the save will prompt for a container, so keep the media in the
+                // staging folder VizSave already rewrites into the new project.
+                RestoreSnapshotVisuals(info.BundlePath, NotaPaths.SubDir("media-staging"));
+            }
         }
         UpdateWindowTitle();
         _cleanFingerprint = null;           // recovered work is unsaved until the user saves it
@@ -167,6 +181,20 @@ public partial class MainWindow
         CopyFiles(System.IO.Path.Combine(snapshotBundle, "visuals", "media"), mediaDir);
         VisualBridge.Current?.VizLoadComposition(composition, mediaDir);
         return true;
+    }
+
+    // A recovery snapshot becomes a real working folder for a container project.
+    private static void CopyDirectory(string from, string to)
+    {
+        if (!System.IO.Directory.Exists(from)) return;
+        System.IO.Directory.CreateDirectory(to);
+        foreach (string file in System.IO.Directory.EnumerateFiles(from, "*", System.IO.SearchOption.AllDirectories))
+        {
+            string rel = System.IO.Path.GetRelativePath(from, file);
+            string target = System.IO.Path.Combine(to, rel);
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(target)!);
+            System.IO.File.Copy(file, target, overwrite: true);
+        }
     }
 
     // Content-named media: an existing file is the same file, so it is never overwritten.

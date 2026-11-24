@@ -59,7 +59,7 @@ public partial class MainWindow
 
         if (error is not null) { _vm.StatusText = error; return; }
         // Reopen only when that's lossless: same project, nothing edited since it opened.
-        if (_projectPath == dir && !HasUnsavedChanges()) OpenProject(dir);
+        if (_projectPath == dir && !HasUnsavedChanges()) OpenProject(dir, recentPath: _projectFile ?? dir, containerFile: _projectFile);
         else _vm.StatusText = one ? Loc.F("main.missing_plugins.installed_reopen_the_project_to", names) : Loc.F("main.missing_plugins.installed_reopen_the_project_to_n", names);
     }
 }

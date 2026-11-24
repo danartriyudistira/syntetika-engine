@@ -755,6 +755,21 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - DMG `Syntetika-Engine-0.1.4-arm64.dmg` 112 MB, ad-hoc signed.
   SHA-256 `6fa760321c9fd881a7087379b268eecd633eb07f7f88d116f216c9d3f2d1b441`.
 
+## 7ad. Satu file project `.syntetika` (WIP)
+
+- **Container**: ZIP berisi layout bundle yang sudah ada (`project.json`, sidecar, `samples/`,
+  `plugin-states/`, `visuals/`, `.history/`) + `.package/manifest.json`. Save menulis working
+  folder lalu pack atomik (tmp + rename); open mengekstrak ke working folder dan seluruh app
+  tetap memakai folder bundle.
+- **UI**: `File → Open…` membuka file `.syntetika`; `File → Open Legacy .nota Folder…` untuk
+  bundle lama. Save As selalu file; migrasi legacy menyalin folder (history ikut) ke working
+  folder, folder lama dibiarkan. Recent, Projects browser, version switch, dan recovery
+  menangani file maupun folder.
+- **Bukti**: tes container (pack/extract byte-identik, media/sample/history, manifest, zip-slip,
+  summary browser) lulus; `--decks` dan `--history` tetap lulus.
+- **Belum**: ekstraksi ulang setiap open (belum ada cache), tidak ada export `.openvj` / import
+  folder lain, dan ukuran file membesar karena history ikut.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

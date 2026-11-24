@@ -37,7 +37,7 @@ public partial class MainWindow
             recent,
             onNew: () => OnMenuNew(this, EventArgs.Empty),
             onOpen: () => _ = DoOpenAsync(),
-            onOpenRecent: dir => OpenProject(dir),
+            onOpenRecent: dir => _ = OpenRecentAsync(dir),
             onSettings: () => new PreferencesWindow(new SettingsViewModel(settings), _vm).ShowDialog(win!),
             onWhatsNew: () => new WhatsNewWindow(AppInfo.UnseenSince("")).ShowDialog(win!),
             showOnStartup: settings.Current.ShowWelcomeOnStartup,
@@ -81,7 +81,7 @@ public partial class MainWindow
         var items = new List<RecentProjectItem>();
         foreach (var path in settings.Current.RecentProjects)
         {
-            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) continue;
+            if (string.IsNullOrWhiteSpace(path) || (!Directory.Exists(path) && !File.Exists(path))) continue;
             var name = Path.GetFileNameWithoutExtension(path.TrimEnd('/', '\\'));
             string modified;
             // The same date the browser's Projects tab shows (spec 092): the last save.

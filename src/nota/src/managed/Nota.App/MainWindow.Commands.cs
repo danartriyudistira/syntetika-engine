@@ -42,6 +42,7 @@ public partial class MainWindow
         // ---- File
         B("file.new", () => OnMenuNew(this, e));
         B("file.open", () => OnMenuOpen(this, e));
+        B("file.openLegacy", () => OnMenuOpenLegacy(this, e));
         B("file.save", () => OnMenuSave(this, e));
         B("file.saveAs", () => OnMenuSaveAs(this, e));
         B("file.saveVersion", () => OnMenuSaveVersion(this, e));

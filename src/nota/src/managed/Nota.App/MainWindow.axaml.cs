@@ -18,6 +18,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
 using Nota.Application;
+using Nota.Infrastructure;
 using Nota.Infrastructure.Visuals;
 using Nota.Application.Editing;
 using Nota.Presentation;
@@ -87,8 +88,11 @@ public partial class MainWindow : Window
 
     private IAudioEngine Engine => _vm!.Engine;
 
+    private static bool _workingDirsCleaned;
+
     public MainWindow()
     {
+        if (!_workingDirsCleaned) { _workingDirsCleaned = true; ProjectContainer.CleanupWorkingDirs(); }
         InitializeComponent();
         InitBottomPanels();    // BodyGrid rows for the docked Mixer + Detail panels (specs/054)
         InitMenuShortcuts();   // Ctrl instead of Win on Windows / Linux, and bound there

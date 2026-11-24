@@ -80,9 +80,10 @@ public sealed class RecoveryService : IRecoveryStore
     /// <summary>Autosaves the snapshot if the project changed since the last autosave.
     /// Returns true if a write happened. <paramref name="originalPath"/> is the real
     /// bundle path (null if the session was never saved).</summary>
-    public bool Autosave(ProjectDocument doc, IAudioEngine engine, string? originalPath)
+    public bool Autosave(ProjectDocument doc, IAudioEngine engine, string? originalPath,
+                         string? sourceBundle = null)
     {
-        bool visuals = SnapshotVisuals(originalPath);
+        bool visuals = SnapshotVisuals(sourceBundle ?? originalPath);
         string manifest = ProjectService.SerializeManifest(doc);
         if (manifest == _lastManifest) return visuals; // audio unchanged; visuals may still be new
         _lastManifest = manifest;
@@ -136,9 +137,10 @@ public sealed class RecoveryService : IRecoveryStore
     }
 
     /// <summary>IRecoveryStore entry point: captures the engine first, then autosaves.</summary>
-    void IRecoveryStore.Autosave(IAudioEngine engine, TransportState transport, string? originalPath)
+    void IRecoveryStore.Autosave(IAudioEngine engine, TransportState transport, string? originalPath,
+                                string? sourceBundle)
     {
         var doc = ProjectService.Capture(engine, transport, new List<string>());
-        Autosave(doc, engine, originalPath);
+        Autosave(doc, engine, originalPath, sourceBundle);
     }
 }

@@ -1166,6 +1166,15 @@ if (args.Length >= 1 && args[0] == "--remote")
     return failures == 0 ? 0 : 1;
 }
 
+// One-file project container alone (fast iteration): `--container`. Also part of the full run.
+if (args.Length >= 1 && args[0] == "--container")
+{
+    Console.WriteLine("-- project: container --");
+    foreach (var (ok, label) in ProjectContainerTests.Run()) Check(ok, label);
+    Console.WriteLine(failures == 0 ? "CONTAINER PASSED" : $"CONTAINER FAILED ({failures})");
+    return failures == 0 ? 0 : 1;
+}
+
 // Session decks alone (fast iteration): `--decks`. Also part of the full run.
 if (args.Length >= 1 && args[0] == "--decks")
 {
@@ -16254,6 +16263,8 @@ foreach (var (ok, label) in ClipEditorTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: content-addressed bundle --");
 foreach (var (ok, label) in BundleContentTests.Run()) Check(ok, label);
 foreach (var (ok, label) in LanguageProjectTests.Run()) Check(ok, label);
+Console.WriteLine("-- project: container --");
+foreach (var (ok, label) in ProjectContainerTests.Run()) Check(ok, label);
 Console.WriteLine("-- session decks --");
 foreach (var (ok, label) in SessionDeckTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: version history --");

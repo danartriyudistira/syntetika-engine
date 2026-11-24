@@ -1413,6 +1413,20 @@ public sealed partial class BrowserViewModel : ObservableObject
                     IsOpen = IsOpenProject(dir),
                 });
             }
+            // One-file projects (.syntetika) sit beside the legacy bundles.
+            foreach (var file in Directory.EnumerateFiles(root, "*" + ".syntetika"))
+            {
+                var modified = Nota.Application.Browser.ProjectDates.Modified(file);
+                rows.Add(new BrowserItem
+                {
+                    Name = Path.GetFileNameWithoutExtension(file),
+                    Kind = BrowserItemKind.Project,
+                    Sub = modified is { } m ? Nota.Application.Browser.ProjectDates.Format(m) : "",
+                    Path = file,
+                    Modified = modified,
+                    IsOpen = IsOpenProject(file),
+                });
+            }
         }
         catch { /* folder missing/unreadable — empty list */ }
 

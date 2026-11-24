@@ -12,6 +12,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Nota.Application;
+using Nota.Infrastructure;
 using Nota.Application.Localization;
 
 namespace Nota.App;
@@ -144,7 +145,19 @@ public partial class MainWindow : IHistoryHost, Nota.Mcp.IProjectVersionsAccess
             _vm.StatusText = Loc.F("main.history.couldnt_switch_version", ex.Message);
             return false;
         }
-        OpenProject(dir);
+        string? container = _projectFile;
+        OpenProject(dir, recentPath: container ?? dir, containerFile: container);
+        // The container file holds the working bundle: a checkout must be packed back or the
+        // one file would still describe the version the user just left.
+        if (container is { Length: > 0 } file)
+        {
+            try { ProjectContainer.Pack(dir, file); }
+            catch (Exception ex)
+            {
+                App.Services.GetRequiredService<ILogSink>().Error("Packing the version into the project file failed", ex);
+                if (_vm is not null) _vm.StatusText = Loc.F("main.files.save_failed", ex.Message);
+            }
+        }
         if (_history.Read(dir).HeadVersion is { } v) _vm.StatusText = Loc.F("main.history.switched_to", DescribeVersion(v));
         return true;
     }

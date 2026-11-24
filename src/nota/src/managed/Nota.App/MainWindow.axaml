@@ -23,6 +23,7 @@
           <NativeMenu>
             <NativeMenuItem Header="{app:T 'main.new'}" app:Commands.Id="file.new"/>
             <NativeMenuItem Header="{app:T 'main.open'}" app:Commands.Id="file.open"/>
+            <NativeMenuItem Header="{app:T 'main.open_legacy'}" app:Commands.Id="file.openLegacy"/>
             <NativeMenuItem Header="{app:T 'main.save'}" app:Commands.Id="file.save"/>
             <NativeMenuItem Header="{app:T 'main.save_as'}" app:Commands.Id="file.saveAs"/>
             <NativeMenuItem Header="{app:T 'main.save_version_with_note'}" app:Commands.Id="file.saveVersion"/>

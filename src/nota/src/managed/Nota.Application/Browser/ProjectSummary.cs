@@ -48,6 +48,7 @@ public static class ProjectDates
             var manifest = Path.Combine(bundlePath, ManifestName);
             if (File.Exists(manifest)) return File.GetLastWriteTime(manifest);
             if (Directory.Exists(bundlePath)) return Directory.GetLastWriteTime(bundlePath);
+            if (File.Exists(bundlePath)) return File.GetLastWriteTime(bundlePath);
         }
         catch { /* unreadable */ }
         return null;

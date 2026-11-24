@@ -14,6 +14,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Nota.Application;
+using Nota.Infrastructure;
 using Nota.Infrastructure.Visuals;
 using Nota.Presentation;
 using Nota.Application.Localization;
@@ -155,8 +156,14 @@ public partial class MainWindow
 
     // --- project save / open (M7-6a) ---------------------------------------
 
-    // Folder holding the currently-open `.nota` bundle (null = never saved).
+    // Folder holding the currently-open bundle (a `.nota` folder or a `.syntetika` container's
+    // extracted working folder). Null = never saved.
     private string? _projectPath;
+    // The one-file project this working folder belongs to (null = legacy `.nota` folder).
+    private string? _projectFile;
+
+    /// <summary>What the user names/reopens: the container file, or the legacy bundle folder.</summary>
+    private string? ProjectDisplayPath => _projectFile ?? _projectPath;
 
     /// <summary>Reflect the open project in the window + title-bar caption
     /// ("Nota — Untitled" until the bundle is named).</summary>
@@ -183,6 +190,8 @@ public partial class MainWindow
                 Loc.T("main.files.save_your_changes_before_starting"))) return;
         _links.Clear();    // no live-freeze links (cleared first: stale ids must not hit the new graph)
         Nota.Application.TrackUids.Clear();   // new project = new track identities
+        string? oldWorking = _projectPath;
+        bool oldWasContainer = _projectFile is not null;
         Engine.Reset();
         // Reset transport to defaults (these setters drive the engine + UI).
         _vm.Transport.Bpm = 120;
@@ -196,8 +205,10 @@ public partial class MainWindow
         _vm.Transport.KeyCode = -1;
         _panLawLegacy = false;     // new projects use the Stereo pan law (set by the template)
         _projectPath = null;
+        _projectFile = null;
         VisualBridge.Current?.SetProjectDir(null);
         VisualBridge.Current?.ResetComposition();   // a new project starts with a blank picture
+        if (oldWasContainer) ReleaseWorkingDir(oldWorking);
         if (_vm is not null) _vm.Browser.OpenProjectPath = null;
         _learn?.Clear();   // start with a clean MIDI-map for the new project
         _devicePages?.LoadProject(null);   // a new project has no pages of its own
@@ -223,6 +234,7 @@ public partial class MainWindow
     }
 
     private void OnMenuOpen(object? sender, EventArgs e) => _ = DoOpenAsync();
+    private void OnMenuOpenLegacy(object? sender, EventArgs e) => _ = DoOpenLegacyFolderAsync();
     private void OnMenuSave(object? sender, EventArgs e) => _ = DoSaveAsync(saveAs: false);
     private void OnMenuSaveAs(object? sender, EventArgs e) => _ = DoSaveAsync(saveAs: true);
     private void OnMenuSaveVersion(object? sender, EventArgs e) => _ = SaveVersionWithNoteAsync();
@@ -231,11 +243,33 @@ public partial class MainWindow
     {
         if (_vm is null) return;
         Activate(); // keep the native panel focused (see DoImportAsync)
+        var files = await this.PickFilesAsync(new FilePickerOpenOptions
+        {
+            Title = Loc.T("main.files.open_project"),
+            AllowMultiple = false,
+            SuggestedStartLocation = await FolderAsync(_vm.Settings.ResolvedProjectsFolder()),
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType(Loc.T("main.files.syntetika_project")) { Patterns = new[] { "*" + ProjectContainer.Extension } },
+            },
+        });
+        var file = files.Count > 0 ? files[0].TryGetLocalPath() : null;
+        if (file is null) return;
+        if (!await ConfirmLeaveChangesAsync(Loc.T("main.files.open_project"),
+                Loc.T("main.files.save_your_changes_before_opening"))) return;
+        OpenContainerProject(file);
+    }
+
+    /// <summary>Legacy `.nota` bundles are folders; they stay readable and saveable.</summary>
+    private async Task DoOpenLegacyFolderAsync()
+    {
+        if (_vm is null) return;
+        Activate();
         var folders = await this.PickFoldersAsync(new FolderPickerOpenOptions
         {
             Title = Loc.T("main.files.open_nota_project_nota_folder"),
             AllowMultiple = false,
-            SuggestedStartLocation = await FolderAsync(_vm.Settings.ResolvedProjectsFolder()),   // #309
+            SuggestedStartLocation = await FolderAsync(_vm.Settings.ResolvedProjectsFolder()),
         });
         if (folders.Count == 0) return;
         var dir = folders[0].TryGetLocalPath();
@@ -245,12 +279,60 @@ public partial class MainWindow
         OpenProject(dir);
     }
 
+    /// <summary>Opens a `.syntetika` file in a fresh working folder.</summary>
+    private void OpenContainerProject(string file)
+    {
+        string? oldWorking = _projectPath;
+        bool oldWasContainer = _projectFile is not null;
+        string working = ProjectContainer.NewWorkingDir();
+        try
+        {
+            ProjectContainer.Extract(file, working);
+        }
+        catch (Exception ex)
+        {
+            try { System.IO.Directory.Delete(working, true); } catch { }
+            App.Services.GetRequiredService<ILogSink>().Error($"Opening container '{file}' failed", ex);
+            if (_vm is not null) _vm.StatusText = Loc.F("main.files.open_failed", ex.Message);
+            return;
+        }
+        OpenProject(working, recordRecent: true, recentPath: file, containerFile: file);
+        if (_projectPath is { Length: > 0 } opened && SamePath(opened, working))
+        {
+            if (oldWasContainer) ReleaseWorkingDir(oldWorking);
+        }
+        else
+        {
+            try { System.IO.Directory.Delete(working, true); } catch { }
+        }
+    }
+
+    /// <summary>Recent Projects entries can be a `.syntetika` file or a legacy folder.</summary>
+    private async Task OpenRecentAsync(string path)
+    {
+        if (!await ConfirmLeaveChangesAsync(Loc.T("main.files.open_project"),
+                Loc.T("main.files.save_your_changes_before_opening"))) return;
+        if (ProjectContainer.IsContainer(path)) OpenContainerProject(path);
+        else OpenProject(path);
+    }
+
+    /// <summary>Drops a container's extracted folder once another project points the engine elsewhere.</summary>
+    private void ReleaseWorkingDir(string? dir)
+    {
+        if (dir is not { Length: > 0 } || _projectPath is { Length: > 0 } current && SamePath(current, dir)) return;
+        string root = System.IO.Path.GetFullPath(NotaPaths.SubDir("working")) + System.IO.Path.DirectorySeparatorChar;
+        string full = System.IO.Path.GetFullPath(dir);
+        if (!full.StartsWith(root, OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase)) return;
+        try { System.IO.Directory.Delete(full, recursive: true); } catch { /* still in use */ }
+    }
+
     // Open another project from the browser, after the unsaved-changes prompt.
     private async Task OpenProjectConfirmedAsync(string dir)
     {
         if (!await ConfirmLeaveChangesAsync(Loc.T("main.files.open_project"),
                 Loc.T("main.files.save_your_changes_before_opening"))) return;
-        OpenProject(dir);
+        if (ProjectContainer.IsContainer(dir)) OpenContainerProject(dir);
+        else OpenProject(dir);
     }
 
     // Bumped on every load so a warp-cache build from a previous open bows out if the user
@@ -270,10 +352,11 @@ public partial class MainWindow
         return trimmed.Length == 0 ? dir : trimmed;
     }
 
-    /// <summary>Loads a .nota bundle and applies it to the engine (menu + browser). M7-4b.
-    /// <paramref name="recordRecent"/> is false for the temporary crash-recovery bundle, which
-    /// is deleted right after it is restored (it must not linger in Recent Projects).</summary>
-    private void OpenProject(string dir, bool recordRecent = true)
+    /// <summary>Loads a bundle folder into the engine. <paramref name="containerFile"/> is the
+    /// `.syntetika` file when <paramref name="dir"/> is its extracted working folder.
+    /// <paramref name="recentPath"/> is what Recent Projects lists (defaults to the folder).</summary>
+    private void OpenProject(string dir, bool recordRecent = true, string? recentPath = null,
+                             string? containerFile = null)
     {
         if (_vm is null) return;
         dir = NormalizeBundlePath(dir);
@@ -300,6 +383,7 @@ public partial class MainWindow
             _vm.Transport.KeyCode = result.Transport.Key;
             _panLawLegacy = result.Transport.PanLawLegacy;
             _projectPath = dir;
+            _projectFile = containerFile;
             VisualBridge.Current?.SetProjectDir(dir);
             VisualBridge.Current?.VizLoad(dir);
             VisualBridge.Current?.SyncDecks();   // the project's deck list is the truth
@@ -313,17 +397,18 @@ public partial class MainWindow
             _modular?.LoadLayout(dir);   // modular-editor node/island positions (sidecar)
             Timeline.LoadTrackView(dir); // track heights + track-list width (sidecar)
             LoadFreezeLinks(dir);        // live-freeze links (v1.1) — re-sleep linked sources
-            if (recordRecent) RecordRecentProject(dir);   // surface it on the welcome screen next launch
+            if (recordRecent) RecordRecentProject(recentPath ?? dir);   // surface it on the welcome screen
             RefreshAfterLoad();
             UpdateWindowTitle();
             MarkProjectClean();
             HistoryChanged?.Invoke();    // the History tab shows this project's versions
             var warnings = result.Warnings;
+            string shown = System.IO.Path.GetFileName(ProjectDisplayPath ?? dir);
             App.Services.GetRequiredService<ILogSink>()
-                .Info($"Opened project '{System.IO.Path.GetFileName(dir)}' · {warnings.Count} warning(s)");
+                .Info($"Opened project '{shown}' · {warnings.Count} warning(s)");
             _vm.StatusText = warnings.Count == 0
-                ? Loc.F("main.files.opened", System.IO.Path.GetFileName(dir))
-                : Loc.F("main.files.opened_item_s_downgraded", System.IO.Path.GetFileName(dir), warnings.Count, warnings[0]);
+                ? Loc.F("main.files.opened", shown)
+                : Loc.F("main.files.opened_item_s_downgraded", shown, warnings.Count, warnings[0]);
             if (result.TempoClamped) _vm.StatusText = Loc.T("project.tempo_clamped");   // specs/099, once: saving drops it
             _ = BuildWarpCachesAsync();   // fill the deferred warp caches in the background
             _ = OfferMissingPluginsAsync(dir, result.MissingPlugins);
@@ -356,8 +441,9 @@ public partial class MainWindow
     }
 
     /// <summary>Saves the project (prompting for a location when unnamed or Save As) and
-    /// records a version in its history, with <paramref name="note"/> if given.
-    /// Returns true only if the bundle was actually written.</summary>
+    /// records a version in its history, with <paramref name="note"/> if given. A
+    /// <c>.syntetika</c> project is written to its working folder and then packed into the
+    /// one file; a legacy <c>.nota</c> folder keeps saving as a folder.</summary>
     private async Task<bool> DoSaveAsync(bool saveAs, string? note = null)
     {
         if (_vm is null) return false;
@@ -366,50 +452,75 @@ public partial class MainWindow
         _editorRoll?.SettlePlacement();
 
         string? dir = _projectPath;
-        if (saveAs || dir is null)
+        string? container = _projectFile;
+        // A recovery working folder without a file is still unnamed: the first save asks for a
+        // container instead of writing into the transient folder.
+        bool unnamed = dir is null || (container is null && ProjectContainer.IsWorkingDir(dir));
+        if (saveAs || unnamed)
         {
-            dir = await PickProjectPathAsync(Loc.T("main.files.save_nota_project"), "Untitled.nota");
-            if (dir is null) return false;
-            dir = NormalizeBundlePath(dir);
+            string? file = await PickContainerPathAsync(Loc.T("main.files.save_nota_project"),
+                ProjectDisplayName() + ProjectContainer.Extension);
+            if (file is null) return false;
+            container = file;
+            if (dir is null) dir = ProjectContainer.NewWorkingDir();
         }
 
         string? previousPath = _projectPath;
+        string? migratedFrom = null;
+        // Save As from a legacy .nota folder: the container must not keep depending on that
+        // folder. Copy the bundle (history included) to a working folder and use it from now on;
+        // the old folder stays on disk as a backup.
+        if (saveAs && container is not null && previousPath is { Length: > 0 } legacy
+            && _projectFile is null && !ProjectContainer.IsWorkingDir(legacy))
+        {
+            string working = ProjectContainer.NewWorkingDir();
+            ProjectContainer.CopyDirectory(legacy, working);
+            dir = working;
+            previousPath = working;   // the history came along; this is not a replaced project
+            migratedFrom = legacy;
+        }
         try
         {
             // Save As over another project replaces it — its history goes with it.
-            if (previousPath is null || !SamePath(previousPath, dir)) DropReplacedHistory(dir);
-            var warnings = _projects.Save(Engine, TransportSnapshot(), dir);
-            _learn?.SaveMappings(dir);   // MIDI-learn mappings ride in the bundle sidecar
-            _devicePages?.SaveProject(dir, Nota.Application.Controllers.FocusedDevice.TypeKeysIn(Engine));   // FR-018a
-            _controllers?.Overrides?.SaveProject(dir, _controllers.TrackIndexOf);   // FR-034
-            _modular?.SaveLayout(dir);   // modular-editor node/island positions (sidecar)
-            Timeline.SaveTrackView(dir); // track heights + track-list width (sidecar)
-            SaveFreezeLinks(dir);        // live-freeze links (v1.1) ride in the bundle sidecar
-            _analysis.AdoptInto(dir);    // analysis cached while unsaved moves into the bundle
+            if (previousPath is null || !SamePath(previousPath, dir!)) DropReplacedHistory(dir!);
+            var warnings = _projects.Save(Engine, TransportSnapshot(), dir!);
+            _learn?.SaveMappings(dir!);   // MIDI-learn mappings ride in the bundle sidecar
+            _devicePages?.SaveProject(dir!, Nota.Application.Controllers.FocusedDevice.TypeKeysIn(Engine));   // FR-018a
+            _controllers?.Overrides?.SaveProject(dir!, _controllers.TrackIndexOf);   // FR-034
+            _modular?.SaveLayout(dir!);   // modular-editor node/island positions (sidecar)
+            Timeline.SaveTrackView(dir!); // track heights + track-list width (sidecar)
+            SaveFreezeLinks(dir!);        // live-freeze links (v1.1) ride in the bundle sidecar
+            _analysis.AdoptInto(dir!);    // analysis cached while unsaved moves into the bundle
             // The bundle is written, so it's the open project now: set the path before the
             // version is recorded, since the History tab refreshes against it (#317).
-            _projectPath = dir;
+            _projectPath = dir!;
+            _projectFile = container;
             var bridge = VisualBridge.Current;
-            bridge?.SetProjectDir(dir);
-            bridge?.VizSave(dir);
+            bridge?.SetProjectDir(dir!);
+            bridge?.VizSave(dir!);
             // The engine writes composition.json after it answers, so wait for that
             // acknowledgement before claiming the save. A restart in this window would
             // otherwise keep the old visuals on disk while the audio moved on.
             bool visualsSaved = true;
             if (bridge is not null)
                 visualsSaved = bridge.Connected && await Task.Run(() => bridge.WaitForSave(1200));
-            string? historyNote = RecordVersion(dir, previousPath, note);   // after every sidecar is written
-            RecordRecentProject(dir);    // surface it on the welcome screen next launch
+            string? historyNote = RecordVersion(dir!, previousPath, note);   // after every sidecar is written
+            // The container is the actual file: pack only after every sidecar and the new
+            // history version are in the working folder.
+            if (container is not null) ProjectContainer.Pack(dir!, container);
+            string display = ProjectDisplayPath ?? dir!;
+            if (migratedFrom is { Length: > 0 }) ForgetRecentProject(migratedFrom);
+            RecordRecentProject(display);    // surface it on the welcome screen next launch
             UpdateWindowTitle();
             MarkProjectClean();
             App.Services.GetRequiredService<ILogSink>()
-                .Info($"Saved project '{System.IO.Path.GetFileName(dir)}' · {warnings.Count} warning(s)");
+                .Info($"Saved project '{System.IO.Path.GetFileName(display)}' · {warnings.Count} warning(s)");
             if (!visualsSaved)
                 App.Services.GetRequiredService<ILogSink>()
                     .Error($"Visuals were not saved to '{dir}': the visual engine did not acknowledge");
             _vm.StatusText = (warnings.Count == 0
-                ? Loc.F("main.files.saved", System.IO.Path.GetFileName(dir))
-                : Loc.F("main.files.saved_unsupported_item_s_skipped", System.IO.Path.GetFileName(dir), warnings.Count, warnings[0]))
+                ? Loc.F("main.files.saved", System.IO.Path.GetFileName(display))
+                : Loc.F("main.files.saved_unsupported_item_s_skipped", System.IO.Path.GetFileName(display), warnings.Count, warnings[0]))
                 + historyNote
                 + (visualsSaved ? "" : " · " + Loc.T("main.files.visuals_not_saved"));
             return true;
@@ -420,6 +531,40 @@ public partial class MainWindow
             _vm.StatusText = Loc.F("main.files.save_failed", ex.Message);
             return false;
         }
+    }
+
+    // A migrated legacy folder leaves Recent Projects (the file replaces it).
+    private static void ForgetRecentProject(string path)
+    {
+        try
+        {
+            var settings = App.Services.GetRequiredService<ISettingsService>();
+            if (settings.Current.RecentProjects.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)) > 0)
+                settings.Save();
+        }
+        catch { /* best-effort */ }
+    }
+
+    /// <summary>Asks where to put a <c>.syntetika</c> project file. Null if dismissed.</summary>
+    private async Task<string?> PickContainerPathAsync(string title, string suggestedName)
+    {
+        Activate();
+        var file = await this.PickSaveFileAsync(new FilePickerSaveOptions
+        {
+            Title = title,
+            SuggestedStartLocation = _vm is null ? null : await FolderAsync(_vm.Settings.ResolvedProjectsFolder()),
+            DefaultExtension = "syntetika",
+            SuggestedFileName = suggestedName,
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType(Loc.T("main.files.syntetika_project")) { Patterns = new[] { "*" + ProjectContainer.Extension } },
+            },
+        });
+        var chosen = file?.TryGetLocalPath();
+        if (chosen is null) return null;
+        if (!chosen.EndsWith(ProjectContainer.Extension, StringComparison.OrdinalIgnoreCase))
+            chosen += ProjectContainer.Extension;
+        return chosen;
     }
 
     /// <summary>Asks where to put a new <c>.nota</c> bundle. Null if the panel was dismissed.</summary>
@@ -477,7 +622,7 @@ public partial class MainWindow
 
     /// <summary>The open project's name ("Untitled" until the bundle is named).</summary>
     private string ProjectDisplayName()
-        => _projectPath is { Length: > 0 } p
+        => ProjectDisplayPath is { Length: > 0 } p
             ? System.IO.Path.GetFileNameWithoutExtension(p.TrimEnd('/', '\\'))
             : Loc.T("main.files.untitled");
 
