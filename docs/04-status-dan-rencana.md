@@ -657,6 +657,16 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   shader ada di bundle terpasang. Run 2:59 transisi 35,3/71,6/123,9/165,2 dtk, stop 179,3 dtk;
   semua kolom visual 0–4 ter-apply.
 
+## 7x. Rilis 0.1.2 (24 Nov)
+
+- Produk **0.1.2** (`Branding.ProductVersion`, `CFBundleShortVersionString` 0.1.2); Nota
+  0.60.4, openVJ 0.1.0.
+- Isi: demo industrial 3 layer 2:59 + shader `ink-kaleido` lima komposisi, sinkron visual
+  untuk scene follow, perbaikan UID quit-save, budget restart engine, shader ikut bundle, dan
+  penataan tab OpenVJ (aksi + speed di kartu Transport).
+- DMG `Syntetika-Engine-0.1.2-arm64.dmg` 112 MB, ad-hoc signed.
+  SHA-256 `6bb256fbc968f6e54d09a2324547667bf88934bb2a2342dbefa26f8632d286ce`.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

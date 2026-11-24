@@ -6,10 +6,10 @@ The latest installer is on GitHub:
 
 | | |
 |---|---|
-| Latest release | **0.1.1** |
-| File | `Syntetika-Engine-0.1.1-arm64.dmg` (111 MB) |
+| Latest release | **0.1.2** |
+| File | `Syntetika-Engine-0.1.2-arm64.dmg` (112 MB) |
 | Requires | macOS 12 or newer, Apple Silicon (arm64) |
-| SHA-256 | `358fcdcc44cc240cfe66c5903b0c6875860c52f9adc8934d3b964adef23bae3c` |
+| SHA-256 | `6bb256fbc968f6e54d09a2324547667bf88934bb2a2342dbefa26f8632d286ce` |
 
 ## Install
 
@@ -17,7 +17,7 @@ The latest installer is on GitHub:
 2. Verify the download:
 
    ```bash
-   shasum -a 256 Syntetika-Engine-0.1.1-arm64.dmg
+   shasum -a 256 Syntetika-Engine-0.1.2-arm64.dmg
    ```
 
 3. Open the image and drag **Syntetika Engine** onto **Applications**.
