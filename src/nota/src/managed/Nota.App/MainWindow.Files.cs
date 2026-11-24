@@ -260,12 +260,22 @@ public partial class MainWindow
     // badge and is saved back as is.
     private bool _panLawLegacy;
 
+    /// <summary>A folder picker may hand back a path with a trailing separator; Path.GetFileName
+    /// would then be empty (project name, log line). Bundles are folders, so trim it.</summary>
+    private static string NormalizeBundlePath(string dir)
+    {
+        if (string.IsNullOrEmpty(dir)) return dir;
+        string trimmed = dir.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+        return trimmed.Length == 0 ? dir : trimmed;
+    }
+
     /// <summary>Loads a .nota bundle and applies it to the engine (menu + browser). M7-4b.
     /// <paramref name="recordRecent"/> is false for the temporary crash-recovery bundle, which
     /// is deleted right after it is restored (it must not linger in Recent Projects).</summary>
     private void OpenProject(string dir, bool recordRecent = true)
     {
         if (_vm is null) return;
+        dir = NormalizeBundlePath(dir);
         _warpBuildGen++;
         Engine.StopPreview();
         try
@@ -359,6 +369,7 @@ public partial class MainWindow
         {
             dir = await PickProjectPathAsync(Loc.T("main.files.save_nota_project"), "Untitled.nota");
             if (dir is null) return false;
+            dir = NormalizeBundlePath(dir);
         }
 
         string? previousPath = _projectPath;

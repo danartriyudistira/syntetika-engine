@@ -334,6 +334,17 @@ public sealed class VisualBridge : IDisposable
         return scene >= start && scene < start + count ? scene - start : -1;
     }
 
+    /// <summary>The open deck's column for a global scene, or -1. The OpenVJ tab compares the
+    /// engine's replies (local columns) against the slot it shows (global scene).</summary>
+    public int ColumnForScene(int scene) => LocalCol(scene);
+
+    /// <summary>A local column read from the engine mapped back to the global scene index.</summary>
+    private int GlobalScene(int col)
+    {
+        var (start, count) = OpenDeckRows;
+        return col >= 0 && col < count ? start + col : -1;
+    }
+
     /// <summary>Forgets the deck-scoped mirrors after the open deck changed.</summary>
     private void DeckChanged()
     {
@@ -1002,9 +1013,10 @@ public sealed class VisualBridge : IDisposable
                 var v = doc.RootElement;
                 if (!v.TryGetProperty("t", out var t) || t.GetString() != "launchSlot") return false;
                 int layer = v.TryGetProperty("layer", out var l) ? l.GetInt32() : -1;
-                int scene = v.TryGetProperty("col", out var c) ? c.GetInt32() : -1;
+                int col = v.TryGetProperty("col", out var c) ? c.GetInt32() : -1;
+                int scene = GlobalScene(col);
                 if (layer < 0 || scene < 0) return true;
-                AppLog($"[viz<-] launchSlot L{layer} C{scene}");
+                AppLog($"[viz<-] launchSlot L{layer} C{col} (scene {scene})");
                 try { SlotLaunchRequested?.Invoke(layer, scene); }
                 catch (Exception ex) { AppLog("launch request handler failed: " + ex.Message); }
                 return true;
@@ -1035,10 +1047,11 @@ public sealed class VisualBridge : IDisposable
                 var v = doc.RootElement;
                 if (!v.TryGetProperty("t", out var t) || t.GetString() != "vizMediaAudio") return false;
                 int layer = v.TryGetProperty("layer", out var l) ? l.GetInt32() : -1;
-                int scene = v.TryGetProperty("col", out var c) ? c.GetInt32() : -1;
+                int col = v.TryGetProperty("col", out var c) ? c.GetInt32() : -1;
+                int scene = GlobalScene(col);
                 string path = v.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
                 if (layer < 0 || scene < 0 || path.Length == 0) return true;
-                AppLog($"[viz<-] vizMediaAudio L{layer} C{scene} {Path.GetFileName(path)}");
+                AppLog($"[viz<-] vizMediaAudio L{layer} C{col} (scene {scene}) {Path.GetFileName(path)}");
                 try { SlotAudioRequested?.Invoke(layer, scene, path); }
                 catch (Exception ex) { AppLog("media audio handler failed: " + ex.Message); }
                 return true;

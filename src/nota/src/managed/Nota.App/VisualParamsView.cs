@@ -222,7 +222,7 @@ public sealed class VisualParamsView : UserControl
             {
                 if (!v.TryGetProperty("layer", out var l) || !l.TryGetInt32(out int layer)) return;
                 if (!v.TryGetProperty("col", out var c) || !c.TryGetInt32(out int col)) return;
-                if (layer == _layer && col == _col) ApplyState(v);
+                if (layer == _layer && col == (Bridge?.ColumnForScene(_col) ?? -1)) ApplyState(v);
             }
             else if (t == "vizCatalog")
             {
