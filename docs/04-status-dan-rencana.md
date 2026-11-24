@@ -708,6 +708,20 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   tidak menghapus visual, erase membebaskan media). `cargo test -p openvj-app` 51 lulus
   (termasuk `gc_media_keeps_referenced_files_only`).
 
+## 7aa. Rilis 0.1.3 (24 Nov)
+
+- Produk **0.1.3**; Nota 0.60.4, openVJ 0.1.0. Isi: fix lifecycle Visual Output
+  (`run_event_loop_until_quit` + reload recovery), save menunggu ack visual dan memberi
+  peringatan, visual masuk version history + media dipin, snapshot crash membawa visual,
+  bundle terhapus tidak dihidupkan kembali, Recent Projects tidak diisi snapshot recovery,
+  footer Stop All di atas + Scene, demo reproducible (`demo/` + `scripts/make-demo.sh`).
+- Bukti: bridge palsu (lama exit, baru tetap hidup + `vizSaved`); app asli tanpa restart
+  setelah output disembunyikan; save 11:08 mencatat `visuals/composition.json` (changes
+  `visuals`); `switch_version` via MCP memuat ulang 16 clip; smoke `--history` (termasuk 10
+  cek visual) dan 51 tes openVJ lulus.
+- DMG `Syntetika-Engine-0.1.3-arm64.dmg` 112 MB, ad-hoc signed.
+  SHA-256 `f9899939a4945da9a36a089aaf32a55b66b773800317c41910403f1bc673a2aa`.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |
