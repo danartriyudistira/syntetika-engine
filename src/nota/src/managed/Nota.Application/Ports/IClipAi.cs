@@ -12,6 +12,25 @@ public readonly record struct TranscribedNote(double Start, double End, int Pitc
     public int Velocity => Math.Clamp((int)Math.Round(127 * Amplitude), 1, 127);
 }
 
+/// <summary>What to leave out when turning a model's transcription into clip notes. The
+/// defaults only clean up impossible notes (fragments, duplicates, weak harmonics); the
+/// Convert dialog adds the musical choices: a strength floor, a shortest note, a voice limit
+/// and a grid.<br/>
+/// <see cref="QuantizeGridBeats"/> 0 leaves the model's timing untouched.</summary>
+public sealed record TranscriptionOptions(
+    double MinStrength = 0,
+    double MinLengthBeats = 0,
+    int MaxVoices = 0,
+    double QuantizeGridBeats = 0,
+    double QuantizeAmount = 1.0,
+    bool QuantizeEnds = false,
+    double MergeGapBeats = 1.0 / 32,
+    bool DropOvertones = true,
+    bool DropSemitoneGhosts = true)
+{
+    public static TranscriptionOptions Default { get; } = new();
+}
+
 /// <summary>Turning transcribed notes into a clip's notes; shared by Convert and its MCP tool.</summary>
 public static class Transcription
 {
@@ -31,20 +50,83 @@ public static class Transcription
     /// notes are kept inside the clip. The model can return the same pitch twice (a held note
     /// split by a confidence dip) or an octave overtone of a note it also heard; those are
     /// merged/dropped and same-pitch overlaps are trimmed, so the clip never plays a stacked
-    /// note. Different pitches may still overlap — that is the harmony.</summary>
-    public static NotaNote[] ToClipNotes(IReadOnlyList<TranscribedNote> notes, double audioSeconds, double clipBeats)
+    /// note. Different pitches may still overlap — that is the harmony.
+    /// <paramref name="options"/> is what the Convert dialog offers: a strength floor, a
+    /// shortest note, a voice limit and an optional grid.</summary>
+    public static NotaNote[] ToClipNotes(IReadOnlyList<TranscribedNote> notes, double audioSeconds, double clipBeats,
+                                         TranscriptionOptions? options = null)
     {
+        var o = options ?? TranscriptionOptions.Default;
         double toBeat = audioSeconds > 0 ? clipBeats / audioSeconds : 0;
         var mapped = new List<NotaNote>(notes.Count);
         foreach (var n in notes)
         {
+            if (n.Amplitude < o.MinStrength) continue;
             double start = Math.Max(0, n.Start) * toBeat;
             if (start >= clipBeats) continue;
             double end = Math.Min(n.End * toBeat, clipBeats);
             mapped.Add(new NotaNote(n.Pitch, start, Math.Max(0.05, end - start), n.Velocity / 127f));
         }
-        var cleaned = MidiToolUtil.Deoverlap(DropOvertones(DropSemitoneGhosts(MergeFragments(mapped, 1.0 / 32))));
+
+        var cleaned = MergeFragments(mapped, o.MergeGapBeats);
+        if (o.DropOvertones) cleaned = DropOvertones(cleaned);
+        if (o.DropSemitoneGhosts) cleaned = DropSemitoneGhosts(cleaned);
+        if (o.QuantizeGridBeats > 0 && o.QuantizeAmount > 0)
+            cleaned = Quantize(cleaned, o.QuantizeGridBeats, o.QuantizeAmount, o.QuantizeEnds, clipBeats);
+        cleaned = MidiToolUtil.Deoverlap(cleaned);
+        if (o.MaxVoices > 0) cleaned = LimitVoices(cleaned, o.MaxVoices);
+        if (o.MinLengthBeats > 0)
+            cleaned = cleaned.FindAll(n => n.LengthBeats + 1e-9 >= o.MinLengthBeats);
         return MidiToolUtil.Tidy(cleaned, clipBeats).ToArray();
+    }
+
+    // Pull note starts (and, if asked, ends) onto the clip's grid. The clip's own grid is used,
+    // the same one the piano roll's Quantize tool works on, so a clip that starts off the bar
+    // line keeps its relationship to the song. `amount` below 1 keeps part of the original feel.
+    private static List<NotaNote> Quantize(List<NotaNote> notes, double grid, double amount, bool ends,
+                                           double clipBeats)
+    {
+        double last = Math.Max(0, clipBeats - MidiToolUtil.MinLength);
+        double Target(double beat) => Math.Round(beat / grid) * grid;
+        var outp = new List<NotaNote>(notes.Count);
+        foreach (var n in notes)
+        {
+            double start = n.StartBeat + (Target(n.StartBeat) - n.StartBeat) * amount;
+            start = Math.Clamp(start, 0, last);
+            double end = n.StartBeat + n.LengthBeats;
+            if (ends)
+            {
+                double target = Target(end);
+                end += (target - end) * amount;
+            }
+            end = Math.Clamp(end, start + MidiToolUtil.MinLength, clipBeats);
+            outp.Add(MidiToolUtil.Note(n.Pitch, start, end - start, n.Velocity, n.ArticulationId));
+        }
+        return outp;
+    }
+
+    // A dense transcription hears chord tones, but also neighbours and re-attacks that crowd the
+    // same instant. Keep the strongest voices of each chord, so a six-note smear becomes the
+    // four notes that carry the harmony.
+    private static List<NotaNote> LimitVoices(List<NotaNote> notes, int max)
+    {
+        var sorted = MidiToolUtil.Sorted(notes);
+        var outp = new List<NotaNote>(sorted.Count);
+        for (int i = 0; i < sorted.Count;)
+        {
+            int j = i + 1;
+            while (j < sorted.Count && sorted[j].StartBeat - sorted[i].StartBeat <= MidiToolUtil.ChordTolerance) j++;
+            if (j - i <= max) outp.AddRange(sorted.GetRange(i, j - i));
+            else
+            {
+                var keep = sorted.GetRange(i, j - i)
+                    .OrderByDescending(n => n.Velocity * (n.LengthBeats + MidiToolUtil.MinLength))
+                    .Take(max);
+                outp.AddRange(keep);
+            }
+            i = j;
+        }
+        return MidiToolUtil.Sorted(outp);
     }
 
     // A sustained note can fall just below the model's frame threshold for a frame or two and

@@ -26,6 +26,18 @@ public partial class MainWindow
     private async void OnConvertClip(int trackId, int clipIndex, ClipConvertMode mode)
     {
         if (_vm is null) return;
+
+        // Melody / Harmony are the AI conversions: ask for the timing and density choices
+        // first, so the result arrives on the grid and without the model's extra notes.
+        var options = TranscriptionOptions.Default;
+        if (mode is ClipConvertMode.Melody or ClipConvertMode.Harmony && Ai.CanTranscribe)
+        {
+            var picked = await new ConvertWindow(mode, EditorGrids.Shared.Quantize).ShowDialog<ConvertOptions?>(this);
+            if (picked is null) return;
+            mode = picked.Mode;
+            options = picked.Notes;
+        }
+
         float[] mono;
         double sr, startBeat = 0, clipBeats = 0;
         try
@@ -53,7 +65,7 @@ public partial class MainWindow
                     case ClipConvertMode.Slice:   await SliceToMidiAsync(mono, sr, startBeat, clipBeats, prog); break;
                     case ClipConvertMode.Melody when Ai.CanTranscribe:
                     case ClipConvertMode.Harmony when Ai.CanTranscribe:
-                        await ConvertWithModelAsync(mono, sr, startBeat, clipBeats, mode == ClipConvertMode.Melody, prog); break;
+                        await ConvertWithModelAsync(mono, sr, startBeat, clipBeats, mode == ClipConvertMode.Melody, options, prog); break;
                     case ClipConvertMode.Melody:  await ConvertMelodyAsync(mono, sr, startBeat, clipBeats, prog); break;
                     case ClipConvertMode.Harmony: await ConvertHarmonyAsync(mono, sr, startBeat, clipBeats, prog); break;
                     default: _vm.StatusText = Loc.T("main.convert.that_converter_isnt_available_yet"); break;
@@ -212,14 +224,15 @@ public partial class MainWindow
     // Convert Melody / Harmony with the basic-pitch model, when it's installed (Settings →
     // Downloads → AI Models): polyphonic notes with their own velocities; Melody keeps the
     // strongest note wherever notes overlap. Otherwise the DSP converters below run.
-    private async Task ConvertWithModelAsync(float[] mono, double sr, double startBeat, double clipBeats, bool melody, IProgress<ProgressReport> prog)
+    private async Task ConvertWithModelAsync(float[] mono, double sr, double startBeat, double clipBeats,
+                                            bool melody, TranscriptionOptions options, IProgress<ProgressReport> prog)
     {
         string what = melody ? "melody" : "harmony";
         prog.Report(ProgressReport.At(0, Loc.T("main.convert.listening_for_notes")));
         var p = new Progress<double>(f => prog.Report(ProgressReport.At(f, Loc.T("main.convert.listening_for_notes"))));
         var heard = await Task.Run(() => Ai.Transcribe(mono, sr, p));
         if (melody) heard = Transcription.Monophonic(heard);
-        var notes = Transcription.ToClipNotes(heard, mono.Length / sr, clipBeats);
+        var notes = Transcription.ToClipNotes(heard, mono.Length / sr, clipBeats, options);
         if (notes.Length == 0) { Status(Loc.F("main.convert.no_found", what)); return; }
         int t = Engine.AddVoltSynthTrack();         // Nota Volt
         int mc = Engine.AddMidiClip(t, startBeat, Math.Max(0.25, clipBeats));

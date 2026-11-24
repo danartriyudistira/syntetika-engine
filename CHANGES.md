@@ -198,15 +198,15 @@ diffs are in `patches/`.
 
 ## Fixed before the first release
 
-- **Audio → MIDI (Melody / Harmony) note cleanup**: basic-pitch can split a held note into
-  fragments, return the same pitch twice, hear a weak harmonic (octave, 12th, …) or a
-  neighbouring semitone as a note, and leave same-pitch notes stacked. Convert now merges
-  close fragments, drops exact duplicates, trims same-pitch overlaps, suppresses weak
-  harmonic/ghost notes and keeps notes inside the clip; genuine chords (octaves, fifths,
-  semitones of comparable strength) stay. Tests cover each rule. Timing is left as
-  transcribed — use the clip's Quantize tool for a grid.
-
-## Known limitations
+- **Audio → MIDI is now a dialog with timing and density controls**: Melody / Harmony open an
+  Audio to MIDI dialog first. **Timing** snaps note starts (and, optionally, ends) to a grid —
+  straight or triplet, defaulting to the piano roll's Quantize step — so a stem lands on the
+  project tempo instead of a few frames late. **Density** adds a minimum strength, a shortest
+  note and a voice limit per chord, so a dense basic-pitch result (weak neighbours, harmonics,
+  re-attacks) arrives as playable notes. Independently, Convert still merges fragments, drops
+  exact duplicates, trims same-pitch overlaps, suppresses weak harmonics and semitone ghosts
+  and keeps real chords (octaves, fifths, semitones of comparable strength). Tests cover each
+  rule and each control.
 
 - **AI model downloads failed every time**: the pinned ONNX Runtime archive lived on
   `github.com/microsoft/onnxruntime` release assets, which now 404. The runtime comes from the
@@ -216,8 +216,6 @@ diffs are in `patches/`.
   an A4 tone.
 - **Save As repeated the container extension**: the suggested name already ended in
   `.syntetika` and the dialog appended another. The name is suggested without an extension.
-
-## Known limitations
 
 - **Visual writes could resurrect a deleted bundle**: if the project folder was deleted or
   moved while open, the bridge recreated `visuals/` and the quit-save wrote an empty
