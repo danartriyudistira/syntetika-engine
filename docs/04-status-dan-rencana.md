@@ -209,12 +209,13 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 - [x] Halaman unduhan + panduan “Open Anyway”: `docs/download.md` dan tautan di README.
 - [x] Verifikasi aset rilis publik: SHA-256 cocok, `Info.plist` 0.1.1, `codesign --verify
   --deep --strict` lolos; `spctl` menolak karena ad-hoc (sesuai harapan).
-- [ ] **Developer ID signing + notarization — BLOCKED (eksternal)**: mesin build tidak punya
-  identitas signing (`security find-identity` = 0) maupun kredensial notary. DMG masih
-  ad-hoc; perlu sertifikat Developer ID + App Store Connect/notary dari pemilik akun.
+- [x] **Notarization dilewati** (keputusan 24 Nov): distribusi memakai DMG ad-hoc + panduan
+  "Open Anyway". Script `notarize-mac.sh` dan `docs/release.md` tetap disimpan untuk dipakai
+  nanti bila ada Developer ID.
 - [ ] `release.yml` → dipindah ke **P6**: butuh runner macOS arm64 dan scope `workflow` pada
   token GitHub (token saat ini: gist, read:org, repo).
-- Kriteria: unduhan bersih bisa dibuka di Mac lain; About/Get Info menampilkan versi produk.
+- Kriteria: DMG bisa dipasang di Mac lain dengan satu kali "Open Anyway"; About/Get Info
+  menampilkan versi produk.
 - Bukti: app+DMG 0.1.1, readme menyebut Nota 0.60.4; `bash scripts/notarize-mac.sh` berhenti
   dengan instruksi Developer ID. Rilis publik v0.1.1 sudah diunduh ulang dan diverifikasi.
 
@@ -595,6 +596,7 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 
 ## 10. Keputusan terbuka
 
+- Notarization ditunda; rilis memakai DMG ad-hoc (keputusan 24 Nov).
 - Apakah repo akan menyertakan binary rilis (saat ini source-only)?
 - Nama device internal (“Nota Reverb”, dst.) dibiarkan — konfirmasi tetap begitu.
 - CI penuh butuh Xcode 26 + .NET 10 di runner; mulai dari CI ringan.

@@ -20,7 +20,10 @@ bash scripts/package-dmg-syntetika.sh      # dist/Syntetika-Engine-<version>-arm
 
 Check `About` and `Get Info` show the same product version.
 
-## 3. Sign and notarize (requires a Developer ID)
+## 3. Sign and notarize (optional; currently skipped)
+
+The project currently ships **ad-hoc** DMGs and asks users to approve the app once. Keep this
+section for when a Developer ID becomes available.
 
 Without these steps the DMG is **ad-hoc signed**: it runs on this Mac, but another Mac needs
 right-click → Open or System Settings → Privacy & Security → Open Anyway.

@@ -32,8 +32,8 @@ once:
 - Right-click the app in Finder → **Open** → **Open**, or
 - System Settings → Privacy & Security → **Open Anyway**.
 
-A notarized build will replace this file when a Developer ID is available; see
-[release.md](release.md).
+Notarization is not planned for now; the build stays ad-hoc. The signing/notary scripts are
+kept in [release.md](release.md) for when a Developer ID becomes available.
 
 ## What's inside
 

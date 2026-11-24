@@ -8,9 +8,8 @@ diffs are in `patches/`.
 - Product is **Syntetika Engine** (`studio.syntetika.engine`); the app menu, window title,
   Welcome, Splash and About use it. Product version **0.1.1** now drives
   `CFBundleShortVersionString`/`CFBundleGetInfoString` (Nota's version stays the upstream base).
-- `scripts/notarize-mac.sh` + `docs/release.md` sign, notarize and staple the DMG once a
-  Developer ID certificate and notary credentials are available; this machine has neither, so
-  the current DMG is ad-hoc signed.
+- Notarization is **deferred**: releases use an ad-hoc DMG with a one-time "Open Anyway".
+  `scripts/notarize-mac.sh` + `docs/release.md` remain ready for a future Developer ID.
 - Profile folder is `~/Library/Application Support/Syntetika Engine`; an existing
   `NotAopenVJ` profile is copied once on first launch (the old folder is left untouched).
 - New original icon (SVG source, rendered to `logo.png`/`.icns`) and a new About credit block.
