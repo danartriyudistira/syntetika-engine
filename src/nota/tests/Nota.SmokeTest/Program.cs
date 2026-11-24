@@ -1166,13 +1166,21 @@ if (args.Length >= 1 && args[0] == "--remote")
     return failures == 0 ? 0 : 1;
 }
 
+// Session decks alone (fast iteration): `--decks`. Also part of the full run.
+if (args.Length >= 1 && args[0] == "--decks")
+{
+    Console.WriteLine("-- session: decks --");
+    foreach (var (ok, label) in SessionDeckTests.Run()) Check(ok, label);
+    Console.WriteLine(failures == 0 ? "DECKS PASSED" : $"DECKS FAILED ({failures})");
+    return failures == 0 ? 0 : 1;
+}
+
 // Project version history alone (fast iteration): `--history`. Also part of the full run.
 if (args.Length >= 1 && args[0] == "--history")
 {
     Console.WriteLine("-- project: version history --");
     foreach (var (ok, label) in HistoryTests.Run()) Check(ok, label);
     foreach (var (ok, label) in HistoryTests.RunVisuals()) Check(ok, label);
-foreach (var (ok, label) in HistoryTests.RunRecoveryVisuals()) Check(ok, label);
     foreach (var (ok, label) in HistoryTests.RunRecoveryVisuals()) Check(ok, label);
     foreach (var (ok, label) in HistoryTests.RunGraph()) Check(ok, label);
     foreach (var (ok, label) in HistoryTests.RunSummary()) Check(ok, label);
@@ -16246,6 +16254,8 @@ foreach (var (ok, label) in ClipEditorTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: content-addressed bundle --");
 foreach (var (ok, label) in BundleContentTests.Run()) Check(ok, label);
 foreach (var (ok, label) in LanguageProjectTests.Run()) Check(ok, label);
+Console.WriteLine("-- session decks --");
+foreach (var (ok, label) in SessionDeckTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: version history --");
 foreach (var (ok, label) in HistoryTests.Run()) Check(ok, label);
 foreach (var (ok, label) in HistoryTests.RunVisuals()) Check(ok, label);

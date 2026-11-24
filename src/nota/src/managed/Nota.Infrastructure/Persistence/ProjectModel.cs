@@ -582,9 +582,22 @@ public sealed class SessionDto
     public double LaunchQuant { get; set; } = 4.0;
     public bool Follow { get; set; } = true;
     public double RecordLength { get; set; }
+    /// <summary>Every scene row, in global order; the decks below partition this list.</summary>
     public List<SceneDto> Scenes { get; set; } = new();
+    /// <summary>Session decks (format v36), in tab order. Empty in older files = one deck with
+    /// every scene, which is also how a fresh project starts.</summary>
+    public List<DeckDto> Decks { get; set; } = new();
+    /// <summary>Which deck the Session grid shows.</summary>
+    public int CurrentDeck { get; set; }
 
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+public sealed class DeckDto
+{
+    public string? Name { get; set; }
+    /// <summary>Scene rows this deck owns; the counts add up to the document's SceneCount.</summary>
+    public int SceneCount { get; set; } = 1;
 }
 
 public sealed class SceneDto

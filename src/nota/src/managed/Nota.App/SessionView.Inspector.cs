@@ -334,7 +334,8 @@ public sealed partial class SessionView
         if (p.FollowA == (int)SessionFollowAction.Jump || p.FollowB == (int)SessionFollowAction.Jump)
         {
             var scenes = new List<(int, string)>();
-            for (int i = 0; i < _sceneCount; i++) scenes.Add((i, SceneName(i)));
+            int ds = _engine.DeckSceneStart(_engine.CurrentDeck), dn = _engine.DeckSceneCount(_engine.CurrentDeck);
+            for (int i = ds; i < ds + dn; i++) scenes.Add((i, SceneName(i)));
             fa.Children.Add(Row(Loc.T("session.inspector.jump_to"), Chip(SceneName(Math.Clamp(p.JumpScene, 0, Math.Max(0, _sceneCount - 1))), false,
                 a => Pick(a, scenes, i => i == p.JumpScene, i => Set(x => { x.JumpScene = i; return x; })))));
         }

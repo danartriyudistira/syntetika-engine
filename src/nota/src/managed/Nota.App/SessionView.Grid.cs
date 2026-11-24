@@ -54,7 +54,7 @@ public sealed partial class SessionView
                 Children =
                 {
                     Text(Loc.T("session.grid.scenes"), 10, NotaPalette.TextMuted, FontWeight.SemiBold),
-                    Mono(_sceneCount.ToString(CultureInfo.CurrentCulture), 9, NotaPalette.TextDisabled),
+                    Mono((_deckEnd - _deckStart).ToString(CultureInfo.CurrentCulture), 9, NotaPalette.TextDisabled),
                 },
             },
         });
@@ -63,7 +63,7 @@ public sealed partial class SessionView
         var mid = LaneStack(_across ? HeaderH : SceneRailW);
         for (int s = 0; s < _sceneCount; s++)
         {
-            var cell = new SceneCell(this, s);
+            var cell = new SceneCell(this, s) { IsVisible = InDeck(s) };
             _sceneCells.Add(cell);
             mid.Children.Add(cell);
         }
@@ -71,7 +71,15 @@ public sealed partial class SessionView
 
         var addScene = new Button { Content = Loc.T("session.grid.scene"), Classes = { "ghost" }, FontSize = 9, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(0) };
         ToolTip.SetTip(addScene, Loc.T("session.grid.add_a_scene_at_the"));
-        addScene.Click += (_, _) => { int s = _engine.InsertScene(_engine.SceneCount); if (s >= 0) VisualBridge.Current?.InsertColumn(s); Refresh(); if (s >= 0) Select(new Selection(SelKind.Scene, 0, s)); };
+        addScene.Click += (_, _) =>
+        {
+            int deckIndex = _engine.CurrentDeck;
+            int local = _engine.DeckSceneCount(deckIndex);
+            int s = _engine.InsertSceneInDeck(deckIndex, local);
+            if (s >= 0) VisualBridge.Current?.InsertColumn(s);   // global row; the bridge maps to the deck's column
+            Refresh();
+            if (s >= 0) Select(new Selection(SelKind.Scene, 0, s));
+        };
 
         var stopAll = new Button { HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(0) };
         ToolTip.SetTip(stopAll, Loc.T("session.stop_every_session_clip"));
@@ -125,6 +133,7 @@ public sealed partial class SessionView
                 ColKind.Group => new GroupCell(this, c, s),
                 _ => new BlankCell(SlotW(c), SlotH),
             };
+            cell.IsVisible = InDeck(s);
             c.Cells.Add(cell);
             mid.Children.Add(cell);
         }
@@ -800,15 +809,15 @@ public sealed partial class SessionView
 
     private int SceneAt(Point p)
     {
-        for (int s = 0; s < _sceneCells.Count; s++)
+        for (int s = _deckStart; s < Math.Min(_deckEnd, _sceneCells.Count); s++)
         {
             // Along the scenes' axis: down the rail (Scenes down) or across the head row (specs/108).
             if (this.TranslatePoint(p, _sceneCells[s]) is not { } q) continue;
             double along = _across ? q.X : q.Y, size = _across ? _sceneCells[s].Bounds.Width : _sceneCells[s].Bounds.Height;
             if (along >= -Gap && along < size) return s;
         }
-        if (_sceneCells.Count == 0 || this.TranslatePoint(p, _sceneCells[0]) is not { } first) return 0;
-        return (_across ? first.X : first.Y) < 0 ? 0 : _sceneCells.Count - 1;
+        if (_sceneCells.Count == 0 || this.TranslatePoint(p, _sceneCells[_deckStart]) is not { } first) return _deckStart;
+        return (_across ? first.X : first.Y) < 0 ? _deckStart : Math.Max(_deckStart, _deckEnd - 1);
     }
 
     private sealed class SceneCell : Control
@@ -828,7 +837,7 @@ public sealed partial class SessionView
             Width = o.SceneW; Height = o.SceneH;
             string n = o._engine.GetSceneName(scene);
             _named = n.Length > 0;
-            _name = _named ? n : Loc.F("session.scene", scene + 1);
+            _name = _named ? n : Loc.F("session.scene", scene - o._deckStart + 1);
             o._engine.TryGetSceneProps(scene, out var p);
             _color = p.Color >= 0 ? ArrangementView.TrackBrush(p.Color) : NotaPalette.BorderStrong;
             var parts = new List<string>();
@@ -958,7 +967,7 @@ public sealed partial class SessionView
                 ctx.DrawText(b, new Point(box.X + 4, box.Y + (16 - b.Height) / 2));
                 right = box.X - 6;
             }
-            var idx = Ft((_scene + 1).ToString("00", CultureInfo.CurrentCulture), NotaFonts.Measure, 9, NotaPalette.TextDisabled);
+            var idx = Ft((_scene - _o._deckStart + 1).ToString("00", CultureInfo.CurrentCulture), NotaFonts.Measure, 9, NotaPalette.TextDisabled);
             double nameW = Math.Max(10, right - x - idx.Width - 6);
             var name = Ft(_name, NotaFonts.SansSemiBold, 12, _named ? NotaPalette.TextPrimary : NotaPalette.TextTertiary, nameW);
             // A narrow scene head (Scenes across) shows on hover what it had no room for.
@@ -1141,7 +1150,7 @@ public sealed partial class SessionView
                 MenuKit.Item(Loc.T("session.grid.copy_scene_to_arrangement"), GlyphKind.Arrow, () => CopySelectionToArrangement(), MenuKit.CopyToOtherViewKey, SelectedSlots().Length > 0),
             },
             MenuKit.ClipboardGroup(null, null, () => PasteSelection(), () => DuplicateSelection(), ClipTransfer.FromArrangement(_engine)),
-            new Control[] { MenuKit.Danger(Loc.T("session.grid.delete_scene"), GlyphKind.Trash, () => DeleteSelection(), MenuKit.DeleteKey, _sceneCount > 1) });
+            new Control[] { MenuKit.Danger(Loc.T("session.grid.delete_scene"), GlyphKind.Trash, () => DeleteSelection(), MenuKit.DeleteKey, _engine.DeckSceneCount(_engine.CurrentDeck) > 1) });
         f.ShowAt(anchor, showAtPointer: true);
     }
 }

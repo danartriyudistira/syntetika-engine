@@ -208,6 +208,48 @@ public sealed partial class NotaEngine
     public void SetSceneName(int scene, string name)
     { ThrowIfDisposed(); NativeMethods.SessionSetSceneName(_handle, scene, name ?? ""); }
 
+    // --- Session decks (Syntetika) ------------------------------------------
+    public int DeckCount { get { ThrowIfDisposed(); return NativeMethods.SessionDeckCount(_handle); } }
+    public int CurrentDeck { get { ThrowIfDisposed(); return NativeMethods.SessionCurrentDeck(_handle); } }
+
+    /// <summary>Shows another deck in the grid. Playing clips keep playing (no undo step).</summary>
+    public void SwitchDeck(int deck)
+    { ThrowIfDisposed(); Check(NativeMethods.SessionSwitchDeck(_handle, deck)); }
+
+    /// <summary>Restores the open deck after a load (clamped, no undo step).</summary>
+    public void SetCurrentDeck(int deck)
+    { ThrowIfDisposed(); NativeMethods.SessionSetCurrentDeck(_handle, deck); }
+
+    public int DeckSceneStart(int deck) { ThrowIfDisposed(); return NativeMethods.SessionDeckSceneStart(_handle, deck); }
+    public int DeckSceneCount(int deck) { ThrowIfDisposed(); return NativeMethods.SessionDeckSceneCount(_handle, deck); }
+    public string GetDeckName(int deck)
+    { ThrowIfDisposed(); return ReadNativeString((b, c) => NativeMethods.SessionDeckName(_handle, deck, b, c)); }
+
+    public void RenameDeck(int deck, string name)
+    { ThrowIfDisposed(); NativeMethods.SessionRenameDeck(_handle, deck, name ?? ""); }
+
+    /// <summary>Appends an empty deck (one scene) and opens it; returns its index.</summary>
+    public int AddDeck() { ThrowIfDisposed(); return NativeMethods.SessionAddDeck(_handle); }
+
+    /// <summary>Copies a deck (rows, slots, properties) right after it and opens the copy.</summary>
+    public int DuplicateDeck(int deck) { ThrowIfDisposed(); return NativeMethods.SessionDuplicateDeck(_handle, deck); }
+
+    /// <summary>Removes a deck and its rows; the last deck stays. False while recording.</summary>
+    public bool RemoveDeck(int deck)
+    { ThrowIfDisposed(); return NativeMethods.SessionRemoveDeck(_handle, deck) == NativeMethods.NotaResult.Ok; }
+
+    /// <summary>Inserts an empty scene inside a deck (atLocal 0..count); returns its global row.</summary>
+    public int InsertSceneInDeck(int deck, int atLocal)
+    { ThrowIfDisposed(); return NativeMethods.SessionInsertSceneInDeck(_handle, deck, atLocal); }
+
+    /// <summary>Load: replaces the deck partition (names + scene counts must sum to SceneCount).</summary>
+    public void SetDecks(string[] names, int[] counts, int current)
+    {
+        ThrowIfDisposed();
+        if (names.Length != counts.Length || names.Length == 0) return;
+        NativeMethods.SessionSetDecks(_handle, string.Join("\n", names), counts, counts.Length, current);
+    }
+
     public int InsertScene(int at) { ThrowIfDisposed(); return NativeMethods.SessionInsertScene(_handle, at); }
     public int DuplicateScene(int scene) { ThrowIfDisposed(); return NativeMethods.SessionDuplicateScene(_handle, scene); }
     public int CaptureScene(int at) { ThrowIfDisposed(); return NativeMethods.SessionCaptureScene(_handle, at); }

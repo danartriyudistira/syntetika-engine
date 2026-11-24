@@ -980,6 +980,17 @@ impl App {
                 }
                 NotaCommand::VizSave { path, uids, media_dirs, gc } => self.viz_save(&path, uids, &media_dirs, gc),
                 NotaCommand::VizLoad { path, media_dir } => self.viz_load(&path, &media_dir),
+                NotaCommand::VizDeck { index } => self.deck_clicked(index),
+                NotaCommand::VizDeckAdd { index } => self.deck_add_at(index),
+                NotaCommand::VizDeckRemove { index } => self.deck_remove(index),
+                NotaCommand::VizDeckDuplicate { index } => {
+                    self.comp.duplicate_deck(index);
+                    self.after_deck_change();
+                }
+                NotaCommand::VizDeckRename { index, name } => self.deck_renamed(index, &name),
+                NotaCommand::VizDecks { names, counts, current } => {
+                    self.reconcile_decks(&names, &counts, current)
+                }
                 NotaCommand::VizLayer { layer, opacity, blend, bypass } => {
                     self.mark_visual_edit(&[], &[layer], format!("layer:{layer}"), 0.8);
                     if let Some(l) = self.comp.layers.get_mut(layer) {
@@ -3042,6 +3053,65 @@ impl App {
         self.comp.remove_deck(index);
         self.after_deck_change();
         self.collect_garbage();
+    }
+
+    /// Nota added a deck at `index`: append empty decks until it is the last one, then show it.
+    pub fn deck_add_at(&mut self, index: usize) {
+        while self.comp.decks.len() <= index {
+            self.comp.add_deck();
+        }
+        if index < self.comp.decks.len() {
+            self.comp.switch_deck(index);
+        }
+        self.after_deck_change();
+    }
+
+    /// Aligns the visual deck list with the project's (names, scene counts, open deck). Called
+    /// on load and after a deck edit so the indices can never drift apart.
+    pub fn reconcile_decks(&mut self, names: &[String], counts: &[usize], current: usize) {
+        while self.comp.decks.len() > names.len() && self.comp.decks.len() > 1 {
+            let last = self.comp.decks.len() - 1;
+            self.comp.remove_deck(last);
+        }
+        while self.comp.decks.len() < names.len() {
+            self.comp.add_deck();
+        }
+        for i in 0..names.len().min(self.comp.decks.len()) {
+            self.comp.rename_deck(i, &names[i]);
+            self.resize_deck_columns(i, counts.get(i).copied().unwrap_or(1).max(1));
+        }
+        let target = current.min(self.comp.decks.len().saturating_sub(1));
+        self.comp.switch_deck(target);
+        self.after_deck_change();
+    }
+
+    /// Resizes one deck's columns to the project's scene count. Clip columns keep their index;
+    /// only the tail grows or shrinks.
+    fn resize_deck_columns(&mut self, deck: usize, want: usize) {
+        let want = want.max(1);
+        if deck == self.comp.current_deck {
+            while self.comp.columns.len() < want {
+                self.comp.add_column();
+            }
+            while self.comp.columns.len() > want {
+                let last = self.comp.columns.len() - 1;
+                self.comp.remove_column(last);
+            }
+            return;
+        }
+        let layers = self.comp.layers.len();
+        if let Some(d) = self.comp.decks.get_mut(deck) {
+            while d.columns.len() < want {
+                let name = format!("{}", d.columns.len() + 1);
+                d.columns.push(openvj_core::Column { name });
+            }
+            d.columns.truncate(want);
+            let cols = d.columns.len();
+            d.clips.resize_with(layers, Vec::new);
+            for row in &mut d.clips {
+                row.resize(cols, None);
+            }
+        }
     }
 
     fn after_deck_change(&mut self) {

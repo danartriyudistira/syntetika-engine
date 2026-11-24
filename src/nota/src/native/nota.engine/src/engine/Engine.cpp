@@ -1046,6 +1046,7 @@ void Engine::publishRaw(std::shared_ptr<Graph> g, bool restored) {
     graphHist_.publish(g); // frees the graphs no render can still be walking
     recomputeRouting();   // Phase B: refresh sidechain source-track → route-slot table
     updateMonitorInput(); // a monitoring track may have come or gone (undo, delete, load)
+    clampCurrentDeck();   // a removed deck (or an undo) may leave the open tab out of range
 }
 
 void Engine::pushUndo() {
@@ -1554,6 +1555,7 @@ void Engine::reset() {
     empty->masterTrack = std::make_shared<Track>(kMasterTrackId, TrackType::Audio);
     publishRaw(std::move(empty));
     panLawSnap_.store(true, std::memory_order_release); // a new project takes its law at once
+    currentDeck_.store(0, std::memory_order_relaxed);
     nextTrackId_ = 1;
     clearUndoHistory();
 }

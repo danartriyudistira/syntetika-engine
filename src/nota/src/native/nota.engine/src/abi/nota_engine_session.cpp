@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <vector>
 
 extern "C" {
 
@@ -241,6 +242,72 @@ NotaResult nota_session_set_scene_name(NotaEngine* e, int32_t scene, const char*
 }
 int32_t nota_session_insert_scene(NotaEngine* e, int32_t at) {
     return e ? ENG(e)->insertScene(at) : -1;
+}
+
+// --- Session decks (Syntetika) ---------------------------------------------
+
+int32_t nota_session_deck_count(const NotaEngine* e) {
+    return e ? CENG(e)->deckCount() : 0;
+}
+int32_t nota_session_current_deck(const NotaEngine* e) {
+    return e ? CENG(e)->currentDeck() : 0;
+}
+NotaResult nota_session_switch_deck(NotaEngine* e, int32_t deck) {
+    if (!e) return NOTA_ERR_INVALID_ARG;
+    return ENG(e)->switchDeck(deck) ? NOTA_OK : NOTA_ERR_INVALID_ARG;
+}
+NotaResult nota_session_set_current_deck(NotaEngine* e, int32_t deck) {
+    if (!e) return NOTA_ERR_INVALID_ARG;
+    ENG(e)->setCurrentDeck(deck);
+    return NOTA_OK;
+}
+int32_t nota_session_deck_scene_start(const NotaEngine* e, int32_t deck) {
+    return e ? CENG(e)->deckSceneStart(deck) : 0;
+}
+int32_t nota_session_deck_scene_count(const NotaEngine* e, int32_t deck) {
+    return e ? CENG(e)->deckSceneCount(deck) : 0;
+}
+int32_t nota_session_deck_name(const NotaEngine* e, int32_t deck, char* out, int32_t cap) {
+    std::string v;
+    if (!e || !CENG(e)->deckName(deck, v)) {
+        if (out && cap > 0) out[0] = '\0';
+        return 0;
+    }
+    return copyOut(v, out, cap);
+}
+NotaResult nota_session_rename_deck(NotaEngine* e, int32_t deck, const char* name) {
+    if (!e || !name) return NOTA_ERR_INVALID_ARG;
+    return ENG(e)->renameDeck(deck, std::string(name)) ? NOTA_OK : NOTA_ERR_INVALID_ARG;
+}
+int32_t nota_session_add_deck(NotaEngine* e) {
+    return e ? ENG(e)->addDeck() : -1;
+}
+int32_t nota_session_duplicate_deck(NotaEngine* e, int32_t deck) {
+    return e ? ENG(e)->duplicateDeck(deck) : -1;
+}
+NotaResult nota_session_remove_deck(NotaEngine* e, int32_t deck) {
+    if (!e) return NOTA_ERR_INVALID_ARG;
+    return ENG(e)->removeDeck(deck) ? NOTA_OK : NOTA_ERR_INVALID_ARG;
+}
+int32_t nota_session_insert_scene_in_deck(NotaEngine* e, int32_t deck, int32_t at_local) {
+    return e ? ENG(e)->insertSceneInDeck(deck, at_local) : -1;
+}
+NotaResult nota_session_set_decks(NotaEngine* e, const char* names_joined, const int32_t* counts,
+                                  int32_t count, int32_t current) {
+    if (!e || !counts || count <= 0) return NOTA_ERR_INVALID_ARG;
+    std::vector<std::string> n;
+    std::vector<int32_t> c;
+    n.reserve(static_cast<size_t>(count));
+    c.reserve(static_cast<size_t>(count));
+    std::string joined = names_joined ? names_joined : "";
+    size_t at = 0;
+    for (int32_t i = 0; i < count; ++i) {
+        const size_t end = joined.find('\n', at);
+        n.emplace_back(joined.substr(at, end == std::string::npos ? std::string::npos : end - at));
+        at = end == std::string::npos ? joined.size() : end + 1;
+        c.push_back(counts[i]);
+    }
+    return ENG(e)->setDecks(n, c, current) ? NOTA_OK : NOTA_ERR_INVALID_ARG;
 }
 int32_t nota_session_duplicate_scene(NotaEngine* e, int32_t scene) {
     return e ? ENG(e)->duplicateScene(scene) : -1;

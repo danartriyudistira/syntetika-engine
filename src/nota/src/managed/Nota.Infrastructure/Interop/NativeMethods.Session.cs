@@ -163,6 +163,46 @@ internal static partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "nota_session_insert_scene")]
     internal static partial int SessionInsertScene(IntPtr engine, int at);
 
+    // --- Session decks (Syntetika) ---
+    [LibraryImport(Lib, EntryPoint = "nota_session_deck_count")]
+    internal static partial int SessionDeckCount(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_current_deck")]
+    internal static partial int SessionCurrentDeck(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_switch_deck")]
+    internal static partial NotaResult SessionSwitchDeck(IntPtr engine, int deck);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_set_current_deck")]
+    internal static partial NotaResult SessionSetCurrentDeck(IntPtr engine, int deck);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_deck_scene_start")]
+    internal static partial int SessionDeckSceneStart(IntPtr engine, int deck);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_deck_scene_count")]
+    internal static partial int SessionDeckSceneCount(IntPtr engine, int deck);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_deck_name")]
+    internal static partial int SessionDeckName(IntPtr engine, int deck, [Out] byte[] outBuf, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_rename_deck", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult SessionRenameDeck(IntPtr engine, int deck, string name);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_add_deck")]
+    internal static partial int SessionAddDeck(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_duplicate_deck")]
+    internal static partial int SessionDuplicateDeck(IntPtr engine, int deck);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_remove_deck")]
+    internal static partial NotaResult SessionRemoveDeck(IntPtr engine, int deck);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_insert_scene_in_deck")]
+    internal static partial int SessionInsertSceneInDeck(IntPtr engine, int deck, int atLocal);
+
+    [LibraryImport(Lib, EntryPoint = "nota_session_set_decks", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult SessionSetDecks(IntPtr engine, string namesJoined, [In] int[] counts, int count, int current);
+
     [LibraryImport(Lib, EntryPoint = "nota_session_duplicate_scene")]
     internal static partial int SessionDuplicateScene(IntPtr engine, int scene);
 

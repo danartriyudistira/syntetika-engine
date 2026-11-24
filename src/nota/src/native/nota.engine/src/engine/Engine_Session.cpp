@@ -119,14 +119,15 @@ std::shared_ptr<Graph> Engine::rebuildScenes(
 }
 
 int32_t Engine::addScene() {
-    const int32_t idx = authoring_->sceneCount;
-    publish(rebuildScenes(idx + 1, [](std::vector<SessionSlot>&) {}));
-    return idx;
+    return insertScene(authoring_->sceneCount);
 }
 
 bool Engine::removeScene(int32_t scene) {
     if (authoring_->sceneCount <= 1) return false; // always keep at least one scene
     if (scene < 0 || scene >= authoring_->sceneCount) return false;
+    const bool implicitDeck = authoring_->decks.empty();
+    const int32_t deck = graphDeckOfScene(*authoring_, scene);
+    if (!implicitDeck && graphDeckSceneCount(*authoring_, deck) <= 1) return false; // a deck keeps a row
     // Removing a row shifts every later slot up: a take recording into the row ends first,
     // players on the row stop, players below it follow their slot up.
     // A slot that joined the take in that row (specs/086) lands what it has and leaves it.
@@ -145,6 +146,8 @@ bool Engine::removeScene(int32_t scene) {
         if (scene < static_cast<int32_t>(slots.size())) slots.erase(slots.begin() + scene);
     });
     if (scene < static_cast<int32_t>(g->scenes.size())) g->scenes.erase(g->scenes.begin() + scene);
+    if (!implicitDeck && deck < static_cast<int32_t>(g->decks.size()))
+        g->decks[deck].sceneCount = std::max(0, g->decks[deck].sceneCount - 1);
     publish(std::move(g));
     remapPlayers([scene](int32_t x) { return x == scene ? -1 : (x > scene ? x - 1 : x); });
     return true;
@@ -1305,9 +1308,10 @@ void Engine::remapPlayers(const std::function<int32_t(int32_t)>& map) {
 
 // Insert a row at `at`: empty, a copy of row `copyFrom` (old index), or each track's
 // currently playing clip (capture). One undo step.
-int32_t Engine::insertSceneRow(int32_t at, int32_t copyFrom, bool capturePlaying) {
+int32_t Engine::insertSceneRow(int32_t at, int32_t copyFrom, bool capturePlaying, int32_t ownerDeck) {
     const int32_t count = authoring_->sceneCount;
     if (at < 0 || at > count || copyFrom >= count) return -1;
+    const bool implicitDeck = authoring_->decks.empty();
     auto g = std::make_shared<Graph>();
     inheritGraphLevel(*g, *authoring_);
     g->sceneCount = count + 1;
@@ -1327,20 +1331,34 @@ int32_t Engine::insertSceneRow(int32_t at, int32_t copyFrom, bool capturePlaying
         slots.insert(slots.begin() + at, row);
         g->tracks.push_back(nt);
     }
+    if (implicitDeck) {
+        ensureGraphDecks(*g); // one implicit deck, grown to the new row count
+    } else {
+        int32_t deck = ownerDeck;
+        if (deck < 0) deck = graphDeckOfScene(*g, at);
+        deck = std::clamp(deck, 0, static_cast<int32_t>(g->decks.size()) - 1);
+        g->decks[deck].sceneCount += 1;
+    }
     publish(std::move(g));
     remapPlayers([at](int32_t x) { return x >= at ? x + 1 : x; });
     return at;
 }
 
 int32_t Engine::insertScene(int32_t at) {
-    return insertSceneRow(at, -1, false);
+    const int32_t owner = authoring_->sceneCount > 0
+        ? graphDeckOfScene(*authoring_, std::clamp(at, 0, authoring_->sceneCount - 1))
+        : 0;
+    return insertSceneRow(at, -1, false, owner);
 }
 int32_t Engine::duplicateScene(int32_t scene) {
     if (scene < 0 || scene >= authoring_->sceneCount) return -1;
-    return insertSceneRow(scene + 1, scene, false);
+    return insertSceneRow(scene + 1, scene, false, graphDeckOfScene(*authoring_, scene));
 }
 int32_t Engine::captureScene(int32_t at) {
-    return insertSceneRow(at, -1, true);
+    const int32_t owner = authoring_->sceneCount > 0
+        ? graphDeckOfScene(*authoring_, std::clamp(at, 0, authoring_->sceneCount - 1))
+        : 0;
+    return insertSceneRow(at, -1, true, owner);
 }
 
 // Reorder a row: every track's slot and the scene's metadata move together; players follow.
@@ -1348,6 +1366,11 @@ bool Engine::moveScene(int32_t from, int32_t to) {
     const int32_t count = authoring_->sceneCount;
     if (from < 0 || from >= count || to < 0 || to >= count) return false;
     if (from == to) return true;
+    // Rows never cross a deck boundary: deck ranges are contiguous, so a cross-deck move
+    // would silently change both decks. The UI moves rows within the open deck.
+    if (!authoring_->decks.empty()
+        && graphDeckOfScene(*authoring_, from) != graphDeckOfScene(*authoring_, to))
+        return false;
     auto move = [from, to](auto& v) {
         auto item = v[from];
         v.erase(v.begin() + from);
@@ -1366,6 +1389,185 @@ bool Engine::moveScene(int32_t from, int32_t to) {
         if (to < from && x >= to && x < from) return x + 1;
         return x;
     });
+    return true;
+}
+
+// --- Session decks (Syntetika) ---------------------------------------------
+// A deck is a contiguous span of scene rows; every deck shares the tracks, instruments and
+// mixer. Switching never stops a player (the rows keep looping); removing a deck stops the
+// players it owned and shifts the rows after it. Scene edits keep the partition in step.
+
+namespace {
+std::vector<DeckInfo> normalizedDecks(const Graph& g) {
+    if (!g.decks.empty()) return g.decks;
+    return {DeckInfo{defaultDeckName(0), std::max(0, g.sceneCount)}};
+}
+} // namespace
+
+int32_t Engine::deckCount() const { return graphDeckCount(*authoring_); }
+
+int32_t Engine::currentDeck() const { return currentDeck_.load(std::memory_order_relaxed); }
+
+bool Engine::switchDeck(int32_t deck) {
+    if (deck < 0 || deck >= graphDeckCount(*authoring_)) return false;
+    currentDeck_.store(deck, std::memory_order_relaxed);
+    return true;
+}
+
+void Engine::setCurrentDeck(int32_t deck) {
+    currentDeck_.store(std::clamp(deck, 0, graphDeckCount(*authoring_) - 1), std::memory_order_relaxed);
+}
+
+void Engine::clampCurrentDeck() {
+    const int32_t n = graphDeckCount(*authoring_);
+    const int32_t cur = currentDeck_.load(std::memory_order_relaxed);
+    currentDeck_.store(std::clamp(cur, 0, n - 1), std::memory_order_relaxed);
+}
+
+int32_t Engine::deckSceneStart(int32_t deck) const { return graphDeckSceneStart(*authoring_, deck); }
+
+int32_t Engine::deckSceneCount(int32_t deck) const { return graphDeckSceneCount(*authoring_, deck); }
+
+bool Engine::deckName(int32_t deck, std::string& out) const {
+    if (deck < 0 || deck >= graphDeckCount(*authoring_)) return false;
+    out = graphDeckName(*authoring_, deck);
+    return true;
+}
+
+bool Engine::renameDeck(int32_t deck, const std::string& name) {
+    if (deck < 0 || deck >= graphDeckCount(*authoring_) || name.empty()) return false;
+    auto g = std::make_shared<Graph>(*authoring_); // graph-level edit: tracks stay shared
+    ensureGraphDecks(*g);
+    g->decks[deck].name = name;
+    publish(std::move(g));
+    return true;
+}
+
+int32_t Engine::addDeck() {
+    const int32_t total = authoring_->sceneCount;
+    auto decks = normalizedDecks(*authoring_);
+    const int32_t index = static_cast<int32_t>(decks.size());
+    auto g = rebuildScenes(total + 1, [](std::vector<SessionSlot>&) {});
+    if (static_cast<int32_t>(g->scenes.size()) < total) g->scenes.resize(total);
+    g->scenes.push_back(SceneInfo{});
+    decks.push_back(DeckInfo{defaultDeckName(index), 1});
+    g->decks = std::move(decks);
+    publish(std::move(g));
+    currentDeck_.store(index, std::memory_order_relaxed);
+    return index;
+}
+
+int32_t Engine::duplicateDeck(int32_t deck) {
+    auto decks = normalizedDecks(*authoring_);
+    if (deck < 0 || deck >= static_cast<int32_t>(decks.size())) return -1;
+    const int32_t total = authoring_->sceneCount;
+    int32_t start = 0;
+    for (int32_t i = 0; i < deck; ++i) start += std::max(0, decks[i].sceneCount);
+    const int32_t n = std::max(0, decks[deck].sceneCount);
+    if (n <= 0) return -1;
+    const int32_t at = start + n; // immediately after the source, so its own rows keep their index
+    auto g = std::make_shared<Graph>();
+    inheritGraphLevel(*g, *authoring_);
+    g->sceneCount = total + n;
+    if (static_cast<int32_t>(g->scenes.size()) < total) g->scenes.resize(total);
+    std::vector<SceneInfo> sceneCopy(g->scenes.begin() + start, g->scenes.begin() + start + n);
+    g->scenes.insert(g->scenes.begin() + at, sceneCopy.begin(), sceneCopy.end());
+    DeckInfo copy = decks[deck];
+    if (copy.name.empty()) copy.name = defaultDeckName(deck);
+    copy.name += " copy";
+    g->decks = decks;
+    g->decks.insert(g->decks.begin() + deck + 1, std::move(copy));
+    g->tracks.reserve(authoring_->tracks.size());
+    for (auto& t : authoring_->tracks) {
+        auto nt = cloneTrack(*t);
+        auto& slots = nt->sessionSlots;
+        if (static_cast<int32_t>(slots.size()) < total) slots.resize(total);
+        std::vector<SessionSlot> rowCopy(slots.begin() + start, slots.begin() + start + n);
+        slots.insert(slots.begin() + at, rowCopy.begin(), rowCopy.end());
+        g->tracks.push_back(nt);
+    }
+    publish(std::move(g));
+    remapPlayers([at, n](int32_t x) { return x >= at ? x + n : x; });
+    currentDeck_.store(deck + 1, std::memory_order_relaxed);
+    return deck + 1;
+}
+
+bool Engine::removeDeck(int32_t deck) {
+    // v1: the grid doesn't change under a take. The UI says why.
+    if (recording_.load(std::memory_order_relaxed)) return false;
+    auto decks = normalizedDecks(*authoring_);
+    if (decks.size() <= 1 || deck < 0 || deck >= static_cast<int32_t>(decks.size())) return false;
+    const int32_t total = authoring_->sceneCount;
+    int32_t start = 0;
+    for (int32_t i = 0; i < deck; ++i) start += std::max(0, decks[i].sceneCount);
+    const int32_t n = std::max(0, decks[deck].sceneCount);
+    if (n <= 0) return false;
+    const int32_t end = start + n;
+
+    // Stop what that deck was playing; other decks keep their players untouched.
+    for (auto& t : authoring_->tracks) {
+        if (!t->sessionPlayer) continue;
+        auto& sp = *t->sessionPlayer;
+        const int32_t p = sp.playing.load(std::memory_order_relaxed);
+        const int32_t q = sp.pendingSlot();
+        if ((p >= start && p < end) || (q >= start && q < end)) sp.requestStop();
+    }
+    if (sceneFollowScene_ >= start && sceneFollowScene_ < end) sceneFollowScene_ = -1;
+
+    auto g = std::make_shared<Graph>();
+    inheritGraphLevel(*g, *authoring_);
+    g->sceneCount = total - n;
+    if (static_cast<int32_t>(g->scenes.size()) < total) g->scenes.resize(total);
+    g->scenes.erase(g->scenes.begin() + start, g->scenes.begin() + end);
+    g->decks = decks;
+    g->decks.erase(g->decks.begin() + deck);
+    g->tracks.reserve(authoring_->tracks.size());
+    for (auto& t : authoring_->tracks) {
+        auto nt = cloneTrack(*t);
+        auto& slots = nt->sessionSlots;
+        if (static_cast<int32_t>(slots.size()) < total) slots.resize(total);
+        slots.erase(slots.begin() + start, slots.begin() + end);
+        g->tracks.push_back(nt);
+    }
+    publish(std::move(g));
+    remapPlayers([start, end, n](int32_t x) {
+        if (x < 0) return x;
+        if (x >= start && x < end) return -1;
+        return x >= end ? x - n : x;
+    });
+    int32_t cur = currentDeck_.load(std::memory_order_relaxed);
+    if (cur == deck) cur = std::max(0, deck - 1);
+    else if (cur > deck) --cur;
+    currentDeck_.store(std::clamp(cur, 0, deckCount() - 1), std::memory_order_relaxed);
+    return true;
+}
+
+int32_t Engine::insertSceneInDeck(int32_t deck, int32_t atLocal) {
+    if (deck < 0 || deck >= graphDeckCount(*authoring_)) return -1;
+    const int32_t start = graphDeckSceneStart(*authoring_, deck);
+    const int32_t n = graphDeckSceneCount(*authoring_, deck);
+    return insertSceneRow(start + std::clamp(atLocal, 0, n), -1, false, deck);
+}
+
+bool Engine::setDecks(const std::vector<std::string>& names, const std::vector<int32_t>& counts,
+                      int32_t current) {
+    if (names.empty() || names.size() != counts.size()) return false;
+    int32_t sum = 0;
+    for (int32_t c : counts) {
+        if (c < 1) return false;
+        sum += c;
+    }
+    if (sum != authoring_->sceneCount) return false;
+    auto g = std::make_shared<Graph>(*authoring_);
+    g->decks.clear();
+    for (size_t i = 0; i < names.size(); ++i) {
+        DeckInfo d;
+        d.name = names[i].empty() ? defaultDeckName(static_cast<int32_t>(i)) : names[i];
+        d.sceneCount = counts[i];
+        g->decks.push_back(std::move(d));
+    }
+    publish(std::move(g));
+    setCurrentDeck(current);
     return true;
 }
 
@@ -1466,7 +1668,11 @@ void Engine::serviceSessionFollow() {
     const double lead = q > 0.0 ? std::min(q, si.followBeats) : 0.0;
     const double due = sceneFollowStart_ + si.followBeats;
     if (transport_.uiPositionBeats() + lead + 1e-6 < due) return;
-    launchScene((sc + 1) % authoring_->sceneCount, true);
+    int32_t lo = 0, count = 0;
+    if (graphDeckRange(*authoring_, sc, &lo, &count) && count > 0)
+        launchScene(lo + (sc - lo + 1) % count, true);
+    else
+        launchScene((sc + 1) % authoring_->sceneCount, true);
     sceneFollowStart_ = due; // exactly where the outgoing scene's time ran out
 }
 
@@ -1477,9 +1683,16 @@ int32_t Engine::sessionSlotPeaks(int32_t trackId, int32_t scene, float* outMinMa
 
 // --- Session P0: audio thread ---------------------------------------------------
 
-int32_t Engine::followTarget(const Track& t, int32_t cur, FollowAction a) {
+int32_t Engine::followTarget(const Track& t, int32_t cur, FollowAction a, int32_t lo, int32_t hi) {
     const int32_t n = static_cast<int32_t>(t.sessionSlots.size());
-    auto filled = [&](int32_t i) { return i >= 0 && i < n && t.sessionSlots[i].hasClip; };
+    lo = std::clamp(lo, 0, n);
+    hi = std::clamp(hi, lo, n);
+    if (hi <= lo) return cur;
+    auto filled = [&](int32_t i) { return i >= lo && i < hi && t.sessionSlots[i].hasClip; };
+    auto wrap = [&](int32_t i) {
+        const int32_t m = hi - lo;
+        return lo + ((i - lo) % m + m) % m;
+    };
     auto rnd = [&]() {
         uint32_t x = followRng_;
         x ^= x << 13;
@@ -1492,38 +1705,39 @@ int32_t Engine::followTarget(const Track& t, int32_t cur, FollowAction a) {
     case FollowAction::Stop: return -1;
     case FollowAction::Again: return cur;
     case FollowAction::Next:
-        for (int32_t k = 1; k <= n; ++k)
-            if (filled((cur + k) % n)) return (cur + k) % n;
+        for (int32_t k = 1; k <= hi - lo; ++k)
+            if (const int32_t j = wrap(cur + k); filled(j)) return j;
         return cur;
     case FollowAction::Previous:
-        for (int32_t k = 1; k <= n; ++k)
-            if (filled(((cur - k) % n + n) % n)) return ((cur - k) % n + n) % n;
+        for (int32_t k = 1; k <= hi - lo; ++k)
+            if (const int32_t j = wrap(cur - k); filled(j)) return j;
         return cur;
     case FollowAction::First:
-        for (int32_t i = 0; i < n; ++i)
+        for (int32_t i = lo; i < hi; ++i)
             if (filled(i)) return i;
         return cur;
     case FollowAction::Last:
-        for (int32_t i = n - 1; i >= 0; --i)
+        for (int32_t i = hi - 1; i >= lo; --i)
             if (filled(i)) return i;
         return cur;
     case FollowAction::Any:
     case FollowAction::Other: {
         int32_t pool[256];
         int32_t m = 0;
-        for (int32_t i = 0; i < n && m < 256; ++i)
+        for (int32_t i = lo; i < hi && m < 256; ++i)
             if (filled(i) && (a == FollowAction::Any || i != cur)) pool[m++] = i;
         return m ? pool[rnd() % static_cast<uint32_t>(m)] : cur;
     }
     case FollowAction::Jump: {
+        // Stored as a global scene index (one deck: unchanged); it must land in this deck.
         const int32_t j = t.sessionSlots[cur].jumpScene;
-        return filled(j) ? j : -1;
+        return (j >= lo && j < hi && filled(j)) ? j : -1;
     }
     default: return cur;
     }
 }
 
-void Engine::sessionPreApply(Track& t, double blockBeats) {
+void Engine::sessionPreApply(const Graph& g, Track& t, double blockBeats) {
     auto& sp = *t.sessionPlayer;
     const int32_t cur = sp.playing.load(std::memory_order_relaxed);
     if (cur < 0 || cur >= static_cast<int32_t>(t.sessionSlots.size())) return;
@@ -1573,7 +1787,12 @@ void Engine::sessionPreApply(Track& t, double blockBeats) {
         sp.resetFollowCount();
         return;
     }
-    const int32_t target = followTarget(t, cur, a);
+    int32_t lo = 0, count = 0;
+    if (!graphDeckRange(g, cur, &lo, &count)) {
+        lo = 0;
+        count = static_cast<int32_t>(t.sessionSlots.size());
+    }
+    const int32_t target = followTarget(t, cur, a, lo, lo + count);
     if (target < 0) {
         sp.queueIfIdle(SessionPlayer::kStopNow);
         return;

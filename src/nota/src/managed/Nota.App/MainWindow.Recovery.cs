@@ -142,6 +142,7 @@ public partial class MainWindow
         {
             if (!RestoreSnapshotVisuals(info.BundlePath, System.IO.Path.Combine(original, "visuals", "media")))
                 VisualBridge.Current?.VizLoad(original);
+            VisualBridge.Current?.SyncDecks();
             RecordRecentProject(original);   // the recovery copy is about to be deleted
         }
         else

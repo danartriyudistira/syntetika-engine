@@ -577,6 +577,23 @@ class Engine {
     bool clearSessionSlot(int32_t trackId, int32_t scene); // empty a slot (stops it if playing)
     int32_t addScene();                                    // append a scene; returns its index
     bool removeScene(int32_t scene);                       // drop a scene row (keeps at least one)
+    // --- Session decks (Syntetika). A deck is a contiguous span of scene rows; tracks,
+    // devices and the mixer are shared. Switching never stops a playing clip.
+    int32_t deckCount() const;
+    int32_t currentDeck() const;
+    bool switchDeck(int32_t deck);                        // UI: no undo entry, keeps players
+    void setCurrentDeck(int32_t deck);                    // load/restore: clamp only
+    int32_t deckSceneStart(int32_t deck) const;
+    int32_t deckSceneCount(int32_t deck) const;
+    bool deckName(int32_t deck, std::string& out) const;
+    bool renameDeck(int32_t deck, const std::string& name); // one undo step
+    int32_t addDeck();                                      // append an empty deck (one scene)
+    int32_t duplicateDeck(int32_t deck);                    // copy after itself, one undo step
+    bool removeDeck(int32_t deck);                          // drop its rows (last deck kept)
+    int32_t insertSceneInDeck(int32_t deck, int32_t atLocal); // insert an empty row in a deck
+    // Load: replace the partition (names/counts must sum to sceneCount).
+    bool setDecks(const std::vector<std::string>& names, const std::vector<int32_t>& counts,
+                  int32_t current);
     bool addSessionMidiClip(int32_t trackId, int32_t scene, double lengthBeats);
     double sessionSlotLength(int32_t trackId, int32_t scene) const; // loop length in beats, 0 if none (M5-5)
     bool setSessionSlotLength(int32_t trackId, int32_t scene, double lengthBeats); // change loop length (M5-5)
@@ -1643,9 +1660,9 @@ class Engine {
     void renderSessionSlotRaw(Track& t, float* dst, int32_t frames, double spb);
     // Session P0 (audio thread): queue a follow action / Repeat retrigger before the launch
     // request applies, and after rendering advance the player + end a one-shot slot.
-    void sessionPreApply(Track& t, double blockBeats);
+    void sessionPreApply(const Graph& g, Track& t, double blockBeats);
     void sessionPostRender(Track& t, double blockBeats);
-    int32_t followTarget(const Track& t, int32_t cur, FollowAction a);
+    int32_t followTarget(const Track& t, int32_t cur, FollowAction a, int32_t lo, int32_t hi);
     uint32_t followRng_ = 0x9E3779B9u; // audio-thread RNG for follow-action chance / Any / Other
     int applyMidiEffects(
         Track& t, MidiEv* evs, int n, MidiEv* scratch, int32_t frames, double beatStart, double spb, bool playing);
@@ -2182,11 +2199,13 @@ class Engine {
     std::shared_ptr<Graph> rebuildScenes(
         int32_t newCount, const std::function<void(std::vector<SessionSlot>&)>& mutate);
     // Session P0 helpers (message thread).
-    int32_t insertSceneRow(int32_t at, int32_t copyFrom, bool capturePlaying);
+    int32_t insertSceneRow(int32_t at, int32_t copyFrom, bool capturePlaying, int32_t ownerDeck = -1);
     void remapPlayers(const std::function<int32_t(int32_t)>& map); // shift players after a row insert/remove
+    void clampCurrentDeck(); // keep currentDeck_ inside the live deck range after an edit/undo
     void launchSlotImpl(Track& t, int32_t scene, float velocity, bool fromScene, int32_t gen = 0);
     void serviceSessionFollow(); // poll(): scene follow + fixed-length capture
     std::atomic<bool> sessionFollow_{true};
+    std::atomic<int32_t> currentDeck_{0}; // UI-only: which deck the Session grid shows
     double sessionRecordLen_ = 0.0; // fixed session record length, beats (0 = off)
     int32_t sceneFollowScene_ = -1; // last launched scene (for scene follow)
     double sceneFollowStart_ = 0.0; // beat it started at (quantized)

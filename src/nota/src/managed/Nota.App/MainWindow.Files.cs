@@ -291,6 +291,7 @@ public partial class MainWindow
             _projectPath = dir;
             VisualBridge.Current?.SetProjectDir(dir);
             VisualBridge.Current?.VizLoad(dir);
+            VisualBridge.Current?.SyncDecks();   // the project's deck list is the truth
             // Re-apply audio loop lengths after the composition loads, so saved videos whose
             // audio was trimmed later still match their clips.
             VisualBridge.Current?.ResendSlotTiming();

@@ -1104,6 +1104,35 @@ impl Composition {
         }
     }
 
+    /// Copies a deck (its columns and clips) right after it and opens the copy. The clips in
+    /// the copy get fresh ids, so held/live tracking can never confuse the two decks.
+    pub fn duplicate_deck(&mut self, index: usize) -> usize {
+        if index >= self.decks.len() {
+            return self.current_deck;
+        }
+        // The open deck's clips live in self.columns/layers until the deck is closed.
+        if index == self.current_deck {
+            let closing = self.current_deck;
+            self.decks[closing].columns = self.columns.clone();
+            self.decks[closing].clips = self.layers.iter().map(|l| l.clips.clone()).collect();
+        }
+        let source_name = if self.decks[index].name.is_empty() {
+            format!("Deck {}", index + 1)
+        } else {
+            self.decks[index].name.clone()
+        };
+        let mut copy = self.decks[index].clone();
+        copy.name = format!("{source_name} copy");
+        for row in &mut copy.clips {
+            for clip in row.iter_mut().flatten() {
+                clip.id = self.next_clip_id();
+            }
+        }
+        self.decks.insert(index + 1, copy);
+        self.switch_deck(index + 1);
+        index + 1
+    }
+
     /// Adds an empty deck after the others, with as many columns as the open one, and opens it.
     pub fn add_deck(&mut self) -> usize {
         let cols = self.columns.len().max(1);
@@ -1658,6 +1687,25 @@ mod tests {
         let ids: Vec<ClipId> = c.every_clip().map(|x| x.id).collect();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&a) && ids.contains(&b));
+    }
+
+    #[test]
+    fn duplicating_a_deck_copies_its_clips_with_fresh_ids() {
+        let mut c = Composition::new(640, 360, 1, 2);
+        let a = c.set_clip(0, 0, generator(GeneratorKind::Plasma)).unwrap();
+        c.columns[0].name = "Intro".into();
+        let copy = c.duplicate_deck(0);
+        assert_eq!((copy, c.current_deck, c.decks.len()), (1, 1, 2));
+        assert_eq!(c.columns.len(), 2);
+        assert_eq!(c.columns[0].name, "Intro");
+        let copied = c.clip(0, 0).expect("the copy has the clip");
+        assert_ne!(copied.id, a, "ids never collide between the two decks");
+        assert_eq!(c.decks[1].name, "Deck 1 copy");
+        // The source still owns its original clip when switching back; the copy keeps its own.
+        c.switch_deck(0);
+        assert_eq!(c.clip(0, 0).map(|x| x.id), Some(a));
+        let stored = c.decks[1].clips[0][0].as_ref().expect("the copy keeps its clip");
+        assert_ne!(stored.id, a);
     }
 
     #[test]

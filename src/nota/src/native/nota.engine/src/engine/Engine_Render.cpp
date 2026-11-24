@@ -3240,7 +3240,7 @@ void Engine::mixGraph(Graph* g, float* out, int32_t frames, double blockStart, d
             bool sessionActive = false;
             if (auto& sp = t.sessionPlayer) {
                 // Follow actions + Repeat launch mode queue the next request before it applies.
-                if (playing) sessionPreApply(t, frames / spb);
+                if (playing) sessionPreApply(*g, t, frames / spb);
                 if (sp->maybeApply(
                         blockStart / spb, frames / spb, launchQuant_.load(std::memory_order_relaxed), seamOffs_)) {
                     if (t.instrument) t.instrument->allNotesOff();

@@ -52,6 +52,9 @@ public sealed partial class SessionView : UserControl
     private readonly StackPanel _headerRow = new() { Orientation = Orientation.Horizontal, Spacing = Gap, Margin = new Thickness(GridPad, GridPad, GridPad, 0) };
     private readonly StackPanel _cellsRow = new() { Orientation = Orientation.Horizontal, Spacing = Gap, Margin = new Thickness(GridPad, Gap, GridPad, 0) };
     private readonly StackPanel _footerRow = new() { Orientation = Orientation.Horizontal, Spacing = Gap, Margin = new Thickness(GridPad, Gap, GridPad, GridPad) };
+    // The deck bar under the grid: tabs on the left, + Deck pinned right (Syntetika).
+    private readonly Grid _deckBar = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(GridPad, 0, GridPad, GridPad) };
+    private readonly StackPanel _deckTabs = new() { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
     private readonly Border _inspectorHost = new() { Width = InspectorW };
     private readonly ScrollViewer _cellScroll = new();
     private readonly ScrollViewer _outerScroll = new();
@@ -74,6 +77,8 @@ public sealed partial class SessionView : UserControl
     private readonly List<Column> _cols = new();
     private readonly List<SceneCell> _sceneCells = new();
     private int _sceneCount;
+    // Global row range of the open deck; the grid keeps a cell per global row and hides the rest.
+    private int _deckStart, _deckEnd;
 
     // UI-only state: which group columns are folded, which mixer sections show, and the
     // selection (a slot on a track or group column, a scene row, or a Return / Master column).
@@ -164,7 +169,12 @@ public sealed partial class SessionView : UserControl
         _inner.Children.Add(_footerRow);
         _outerScroll.Content = _inner;
         ApplyAxis();
-        var gridArea = new Border { Background = NotaPalette.BgSunken, Child = _outerScroll, BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent };
+        var decked = new DockPanel();
+        var deckBar = BuildDeckBar();
+        DockPanel.SetDock(deckBar, Dock.Bottom);
+        decked.Children.Add(deckBar);
+        decked.Children.Add(_outerScroll);
+        var gridArea = new Border { Background = NotaPalette.BgSunken, Child = decked, BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent };
         // A Browser drop on the empty part of the grid — past the last column (the last row when
         // the grid is turned), beyond the scenes — starts a new track (#313); cells and headers
         // take their own drops first.
@@ -250,10 +260,14 @@ public sealed partial class SessionView : UserControl
         _cols.Clear();
         _sceneCells.Clear();
         _sceneCount = _engine.SceneCount;
+        int deck = Math.Clamp(_engine.CurrentDeck, 0, Math.Max(0, _engine.DeckCount - 1));
+        _deckStart = _engine.DeckSceneStart(deck);
+        _deckEnd = _deckStart + _engine.DeckSceneCount(deck);
         ApplyAxis();
 
         BuildColumns();
         AddSceneRail();
+        RefreshDeckBar();
         // Dev/self-test hook: exercise the real selection path once, so the visual engine's
         // select mirror can be verified without a click.
         if (Environment.GetEnvironmentVariable("NOTA_SELECT_TEST") is { Length: > 0 })
@@ -265,7 +279,8 @@ public sealed partial class SessionView : UserControl
         foreach (var c in _cols) AddColumn(c);
 
         // Keep the selection on something that still exists.
-        if (_sel.Scene >= _sceneCount) _sel = _sel with { Scene = Math.Max(0, _sceneCount - 1) };
+        if (_sel.Scene < _deckStart || _sel.Scene >= _deckEnd)
+            _sel = _sel with { Scene = _deckStart };
         if (_sel.Kind == SelKind.Bus && BusColumn(_sel.TrackId) is null) _sel = new Selection(SelKind.Slot, 0, _sel.Scene);
         if (_sel.Kind == SelKind.Slot && ColumnFor(_sel.TrackId) is null)
             _sel = NavCols.FirstOrDefault() is { } first ? _sel with { TrackId = first.TrackId } : new Selection(SelKind.Scene, 0, _sel.Scene);
@@ -560,7 +575,7 @@ public sealed partial class SessionView : UserControl
             }
         }
         _engine.LaunchScene(scene);
-        Select(new Selection(SelKind.Scene, 0, _selectNextOnLaunch ? Math.Min(scene + 1, _sceneCount - 1) : scene));
+        Select(new Selection(SelKind.Scene, 0, _selectNextOnLaunch ? Math.Min(scene + 1, _deckEnd - 1) : scene));
     }
 
     private void LaunchGroup(Column g, int scene)
@@ -766,7 +781,7 @@ public sealed partial class SessionView : UserControl
         }
         int below = _sel.Scene + 1;
         if (_sel.Kind != SelKind.Slot || !SlotFilled(_sel.TrackId, _sel.Scene)) return false;
-        if (below >= _sceneCount || SlotFilled(_sel.TrackId, below)) { Say(Loc.T("session.the_slot_below_is_taken")); return true; }
+        if (below >= _deckEnd || SlotFilled(_sel.TrackId, below)) { Say(Loc.T("session.the_slot_below_is_taken")); return true; }
         MoveOrCopySlot(_sel.TrackId, _sel.Scene, _sel.TrackId, below, move: false);
         Select(_sel with { Scene = below });
         Say(Loc.T("session.duplicated_clip"));
@@ -802,7 +817,7 @@ public sealed partial class SessionView : UserControl
     /// <summary>⌘I: insert an empty scene below the selection.</summary>
     public bool InsertSceneAtSelection()
     {
-        int s = _engine.InsertScene(Math.Min(_sel.Scene + 1, _sceneCount));
+        int s = _engine.InsertSceneInDeck(_engine.CurrentDeck, _sel.Scene - _deckStart + 1);
         if (s < 0) return false;
         VisualBridge.Current?.InsertColumn(s);
         Refresh();
@@ -813,7 +828,8 @@ public sealed partial class SessionView : UserControl
 
     private void CaptureScene()
     {
-        int s = _engine.CaptureScene(Math.Min(_sel.Scene + 1, _sceneCount));
+        if (_sel.Scene + 1 >= _deckEnd) { Say(Loc.T("session.the_slot_below_is_taken")); return; }
+        int s = _engine.CaptureScene(_sel.Scene + 1);
         if (s < 0) return;
         if (VisualBridge.Current is not null)
         {
@@ -898,6 +914,7 @@ public sealed partial class SessionView : UserControl
             _ => new GridPos(GridSelKind.Slot, Math.Max(0, nav.FindIndex(c => c.TrackId == _sel.TrackId)), _sel.Scene),
         };
         var to = SessionGridNav.Step(at, step, nav.Count, buses.Count, _sceneCount);
+        if (to.Scene < _deckStart || to.Scene >= _deckEnd) return;   // stay inside the open deck
         if (to == at && _sel.Kind != SelKind.Slot) return;
         switch (to.Kind)
         {

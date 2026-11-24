@@ -78,6 +78,13 @@ pub enum Command {
     VizCatalog { kind: String, query: String, seq: u64 },
     VizSave { path: String, uids: Vec<String>, media_dirs: Vec<String>, gc: bool },
     VizLoad { path: String, media_dir: String },
+    /// Session decks (Syntetika): switch/add/remove/duplicate/rename, and a full reconcile.
+    VizDeck { index: usize },
+    VizDeckAdd { index: usize },
+    VizDeckRemove { index: usize },
+    VizDeckDuplicate { index: usize },
+    VizDeckRename { index: usize, name: String },
+    VizDecks { names: Vec<String>, counts: Vec<usize>, current: usize },
     VizLayer { layer: usize, opacity: Option<f32>, blend: Option<String>, bypass: Option<bool> },
     /// Show or hide the output window (Nota's View ▸ Visual Output).
     VizOutput { show: bool },
@@ -353,6 +360,41 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
             let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_owned();
             let media_dir = v.get("mediaDir").and_then(|x| x.as_str()).unwrap_or("").to_owned();
             let _ = tx.send(Command::VizLoad { path, media_dir });
+        }
+        Some("vizDeck") => {
+            let index = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let _ = tx.send(Command::VizDeck { index });
+        }
+        Some("vizDeckAdd") => {
+            let index = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let _ = tx.send(Command::VizDeckAdd { index });
+        }
+        Some("vizDeckRemove") => {
+            let index = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let _ = tx.send(Command::VizDeckRemove { index });
+        }
+        Some("vizDeckDuplicate") => {
+            let index = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let _ = tx.send(Command::VizDeckDuplicate { index });
+        }
+        Some("vizDeckRename") => {
+            let index = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_owned();
+            let _ = tx.send(Command::VizDeckRename { index, name });
+        }
+        Some("vizDecks") => {
+            let names = v
+                .get("names")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            let counts = v
+                .get("counts")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().map(|n| n.as_u64().unwrap_or(1) as usize).collect())
+                .unwrap_or_default();
+            let current = v.get("current").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let _ = tx.send(Command::VizDecks { names, counts, current });
         }
         Some("vizLayer") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;

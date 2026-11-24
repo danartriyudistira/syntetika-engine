@@ -116,6 +116,29 @@ public interface IAudioEngine : IDisposable
     int AddScene();
     /// <summary>Removes a scene row (always keeps at least one). False if it couldn't.</summary>
     bool RemoveScene(int scene);
+
+    // --- Session decks (Syntetika) -----------------------------------------
+    /// <summary>A project always has at least one deck.</summary>
+    int DeckCount { get; }
+    int CurrentDeck { get; }
+    /// <summary>Shows another deck in the grid. Playing clips keep playing (no undo step).</summary>
+    void SwitchDeck(int deck);
+    /// <summary>Restores the open deck after a load (clamped, no undo step).</summary>
+    void SetCurrentDeck(int deck);
+    int DeckSceneStart(int deck);
+    int DeckSceneCount(int deck);
+    string GetDeckName(int deck);
+    void RenameDeck(int deck, string name);
+    /// <summary>Appends an empty deck (one scene) and opens it; returns its index.</summary>
+    int AddDeck();
+    /// <summary>Copies a deck (rows, slots, properties) right after it and opens the copy.</summary>
+    int DuplicateDeck(int deck);
+    /// <summary>Removes a deck and its rows; the last deck stays. False while recording.</summary>
+    bool RemoveDeck(int deck);
+    /// <summary>Inserts an empty scene inside a deck (local index); returns its global row.</summary>
+    int InsertSceneInDeck(int deck, int atLocal);
+    /// <summary>Load: replaces the deck partition (names + scene counts must sum to SceneCount).</summary>
+    void SetDecks(string[] names, int[] counts, int current);
     /// <summary>0 empty, 1 filled, 2 queued, 3 playing, 4 recording, 5 record pending (the take
     /// starts capturing on the next launch quantum, specs/078).</summary>
     int SessionSlotState(int trackId, int scene);

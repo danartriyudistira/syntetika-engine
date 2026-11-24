@@ -43,13 +43,23 @@ struct TimeRegion {
     bool drop = false;
 };
 
+// One Session deck: a contiguous span of global scene rows. Every deck shares the graph's
+// tracks/instruments/mixer; only the rows (and their slots) belong to it.
+struct DeckInfo {
+    std::string name;
+    int32_t sceneCount = 0; // >= 1 in a valid layout; the sum equals Graph::sceneCount
+};
+
 struct Graph {
     std::shared_ptr<const TempoMap> tempoMap;
     std::vector<std::shared_ptr<Track>> tracks;
     int32_t sceneCount = 8; // Session view rows (M5)
-    // Scene names / colours / tempo / follow (Session P0). May be shorter than sceneCount
+    // Session names / colours / tempo / follow (Session P0). May be shorter than sceneCount
     // (missing rows read as defaults). Carried forward wherever sceneCount is.
     std::vector<SceneInfo> scenes;
+    // Session decks (Syntetika): the scene partition, in tab order. Empty in graphs built
+    // before decks existed (and in a fresh graph) = one implicit deck covering every row.
+    std::vector<DeckInfo> decks;
     // Master-volume automation (M9 follow-up): a graph-level lane (not tied to a
     // track), applied to the master gain in applyAutomation. Undo-free via the
     // snapshot, like track lanes.
@@ -70,5 +80,20 @@ struct Graph {
 // carry them forward or the edit silently resets them — so every such build calls this,
 // and a new graph-level field is added here.
 void inheritGraphLevel(Graph& dst, const Graph& src);
+
+// --- Session decks ---------------------------------------------------------
+// The scene partition helpers. They tolerate `decks` being empty (a graph from before decks,
+// or a fresh one): that reads as one implicit deck holding every scene.
+std::string defaultDeckName(int32_t index); // "Deck 1", "Deck 2", …
+int32_t graphDeckCount(const Graph& g);
+int32_t graphDeckSceneCount(const Graph& g, int32_t deck);
+int32_t graphDeckSceneStart(const Graph& g, int32_t deck);
+std::string graphDeckName(const Graph& g, int32_t deck);
+int32_t graphDeckOfScene(const Graph& g, int32_t scene);
+// The [start, start+count) rows of the deck owning `scene`; false for an out-of-range scene.
+bool graphDeckRange(const Graph& g, int32_t scene, int32_t* start, int32_t* count);
+// Fills a single "Deck 1" covering every scene when `decks` is empty, and repairs a partition
+// whose counts don't add up (a damaged project file) so every later op has a valid layout.
+void ensureGraphDecks(Graph& g);
 
 } // namespace nota

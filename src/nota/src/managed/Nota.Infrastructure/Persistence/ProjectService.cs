@@ -45,7 +45,7 @@ public sealed class ProjectService
     /// v33 (specs/086) adds the optional tempo map and curve handles.
     /// v34 (specs/099) makes tempo the master track's Tempo automation lane.
     /// v35 (specs/103) adds FollowBypass on Session slots.
-    public const int CurrentFormatVersion = 35;
+    public const int CurrentFormatVersion = 36;
 
     /// <summary>Manifest file name inside the bundle folder.</summary>
     public const string ManifestName = "project.json";
@@ -1448,7 +1448,10 @@ public sealed class ProjectService
             LaunchQuant = engine.LaunchQuant,
             Follow = engine.SessionFollow,
             RecordLength = engine.SessionRecordLength,
+            CurrentDeck = engine.CurrentDeck,
         };
+        for (int d = 0; d < engine.DeckCount; d++)
+            dto.Decks.Add(new DeckDto { Name = engine.GetDeckName(d), SceneCount = engine.DeckSceneCount(d) });
         for (int s = 0; s < engine.SceneCount; s++)
         {
             if (!engine.TryGetSceneProps(s, out var p)) continue;
@@ -1479,6 +1482,28 @@ public sealed class ProjectService
                 Follow = sc.Follow ? 1 : 0, FollowBeats = sc.FollowBeats,
             });
         }
+        ApplyDecks(engine, dto);
+    }
+
+    // v35 files (and a hand-edited deck list that doesn't add up) load as one deck covering
+    // every scene: the audio and visuals stay exactly as saved.
+    private static void ApplyDecks(IAudioEngine engine, SessionDto dto)
+    {
+        var names = new List<string>();
+        var counts = new List<int>();
+        foreach (var deck in dto.Decks)
+        {
+            if (deck.SceneCount < 1) continue;
+            names.Add(deck.Name ?? "");
+            counts.Add(deck.SceneCount);
+        }
+        bool valid = names.Count > 0 && counts.Sum() == engine.SceneCount;
+        if (!valid)
+        {
+            names = new List<string> { "" };
+            counts = new List<int> { engine.SceneCount };
+        }
+        engine.SetDecks(names.ToArray(), counts.ToArray(), valid ? dto.CurrentDeck : 0);
     }
 
     // A clip's controller curves (specs/020); null when it has none, so older files stay alike.

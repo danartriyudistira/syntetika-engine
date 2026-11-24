@@ -1542,6 +1542,26 @@ NOTA_API int32_t    nota_session_duplicate_scene(NotaEngine* engine, int32_t sce
 NOTA_API int32_t    nota_session_capture_scene(NotaEngine* engine, int32_t at);
 /* Move a scene row (its slots on every track and its properties) to another index. */
 NOTA_API NotaResult nota_session_move_scene(NotaEngine* engine, int32_t from, int32_t to);
+
+/* Session decks (Syntetika): a deck is a contiguous span of scene rows; every deck shares the
+   tracks, devices and mixer. Switching never stops a player. A project always has >= 1 deck and
+   each deck >= 1 scene. */
+NOTA_API int32_t    nota_session_deck_count(const NotaEngine* engine);
+NOTA_API int32_t    nota_session_current_deck(const NotaEngine* engine);
+NOTA_API NotaResult nota_session_switch_deck(NotaEngine* engine, int32_t deck);      /* UI, no undo */
+NOTA_API NotaResult nota_session_set_current_deck(NotaEngine* engine, int32_t deck); /* load/restore */
+NOTA_API int32_t    nota_session_deck_scene_start(const NotaEngine* engine, int32_t deck);
+NOTA_API int32_t    nota_session_deck_scene_count(const NotaEngine* engine, int32_t deck);
+NOTA_API int32_t    nota_session_deck_name(const NotaEngine* engine, int32_t deck, char* out, int32_t cap);
+NOTA_API NotaResult nota_session_rename_deck(NotaEngine* engine, int32_t deck, const char* name_utf8);
+NOTA_API int32_t    nota_session_add_deck(NotaEngine* engine);                       /* appends, opens it */
+NOTA_API int32_t    nota_session_duplicate_deck(NotaEngine* engine, int32_t deck);   /* copy after itself */
+NOTA_API NotaResult nota_session_remove_deck(NotaEngine* engine, int32_t deck);      /* last deck stays */
+NOTA_API int32_t    nota_session_insert_scene_in_deck(NotaEngine* engine, int32_t deck, int32_t at_local);
+/* Load: replace the partition (names + scene counts; the counts must sum to sceneCount).
+   `names_joined` holds the names separated by newlines (an empty name = "Deck N"). */
+NOTA_API NotaResult nota_session_set_decks(NotaEngine* engine, const char* names_joined,
+                                           const int32_t* counts, int32_t count, int32_t current);
 /* Launch with a velocity 0..1 (scaled by the clip's velocity_amount); launch_slot uses 1. */
 NOTA_API NotaResult nota_session_launch_slot_vel(NotaEngine* engine, int32_t track_id, int32_t scene, float velocity);
 /* The launch button was released: stops a Gate / Repeat slot. No-op for other modes. */

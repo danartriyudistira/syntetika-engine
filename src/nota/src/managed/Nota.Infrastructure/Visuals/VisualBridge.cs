@@ -262,12 +262,22 @@ public sealed class VisualBridge : IDisposable
                 sig.Append(ti.Id).Append(':').Append(uid).Append(':').Append(name).Append('|');
                 tracks.Add(new { uid, name, kind = ti.Type, id = ti.Id });
             }
-            int sceneCount = _engine.SceneCount;
-            for (int i = 0; i < sceneCount; i++)
+            var (rowStart, rowCount) = OpenDeckRows;
+            for (int i = 0; i < rowCount; i++)
             {
-                string name = _engine.GetSceneName(i) ?? "";
-                sig.Append('s').Append(i).Append(':').Append(name).Append('|');
+                int scene = rowStart + i;
+                string name = _engine.GetSceneName(scene) ?? "";
+                sig.Append('s').Append(scene).Append(':').Append(name).Append('|');
                 scenes.Add(new { index = i, name });
+            }
+            int deck = _engine.CurrentDeck;
+            var decks = new List<object>();
+            for (int d = 0; d < _engine.DeckCount; d++)
+            {
+                string deckName = _engine.GetDeckName(d);
+                int deckScenes = _engine.DeckSceneCount(d);
+                sig.Append('d').Append(d).Append(':').Append(deckName).Append('/').Append(deckScenes).Append('|');
+                decks.Add(new { name = deckName, scenes = deckScenes });
             }
 
             string signature = sig.ToString();
@@ -277,8 +287,8 @@ public sealed class VisualBridge : IDisposable
             _layoutSignature = signature;
             _sentEpoch = epoch;
 
-            string json = JsonSerializer.Serialize(new { t = "layout", v = 1, tracks, scenes });
-            AppLog($"layout sent: {tracks.Count} tracks / {scenes.Count} scenes");
+            string json = JsonSerializer.Serialize(new { t = "layout", v = 2, deck, decks, tracks, scenes });
+            AppLog($"layout sent: {tracks.Count} tracks / {scenes.Count} scenes · deck {deck} of {decks.Count}");
             Send(json);
             WriteLayoutFile(json);
             // A layer can move while the selected track stays put: resend it with the new layer.
@@ -297,12 +307,52 @@ public sealed class VisualBridge : IDisposable
         SendSelection();
     }
 
+    // ---- open deck mapping ---------------------------------------------------
+    // Engine scene indices are global; openVJ's columns are per deck. Every scene that reaches
+    // the engine is converted to the open deck's column, and a scene from another deck is not
+    // sent (the visual engine shows one deck at a time; its held clips keep playing).
+
+    private (int Start, int Count) OpenDeckRows
+    {
+        get
+        {
+            int decks = Math.Max(1, _engine.DeckCount);
+            int deck = Math.Clamp(_engine.CurrentDeck, 0, decks - 1);
+            return (_engine.DeckSceneStart(deck), Math.Max(1, _engine.DeckSceneCount(deck)));
+        }
+    }
+
+    private bool InOpenDeck(int scene)
+    {
+        var (start, count) = OpenDeckRows;
+        return scene >= start && scene < start + count;
+    }
+
+    private int LocalCol(int scene)
+    {
+        var (start, count) = OpenDeckRows;
+        return scene >= start && scene < start + count ? scene - start : -1;
+    }
+
+    /// <summary>Forgets the deck-scoped mirrors after the open deck changed.</summary>
+    private void DeckChanged()
+    {
+        _playingScene.Clear();
+        _expectedLayerScene.Clear();
+        _selectedScene = -1;
+        _slotTimingDirty = true;
+        _layoutDirty = true;
+        _resumePending = true;
+    }
+
     private void SendSelection()
     {
         if (_selectedUid is not { Length: > 0 } uid || _selectedScene < 0) return;
+        int col = LocalCol(_selectedScene);
+        if (col < 0) return;
         int layer = CurrentLayoutUids().IndexOf(uid);
         if (layer < 0) return;
-        Send($"{{\"t\":\"select\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{_selectedScene.ToString(CultureInfo.InvariantCulture)}}}");
+        Send($"{{\"t\":\"select\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{col.ToString(CultureInfo.InvariantCulture)}}}");
     }
 
     /// <summary>Re-sends every slot on the next poll (after a project load or a new media assignment).</summary>
@@ -327,8 +377,9 @@ public sealed class VisualBridge : IDisposable
             {
                 if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type != 0) continue;
                 if (!layerOf.TryGetValue(Nota.Application.TrackUids.UidFor(ti.Id), out int layer)) continue;
+                var (rowStart, rowCount) = OpenDeckRows;
                 int playing = -1;
-                for (int scene = 0; scene < _engine.SceneCount; scene++)
+                for (int scene = rowStart; scene < rowStart + rowCount; scene++)
                     if (_engine.SessionSlotState(ti.Id, scene) == 3) { playing = scene; break; }
                 if (playing < 0) continue;
                 double len = _engine.SessionSlotLength(ti.Id, playing);
@@ -337,7 +388,7 @@ public sealed class VisualBridge : IDisposable
                 double phase = pos - Math.Floor(pos / len) * len;
                 phase = (phase - OffsetBeats) % len;
                 if (phase < 0) phase += len;
-                Send($"{{\"t\":\"vizSlotPhase\",\"layer\":{layer},\"col\":{playing},\"phase\":{Num(phase)},\"beat\":{Num(_engine.PositionBeats)}}}");
+                Send($"{{\"t\":\"vizSlotPhase\",\"layer\":{layer},\"col\":{LocalCol(playing)},\"phase\":{Num(phase)},\"beat\":{Num(_engine.PositionBeats)}}}");
             }
         }
         catch (ObjectDisposedException) { }
@@ -372,8 +423,9 @@ public sealed class VisualBridge : IDisposable
             {
                 if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type is not (0 or 1)) continue;
                 if (!layerOf.TryGetValue(Nota.Application.TrackUids.UidFor(ti.Id), out int layer)) continue;
+                var (rowStart, rowCount) = OpenDeckRows;
                 int playing = -1;
-                for (int scene = 0; scene < _engine.SceneCount; scene++)
+                for (int scene = rowStart; scene < rowStart + rowCount; scene++)
                     if (_engine.SessionSlotState(ti.Id, scene) == 3) { playing = scene; break; }
                 bool known = _playingScene.TryGetValue(ti.Id, out int prev);
                 if (playing >= 0)
@@ -430,7 +482,8 @@ public sealed class VisualBridge : IDisposable
             {
                 if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type != 0) continue;
                 if (!layerOf.TryGetValue(Nota.Application.TrackUids.UidFor(ti.Id), out int layer)) continue;
-                for (int scene = 0; scene < _engine.SceneCount; scene++)
+                var (rowStart, rowCount) = OpenDeckRows;
+                for (int scene = rowStart; scene < rowStart + rowCount; scene++)
                 {
                     double beats = _engine.SessionSlotLength(ti.Id, scene);
                     if (beats <= 0) continue;
@@ -449,7 +502,7 @@ public sealed class VisualBridge : IDisposable
                         && Math.Abs(prev.Start - start) < 1e-4
                         && prev.Loop == loop) continue;
                     _slotTiming[key] = (beats, bpm, loop, start);
-                    Send($"{{\"t\":\"vizSlotTiming\",\"layer\":{layer},\"col\":{scene},\"beats\":{Num(beats)},\"bpm\":{Num(bpm)},\"loop\":{(loop ? "true" : "false")},\"start\":{Num(start)}}}");
+                    Send($"{{\"t\":\"vizSlotTiming\",\"layer\":{layer},\"col\":{LocalCol(scene)},\"beats\":{Num(beats)},\"bpm\":{Num(bpm)},\"loop\":{(loop ? "true" : "false")},\"start\":{Num(start)}}}");
                     AppLog($"[sync] slot {ti.Id}:{scene} layer={layer} beats={beats:0.###} bpm={bpm:0.##} loop={loop} start={start:0.###}s");
                 }
             }
@@ -511,6 +564,13 @@ public sealed class VisualBridge : IDisposable
         Send(atBeat is { } b
             ? $"{{\"t\":\"stopLayer\",\"layer\":{layer},\"atBeat\":{Num(VisualBeat(b))}}}"
             : $"{{\"t\":\"stopLayer\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)}}}");
+    }
+
+    /// <summary>Stops the layer mirroring a track (used when its deck is removed).</summary>
+    public void StopTrack(int trackId, double? atBeat = null)
+    {
+        int layer = CurrentLayoutUids().IndexOf(Nota.Application.TrackUids.UidFor(trackId));
+        if (layer >= 0) StopLayer(layer, atBeat);
     }
 
     public void StopAll(double? atBeat = null)
@@ -800,6 +860,7 @@ public sealed class VisualBridge : IDisposable
             // A restarted visual engine starts with an empty/demo composition. Reload the saved
             // visuals for the open project before layout/timing/resume reach it.
             if (_projectDir is { Length: > 0 } dir) VizLoad(dir);
+            SyncDecks();
             if (_outputWanted) Send("{\"t\":\"vizOutput\",\"show\":true}");
             if (_uiWanted) Send("{\"t\":\"vizUi\",\"show\":true}");
             if (_mappingWanted) Send("{\"t\":\"vizMapping\",\"show\":true}");
@@ -907,17 +968,27 @@ public sealed class VisualBridge : IDisposable
 
     /// <summary>Copy or move a slot's visual with its Session clip (copy/paste, duplicate, drag).</summary>
     public void VizCopy(int fromLayer, int fromCol, int toLayer, int toCol, bool move)
-        => Send($"{{\"t\":\"vizCopy\",\"fromLayer\":{fromLayer.ToString(CultureInfo.InvariantCulture)},\"fromCol\":{fromCol.ToString(CultureInfo.InvariantCulture)},\"toLayer\":{toLayer.ToString(CultureInfo.InvariantCulture)},\"toCol\":{toCol.ToString(CultureInfo.InvariantCulture)},\"move\":{(move ? "true" : "false")}}}");
+    {
+        if (!InOpenDeck(fromCol) || !InOpenDeck(toCol)) return;
+        Send($"{{\"t\":\"vizCopy\",\"fromLayer\":{fromLayer.ToString(CultureInfo.InvariantCulture)},\"fromCol\":{LocalCol(fromCol).ToString(CultureInfo.InvariantCulture)},\"toLayer\":{toLayer.ToString(CultureInfo.InvariantCulture)},\"toCol\":{LocalCol(toCol).ToString(CultureInfo.InvariantCulture)},\"move\":{(move ? "true" : "false")}}}");
+    }
 
-    /// <summary>Scene structure: keep visual columns aligned with Nota's scenes.</summary>
+    /// <summary>Scene structure: keep the open deck's visual columns aligned with its scenes.</summary>
     public void InsertColumn(int index)
-        => Send($"{{\"t\":\"vizColumnInsert\",\"index\":{index.ToString(CultureInfo.InvariantCulture)}}}");
+    {
+        if (InOpenDeck(index)) Send($"{{\"t\":\"vizColumnInsert\",\"index\":{LocalCol(index).ToString(CultureInfo.InvariantCulture)}}}");
+    }
 
     public void RemoveColumn(int index)
-        => Send($"{{\"t\":\"vizColumnRemove\",\"index\":{index.ToString(CultureInfo.InvariantCulture)}}}");
+    {
+        if (InOpenDeck(index)) Send($"{{\"t\":\"vizColumnRemove\",\"index\":{LocalCol(index).ToString(CultureInfo.InvariantCulture)}}}");
+    }
 
     public void MoveColumn(int from, int to)
-        => Send($"{{\"t\":\"vizColumnMove\",\"from\":{from.ToString(CultureInfo.InvariantCulture)},\"to\":{to.ToString(CultureInfo.InvariantCulture)}}}");
+    {
+        if (!InOpenDeck(from) || !InOpenDeck(to)) return;
+        Send($"{{\"t\":\"vizColumnMove\",\"from\":{LocalCol(from).ToString(CultureInfo.InvariantCulture)},\"to\":{LocalCol(to).ToString(CultureInfo.InvariantCulture)}}}");
+    }
 
     /// <summary>Handles messages about the engine itself; true when consumed here.</summary>
     private bool HandleControlMessage(string line)
@@ -1038,10 +1109,15 @@ public sealed class VisualBridge : IDisposable
     private long NextSeq() => Interlocked.Increment(ref _seq);
 
     public void VizGet(int layer, int scene)
-        => Send($"{{\"t\":\"vizGet\",\"layer\":{layer},\"col\":{scene},\"seq\":{NextSeq()}}}");
+    {
+        if (LocalCol(scene) is var c and >= 0) Send($"{{\"t\":\"vizGet\",\"layer\":{layer},\"col\":{c},\"seq\":{NextSeq()}}}");
+    }
 
     public void VizSet(int layer, int scene, string group, string key, double value)
-        => Send($"{{\"t\":\"vizSet\",\"layer\":{layer},\"col\":{scene},\"group\":{JsonSerializer.Serialize(group)},\"key\":{JsonSerializer.Serialize(key)},\"value\":{Num(value)}}}");
+    {
+        if (LocalCol(scene) is var c and >= 0)
+            Send($"{{\"t\":\"vizSet\",\"layer\":{layer},\"col\":{c},\"group\":{JsonSerializer.Serialize(group)},\"key\":{JsonSerializer.Serialize(key)},\"value\":{Num(value)}}}");
+    }
 
     /// <summary>Changes only the named playback fields. Beat sync is cleared only when
     /// <paramref name="setSync"/> is true and <paramref name="syncBeats"/> is null — otherwise a
@@ -1049,8 +1125,10 @@ public sealed class VisualBridge : IDisposable
     public void VizPlayback(int layer, int scene, double? speed, double? syncBeats, string? playMode, string? trigger,
         bool setSync = false)
     {
+        int col = LocalCol(scene);
+        if (col < 0) return;
         var sb = new StringBuilder();
-        sb.Append("{\"t\":\"vizPlayback\",\"layer\":").Append(layer).Append(",\"col\":").Append(scene);
+        sb.Append("{\"t\":\"vizPlayback\",\"layer\":").Append(layer).Append(",\"col\":").Append(col);
         if (speed is { } sp) sb.Append(",\"speed\":").Append(Num(sp));
         if (setSync) sb.Append(",\"syncBeats\":").Append(syncBeats is { } sy ? Num(sy) : "null");
         if (playMode is not null) sb.Append(",\"playMode\":").Append(JsonSerializer.Serialize(playMode));
@@ -1061,8 +1139,10 @@ public sealed class VisualBridge : IDisposable
 
     public void VizFx(int layer, int scene, string op, int index = 0, int to = 0, string? id = null, double value = 0)
     {
+        int col = LocalCol(scene);
+        if (col < 0) return;
         var sb = new StringBuilder();
-        sb.Append("{\"t\":\"vizFx\",\"layer\":").Append(layer).Append(",\"col\":").Append(scene)
+        sb.Append("{\"t\":\"vizFx\",\"layer\":").Append(layer).Append(",\"col\":").Append(col)
           .Append(",\"op\":").Append(JsonSerializer.Serialize(op)).Append(",\"index\":").Append(index);
         if (to > 0) sb.Append(",\"to\":").Append(to);
         if (id is not null) sb.Append(",\"id\":").Append(JsonSerializer.Serialize(id));
@@ -1072,15 +1152,24 @@ public sealed class VisualBridge : IDisposable
     }
 
     public void VizAssign(int layer, int scene, string kind, string id)
-        => Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{scene},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":{JsonSerializer.Serialize(id)}}}");
+    {
+        if (LocalCol(scene) is var c and >= 0)
+            Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{c},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":{JsonSerializer.Serialize(id)}}}");
+    }
 
     /// <summary>Assigns a video/image already prepared by <see cref="MediaFiles"/>.</summary>
     public void VizAssignMedia(int layer, int scene, string kind, string path)
-        => Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{scene},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":\"\",\"path\":{JsonSerializer.Serialize(path)}}}");
+    {
+        if (LocalCol(scene) is var c and >= 0)
+            Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{c},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":\"\",\"path\":{JsonSerializer.Serialize(path)}}}");
+    }
 
     /// <summary>Assigns a camera or Syphon server by its openVJ name/id.</summary>
     public void VizAssignLive(int layer, int scene, string kind, string id, string app, string server)
-        => Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{scene},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":{JsonSerializer.Serialize(id)},\"app\":{JsonSerializer.Serialize(app)},\"server\":{JsonSerializer.Serialize(server)}}}");
+    {
+        if (LocalCol(scene) is var c and >= 0)
+            Send($"{{\"t\":\"vizAssign\",\"layer\":{layer},\"col\":{c},\"kind\":{JsonSerializer.Serialize(kind)},\"id\":{JsonSerializer.Serialize(id)},\"app\":{JsonSerializer.Serialize(app)},\"server\":{JsonSerializer.Serialize(server)}}}");
+    }
 
     public void VizLayer(int layer, double? opacity, string? blend, bool? bypass)
     {
@@ -1178,11 +1267,63 @@ public sealed class VisualBridge : IDisposable
         VizSave(dir);
     }
 
+    // ---- Session decks (Syntetika) -------------------------------------------
+    // Nota owns the deck model; openVJ keeps its visual side in step by index. Switching is a
+    // view change: the engine holds whatever is playing, so no clip stops.
+
+    public void SwitchDeck(int index)
+    {
+        Send($"{{\"t\":\"vizDeck\",\"index\":{index}}}");
+        DeckChanged();
+    }
+
+    public void AddDeck(int index)
+    {
+        Send($"{{\"t\":\"vizDeckAdd\",\"index\":{index}}}");
+        DeckChanged();
+    }
+
+    public void RemoveDeck(int index)
+    {
+        Send($"{{\"t\":\"vizDeckRemove\",\"index\":{index}}}");
+        DeckChanged();
+    }
+
+    public void DuplicateDeck(int index)
+    {
+        Send($"{{\"t\":\"vizDeckDuplicate\",\"index\":{index}}}");
+        DeckChanged();
+    }
+
+    public void RenameDeck(int index, string name)
+    {
+        Send(JsonSerializer.Serialize(new { t = "vizDeckRename", index, name }));
+        _layoutDirty = true;
+    }
+
+    /// <summary>Reconciles the visual deck list with the project after an open/load: same
+    /// order and names, extras dropped, missing decks appended empty.</summary>
+    public void SyncDecks()
+    {
+        var names = new string[_engine.DeckCount];
+        var counts = new int[_engine.DeckCount];
+        for (int i = 0; i < names.Length; i++)
+        {
+            names[i] = _engine.GetDeckName(i);
+            counts[i] = Math.Max(1, _engine.DeckSceneCount(i));
+        }
+        Send(JsonSerializer.Serialize(new { t = "vizDecks", names, counts, current = _engine.CurrentDeck }));
+    }
+
     /// <summary>Clears a slot's visual; with atBeat, waits for that beat (audio stop).</summary>
     public void VizClear(int layer, int scene, double? atBeat = null)
-        => Send(atBeat is { } b
-            ? $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{scene},\"atBeat\":{Num(VisualBeat(b))}}}"
-            : $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{scene}}}");
+    {
+        int col = LocalCol(scene);
+        if (col < 0) return;
+        Send(atBeat is { } b
+            ? $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{col},\"atBeat\":{Num(VisualBeat(b))}}}"
+            : $"{{\"t\":\"vizClear\",\"layer\":{layer},\"col\":{col}}}");
+    }
 
     public void VizCatalog(string kind, string query, long tag)
         => Send($"{{\"t\":\"vizCatalog\",\"kind\":{JsonSerializer.Serialize(kind)},\"query\":{JsonSerializer.Serialize(query)},\"seq\":{tag}}}");
