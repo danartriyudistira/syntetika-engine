@@ -462,9 +462,14 @@ public sealed class VisualBridge : IDisposable
         catch (ObjectDisposedException) { }
     }
 
+    /// <summary>True while the open bundle still exists as a project. Once the user deletes
+    /// or moves it, a later visual write must not recreate the folder as a visual-only shell.</summary>
+    private static bool BundlePresent(string dir)
+        => File.Exists(Path.Combine(dir, ProjectService.ManifestName));
+
     private void WriteLayoutFile(string json)
     {
-        if (_projectDir is not { Length: > 0 } dir) return;
+        if (_projectDir is not { Length: > 0 } dir || !BundlePresent(dir)) return;
         try
         {
             var visuals = Path.Combine(dir, "visuals");
@@ -623,6 +628,10 @@ public sealed class VisualBridge : IDisposable
             VizGet(0, 0);
             Thread.Sleep(800);
             string bundle = "/tmp/syntetika-media-test";
+            Directory.CreateDirectory(bundle);
+            // SaveProject only writes into a real bundle (a missing manifest means the project
+            // was deleted); give the test harness one so the media path still exercises a save.
+            File.WriteAllText(Path.Combine(bundle, "project.json"), "{}");
             if (File.Exists("/tmp/syntetika-test.mp4"))
             {
                 AppLog("media test: assign a video");
@@ -1144,7 +1153,15 @@ public sealed class VisualBridge : IDisposable
     /// <summary>Saves the current bundle's visuals (called on Save and on quit).</summary>
     public void SaveProject()
     {
-        if (_projectDir is { Length: > 0 } dir) VizSave(dir);
+        if (_projectDir is not { Length: > 0 } dir) return;
+        // The folder may have been deleted or moved while the project was open. Writing here
+        // would recreate it as a visual-only shell (no project.json) and mask the loss.
+        if (!BundlePresent(dir))
+        {
+            AppLog($"save skipped: '{dir}' is no longer a project bundle");
+            return;
+        }
+        VizSave(dir);
     }
 
     /// <summary>Clears a slot's visual; with atBeat, waits for that beat (audio stop).</summary>

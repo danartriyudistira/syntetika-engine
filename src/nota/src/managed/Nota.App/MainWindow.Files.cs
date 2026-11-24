@@ -260,8 +260,10 @@ public partial class MainWindow
     // badge and is saved back as is.
     private bool _panLawLegacy;
 
-    /// <summary>Loads a .nota bundle and applies it to the engine (menu + browser). M7-4b.</summary>
-    private void OpenProject(string dir)
+    /// <summary>Loads a .nota bundle and applies it to the engine (menu + browser). M7-4b.
+    /// <paramref name="recordRecent"/> is false for the temporary crash-recovery bundle, which
+    /// is deleted right after it is restored (it must not linger in Recent Projects).</summary>
+    private void OpenProject(string dir, bool recordRecent = true)
     {
         if (_vm is null) return;
         _warpBuildGen++;
@@ -299,7 +301,7 @@ public partial class MainWindow
             _modular?.LoadLayout(dir);   // modular-editor node/island positions (sidecar)
             Timeline.LoadTrackView(dir); // track heights + track-list width (sidecar)
             LoadFreezeLinks(dir);        // live-freeze links (v1.1) — re-sleep linked sources
-            RecordRecentProject(dir);    // surface it on the welcome screen next launch
+            if (recordRecent) RecordRecentProject(dir);   // surface it on the welcome screen next launch
             RefreshAfterLoad();
             UpdateWindowTitle();
             MarkProjectClean();
@@ -374,18 +376,29 @@ public partial class MainWindow
             // The bundle is written, so it's the open project now: set the path before the
             // version is recorded, since the History tab refreshes against it (#317).
             _projectPath = dir;
-            VisualBridge.Current?.SetProjectDir(dir);
-            VisualBridge.Current?.VizSave(dir);
+            var bridge = VisualBridge.Current;
+            bridge?.SetProjectDir(dir);
+            bridge?.VizSave(dir);
+            // The engine writes composition.json after it answers, so wait for that
+            // acknowledgement before claiming the save. A restart in this window would
+            // otherwise keep the old visuals on disk while the audio moved on.
+            bool visualsSaved = true;
+            if (bridge is not null)
+                visualsSaved = bridge.Connected && await Task.Run(() => bridge.WaitForSave(1200));
             string? historyNote = RecordVersion(dir, previousPath, note);   // after every sidecar is written
             RecordRecentProject(dir);    // surface it on the welcome screen next launch
             UpdateWindowTitle();
             MarkProjectClean();
             App.Services.GetRequiredService<ILogSink>()
                 .Info($"Saved project '{System.IO.Path.GetFileName(dir)}' · {warnings.Count} warning(s)");
+            if (!visualsSaved)
+                App.Services.GetRequiredService<ILogSink>()
+                    .Error($"Visuals were not saved to '{dir}': the visual engine did not acknowledge");
             _vm.StatusText = (warnings.Count == 0
                 ? Loc.F("main.files.saved", System.IO.Path.GetFileName(dir))
                 : Loc.F("main.files.saved_unsupported_item_s_skipped", System.IO.Path.GetFileName(dir), warnings.Count, warnings[0]))
-                + historyNote;
+                + historyNote
+                + (visualsSaved ? "" : " · " + Loc.T("main.files.visuals_not_saved"));
             return true;
         }
         catch (Exception ex)

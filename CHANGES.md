@@ -154,6 +154,16 @@ diffs are in `patches/`.
 
 ## Fixed before the first release
 
+- **Visual writes could resurrect a deleted bundle**: if the project folder was deleted or
+  moved while open, the bridge recreated `visuals/` and the quit-save wrote an empty
+  composition into it, leaving a folder that looked like a project but had no `project.json`.
+  Layout and quit-save writes now require the manifest and are skipped (and logged) otherwise.
+- **A save could claim success without the visuals**: `VizSave` is asynchronous, so Save now
+  waits up to 1.2 s for the engine's acknowledgement and reports "visual changes not
+  confirmed by the visual engine" when it never arrives.
+- **Recovery restore listed a temporary bundle**: `OpenProject` learned to skip Recent
+  Projects for the crash snapshot, which is deleted right after the restore; the real project
+  is recorded instead.
 - **Closing Visual Output could lose unsaved visuals**: the hosted engine used Slint's
   default event loop, which ends once the last visible window is hidden. Closing the output
   window therefore killed the helper, Nota restarted it, and the fresh process reloaded the

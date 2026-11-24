@@ -19,7 +19,9 @@ DEST="${1:-$HOME/Documents/Nota Projects/Syntetika Demo.nota}"
 
 mkdir -p "$DEST/visuals"
 if [ -f "$DEST/project.json" ]; then
-  cp "$DEST/project.json" "$DEST/project.json.bak"
+  # backups/ is ignored by version history, so this does not pollute the new project.
+  mkdir -p "$DEST/backups"
+  cp "$DEST/project.json" "$DEST/backups/project-$(date +%Y%m%d-%H%M%S).json"
 fi
 cp "$ROOT/demo/project.json" "$DEST/project.json"
 

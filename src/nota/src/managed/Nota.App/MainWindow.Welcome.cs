@@ -37,7 +37,7 @@ public partial class MainWindow
             recent,
             onNew: () => OnMenuNew(this, EventArgs.Empty),
             onOpen: () => _ = DoOpenAsync(),
-            onOpenRecent: OpenProject,
+            onOpenRecent: dir => OpenProject(dir),
             onSettings: () => new PreferencesWindow(new SettingsViewModel(settings), _vm).ShowDialog(win!),
             onWhatsNew: () => new WhatsNewWindow(AppInfo.UnseenSince("")).ShowDialog(win!),
             showOnStartup: settings.Current.ShowWelcomeOnStartup,

@@ -131,14 +131,17 @@ public partial class MainWindow
     /// bundle. Clears the snapshot so it isn't offered again.</summary>
     private void ApplyPendingRecovery(RecoveryInfo info)
     {
-        OpenProject(info.BundlePath);
+        OpenProject(info.BundlePath, recordRecent: false);
         _projectPath = info.OriginalPath;   // next Save targets the real bundle (null → prompt)
         // The recovery bundle is only the audio snapshot. Point the visual bridge at the real
         // bundle too, so a visual-engine restart reloads the project's composition instead of
         // the recovery copy (or nothing), and Save writes visuals to the right place.
         VisualBridge.Current?.SetProjectDir(info.OriginalPath);
         if (info.OriginalPath is { Length: > 0 } original)
+        {
             VisualBridge.Current?.VizLoad(original);
+            RecordRecentProject(original);   // the recovery copy is about to be deleted
+        }
         UpdateWindowTitle();
         _cleanFingerprint = null;           // recovered work is unsaved until the user saves it
         if (_vm is not null) _vm.StatusText = Loc.T("main.recovery.recovered_unsaved_work");

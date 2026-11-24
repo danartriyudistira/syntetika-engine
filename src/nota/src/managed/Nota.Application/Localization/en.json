@@ -2688,6 +2688,7 @@
     "main.files.unsupported_file_location": "Unsupported file location.",
     "main.files.unsupported_project_location": "Unsupported project location.",
     "main.files.untitled": "Untitled",
+    "main.files.visuals_not_saved": "visual changes not confirmed by the visual engine",
     "main.fill_the_window_with_the": "Fill the window with the clip editor (⌘⇧F)",
     "main.flatten": "Flatten",
     "main.flatten_remove_source": "Flatten (remove source)",
