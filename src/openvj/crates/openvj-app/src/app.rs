@@ -982,12 +982,12 @@ impl App {
                 NotaCommand::VizLoad { path, media_dir } => self.viz_load(&path, &media_dir),
                 NotaCommand::VizDeck { index } => self.deck_clicked_from_nota(index),
                 NotaCommand::VizDeckAdd { index } => self.deck_add_at(index),
-                NotaCommand::VizDeckRemove { index } => self.deck_remove(index),
+                NotaCommand::VizDeckRemove { index } => self.deck_remove_internal(index),
                 NotaCommand::VizDeckDuplicate { index } => {
                     self.comp.duplicate_deck(index);
                     self.after_deck_change();
                 }
-                NotaCommand::VizDeckRename { index, name } => self.deck_renamed(index, &name),
+                NotaCommand::VizDeckRename { index, name } => self.deck_renamed_internal(index, &name),
                 NotaCommand::VizDecks { names, counts, current } => {
                     self.reconcile_decks(&names, &counts, current)
                 }
@@ -3079,16 +3079,38 @@ impl App {
     }
 
     pub fn deck_add(&mut self) {
+        if self.hosted_by_nota() {
+            self.set_status("Decks are managed in Nota");
+            return;
+        }
         self.comp.add_deck();
         self.after_deck_change();
     }
 
     pub fn deck_renamed(&mut self, index: usize, name: &str) {
+        if self.hosted_by_nota() {
+            self.set_status("Decks are managed in Nota");
+            return;
+        }
+        self.deck_renamed_internal(index, name);
+    }
+
+    /// The bridge asked for a rename: Nota already renamed the deck.
+    pub fn deck_renamed_internal(&mut self, index: usize, name: &str) {
         self.comp.rename_deck(index, name);
         self.grid_dirty = true;
     }
 
     pub fn deck_remove(&mut self, index: usize) {
+        if self.hosted_by_nota() {
+            self.set_status("Decks are managed in Nota");
+            return;
+        }
+        self.deck_remove_internal(index);
+    }
+
+    /// The bridge asked for a removal: Nota already removed the deck.
+    pub fn deck_remove_internal(&mut self, index: usize) {
         self.comp.remove_deck(index);
         self.after_deck_change();
         self.collect_garbage();

@@ -7,6 +7,7 @@
 
 using Nota.Application;
 using Nota.Infrastructure;
+using Nota.Infrastructure.Visuals;
 
 namespace Nota.SmokeTest;
 
@@ -84,6 +85,21 @@ internal static class SessionDeckTests
             yield return (undone && e.DeckCount == 1 && e.SceneCount == rows, "undo removes the deck it added");
             bool redone = e.Redo();
             yield return (redone && e.DeckCount == 2, "redo brings it back");
+        }
+
+        // --- trigger mapping (global scene -> open deck's column) ---------
+        using (var e = new NotaEngine())
+        {
+            e.AddDeck(); // deck 1 covers rows 0..7, the new deck 1 starts at row 8
+            e.SetCurrentDeck(1);
+            using var bridge = new VisualBridge(e);
+            yield return (bridge.ColumnForScene(8) == 0 && bridge.ColumnForScene(0) == -1,
+                "a deck-2 scene maps to its own column and a deck-1 scene is outside");
+            string line = bridge.LaunchLine("slot", 8, 0, 0);
+            yield return (line.Contains("\"col\":0") && line.Contains("\"deck\":1"),
+                $"a clip launch carries the local column, not the global scene ({line})");
+            yield return (bridge.LaunchLine("slot", 0, 0, 0).Length == 0,
+                "a launch for a scene in another deck is not sent");
         }
 
         // --- the project format -------------------------------------------

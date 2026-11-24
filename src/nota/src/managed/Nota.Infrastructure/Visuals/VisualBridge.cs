@@ -665,14 +665,23 @@ public sealed class VisualBridge : IDisposable
         }
     }
 
+    /// <summary>The line a launch sends, for tests/diagnostics; empty when the scene is not
+    /// in the open deck. Engine scenes are global, openVJ's columns belong to the open deck.</summary>
+    internal string LaunchLine(string kind, int scene, double atBeat, int layer = 0)
+    {
+        int local = LocalCol(scene);
+        if (local < 0) return "";
+        string b = Num(VisualBeat(atBeat));
+        int deck = _engine.CurrentDeck;
+        return kind == "scene"
+            ? $"{{\"t\":\"scene\",\"col\":{local},\"atBeat\":{b},\"deck\":{deck}}}"
+            : $"{{\"t\":\"slot\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{local},\"atBeat\":{b},\"deck\":{deck}}}";
+    }
+
     private void SendLaunch(string kind, int col, double atBeat, int layer = 0)
     {
-        string b = Num(VisualBeat(atBeat));
-        string c = col.ToString(CultureInfo.InvariantCulture);
-        string json = kind == "scene"
-            ? $"{{\"t\":\"scene\",\"col\":{c},\"atBeat\":{b}}}"
-            : $"{{\"t\":\"slot\",\"layer\":{layer.ToString(CultureInfo.InvariantCulture)},\"col\":{c},\"atBeat\":{b}}}";
-        Send(json);
+        string line = LaunchLine(kind, col, atBeat, layer);
+        if (line.Length > 0) Send(line);
     }
 
     private void TestLoop()
