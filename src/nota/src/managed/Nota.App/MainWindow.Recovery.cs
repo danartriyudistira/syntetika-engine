@@ -14,6 +14,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Nota.Application;
+using Nota.Infrastructure;
 using Nota.Infrastructure.Visuals;
 using Nota.Presentation;
 using Nota.Application.Localization;
@@ -133,19 +134,55 @@ public partial class MainWindow
     {
         OpenProject(info.BundlePath, recordRecent: false);
         _projectPath = info.OriginalPath;   // next Save targets the real bundle (null → prompt)
-        // The recovery bundle is only the audio snapshot. Point the visual bridge at the real
-        // bundle too, so a visual-engine restart reloads the project's composition instead of
-        // the recovery copy (or nothing), and Save writes visuals to the right place.
+        // The recovery bundle is only a snapshot. Point the visual bridge at the real bundle,
+        // and restore the snapshot's composition (with its media copied somewhere durable —
+        // the snapshot is deleted below) so unsaved visual work survives the crash too.
         VisualBridge.Current?.SetProjectDir(info.OriginalPath);
         if (info.OriginalPath is { Length: > 0 } original)
         {
-            VisualBridge.Current?.VizLoad(original);
+            if (!RestoreSnapshotVisuals(info.BundlePath, System.IO.Path.Combine(original, "visuals", "media")))
+                VisualBridge.Current?.VizLoad(original);
             RecordRecentProject(original);   // the recovery copy is about to be deleted
+        }
+        else
+        {
+            // Never saved: the save will prompt for a bundle, so keep the media in the staging
+            // folder VizSave already rewrites into the new bundle.
+            RestoreSnapshotVisuals(info.BundlePath, NotaPaths.SubDir("media-staging"));
         }
         UpdateWindowTitle();
         _cleanFingerprint = null;           // recovered work is unsaved until the user saves it
         if (_vm is not null) _vm.StatusText = Loc.T("main.recovery.recovered_unsaved_work");
         try { _recovery.ClearRecovery(); } catch { }
+    }
+
+    /// <summary>Shows the snapshot's composition with its media resolved under
+    /// <paramref name="mediaDir"/> (copied there first), so deleting the snapshot afterwards
+    /// cannot pull the files out from under the running engine. False when it has no visuals.</summary>
+    private static bool RestoreSnapshotVisuals(string snapshotBundle, string mediaDir)
+    {
+        string composition = System.IO.Path.Combine(snapshotBundle, "visuals", "composition.json");
+        if (!System.IO.File.Exists(composition)) return false;
+        CopyFiles(System.IO.Path.Combine(snapshotBundle, "visuals", "media"), mediaDir);
+        VisualBridge.Current?.VizLoadComposition(composition, mediaDir);
+        return true;
+    }
+
+    // Content-named media: an existing file is the same file, so it is never overwritten.
+    private static void CopyFiles(string from, string to)
+    {
+        if (!System.IO.Directory.Exists(from)) return;
+        try
+        {
+            System.IO.Directory.CreateDirectory(to);
+            foreach (string file in System.IO.Directory.EnumerateFiles(from))
+            {
+                string target = System.IO.Path.Combine(to, System.IO.Path.GetFileName(file));
+                if (!System.IO.File.Exists(target)) System.IO.File.Copy(file, target);
+            }
+        }
+        catch (System.IO.IOException) { /* best-effort: playback can still use the files left behind */ }
+        catch (UnauthorizedAccessException) { }
     }
 
     // Fallback path when the welcome launcher is disabled: a modal Recover / Discard dialog.

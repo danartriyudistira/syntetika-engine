@@ -210,6 +210,77 @@ internal static class HistoryTests
         }
     }
 
+    public static IEnumerable<(bool Ok, string Label)> RunVisuals()
+    {
+        string tmp = Path.GetTempPath();
+        string dir = Path.Combine(tmp, "nota-smoke-visuals-" + Guid.NewGuid().ToString("N") + ".nota");
+        string copy = Path.Combine(tmp, "nota-smoke-visuals-copy-" + Guid.NewGuid().ToString("N") + ".nota");
+        var transport = new TransportState(120.0, 1.0, false, false);
+        IProjectHistory history = new ProjectHistory("0.0.0-test");
+        string visuals = Path.Combine(dir, "visuals");
+        string composition = Path.Combine(visuals, "composition.json");
+        string mediaName = new string('a', 64) + ".png";
+        string media = Path.Combine(visuals, "media", mediaName);
+        string Comp(string tag, bool withMedia)
+            => withMedia
+                ? $"{{\"version\":1,\"layout_uids\":[],\"composition\":{{\"tag\":\"{tag}\",\"clips\":[{{\"path\":\"media/{mediaName}\"}}]}}}}"
+                : $"{{\"version\":1,\"layout_uids\":[],\"composition\":{{\"tag\":\"{tag}\"}}}}";
+        void Save(NotaEngine e, string to) => ProjectService.Save(ProjectService.Capture(e, transport, new List<string>()), to, e);
+
+        try
+        {
+            using var eng = new NotaEngine();
+            eng.AddInstrumentTrack();
+            Save(eng, dir);
+            var beforeVisuals = history.Commit(dir);
+
+            Directory.CreateDirectory(Path.Combine(visuals, "media"));
+            File.WriteAllBytes(media, [1, 2, 3, 4]);
+            File.WriteAllText(composition, Comp("A", withMedia: true));
+            Save(eng, dir);
+            var withVisuals = history.Commit(dir);
+            yield return (withVisuals is not null && withVisuals.Id != beforeVisuals!.Id, "a visual edit records a version");
+
+            // The working copy drops the clip; the media is now unreferenced there but a version
+            // still needs it, so the save's prune must keep it.
+            File.WriteAllText(composition, Comp("B", withMedia: false));
+            Save(eng, dir);
+            history.Commit(dir);
+            yield return (File.Exists(media), "a save keeps media an older version references");
+
+            history.Checkout(dir, withVisuals.Id);
+            yield return (File.ReadAllText(composition) == Comp("A", withMedia: true), "checkout restores the version's composition");
+
+            Directory.CreateDirectory(copy);
+            using (var e2 = new NotaEngine())
+            {
+                ProjectService.Apply(ProjectService.Load(dir), e2, dir);
+                Save(e2, copy);
+            }
+            history.CopyTo(dir, copy);
+            history.Checkout(copy, withVisuals.Id);
+            yield return (File.Exists(Path.Combine(copy, "visuals", "composition.json"))
+                          && File.Exists(Path.Combine(copy, "visuals", "media", mediaName)),
+                "a copied project carries its visuals");
+
+            // A version recorded before visuals existed doesn't own them: leaving the working
+            // visuals alone is better than deleting them without a replacement.
+            history.Checkout(dir, beforeVisuals.Id);
+            yield return (File.Exists(composition) && File.ReadAllText(composition) == Comp("A", withMedia: true),
+                "an older version without visuals leaves them alone");
+
+            // Erase: nothing references the media any more, so it goes.
+            File.WriteAllText(composition, Comp("C", withMedia: false));
+            history.Erase(dir);
+            yield return (!File.Exists(media), "erasing the history frees versioned media");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+            try { Directory.Delete(copy, true); } catch { }
+        }
+    }
+
     public static IEnumerable<(bool Ok, string Label)> Run()
     {
         string tmp = Path.GetTempPath();

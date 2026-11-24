@@ -1136,8 +1136,22 @@ public sealed class VisualBridge : IDisposable
             path = Path.Combine(bundleDir, "visuals", "composition.json"),
             uids = CurrentLayoutUids(),
             mediaDirs = dirs,
+            // Nota prunes media with the whole version history in view. The engine's own GC
+            // would delete files that older versions still need, so it stays off for project
+            // saves (a hand-started engine keeps its GC).
+            gc = false,
         }));
     }
+
+    /// <summary>Loads a composition file with its `media/…` references resolved under another
+    /// folder. Crash recovery reads the snapshot's composition while the media live in the
+    /// project (or the staging cache), so a later save rewrites the paths correctly.</summary>
+    public void VizLoadComposition(string compositionPath, string mediaDir) => Send(JsonSerializer.Serialize(new
+    {
+        t = "vizLoad",
+        path = compositionPath,
+        mediaDir,
+    }));
 
     /// <summary>Loads a bundle's composition; `media/<file>` resolves inside the bundle.</summary>
     public void VizLoad(string bundleDir) => Send(JsonSerializer.Serialize(new

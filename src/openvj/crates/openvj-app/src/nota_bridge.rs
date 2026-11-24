@@ -76,7 +76,7 @@ pub enum Command {
     VizAssign { layer: usize, col: usize, kind: String, id: String, path: String, app: String, server: String },
     VizClear { layer: usize, col: usize, at_beat: Option<f64> },
     VizCatalog { kind: String, query: String, seq: u64 },
-    VizSave { path: String, uids: Vec<String>, media_dirs: Vec<String> },
+    VizSave { path: String, uids: Vec<String>, media_dirs: Vec<String>, gc: bool },
     VizLoad { path: String, media_dir: String },
     VizLayer { layer: usize, opacity: Option<f32>, blend: Option<String>, bypass: Option<bool> },
     /// Show or hide the output window (Nota's View ▸ Visual Output).
@@ -344,7 +344,10 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
                 .and_then(|x| x.as_array())
                 .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_owned)).collect())
                 .unwrap_or_default();
-            let _ = tx.send(Command::VizSave { path, uids, media_dirs });
+            // Nota manages media garbage with its version history in view; a hand-started
+            // engine (no flag) still prunes after every save.
+            let gc = v.get("gc").and_then(|x| x.as_bool()).unwrap_or(true);
+            let _ = tx.send(Command::VizSave { path, uids, media_dirs, gc });
         }
         Some("vizLoad") => {
             let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_owned();

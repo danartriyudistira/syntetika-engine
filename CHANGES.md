@@ -23,6 +23,14 @@ diffs are in `patches/`.
 
 ## Nota fork
 
+- **Visuals ride with version history and crash recovery**: a save records
+  `visuals/composition.json` beside the manifest, and the content-named media files a
+  composition references are pinned by the versions that use them (the save's prune keeps
+  them; the engine's own save-time GC is off for project saves so it cannot delete a file an
+  older version still needs). Switching versions or opening one as a copy reloads the matching
+  visuals. The periodic crash snapshot now copies the composition and media as well, and a
+  restore loads them with the media placed somewhere durable (the project's media folder, or
+  the staging cache for a never-saved project) before the snapshot is deleted.
 - **Visual bridge** (`Nota.Infrastructure/Visuals/VisualBridge.cs`): loopback TCP, ~125 Hz
   transport, beat-scheduled launch/stop, layout snapshots, selection mirroring, viz parameter
   API, `vizSave`/`vizLoad`, single-instance file lock.

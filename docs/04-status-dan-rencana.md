@@ -690,6 +690,24 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   (5 track, 15 slot, 3 layer, 15 clip, 5 look, ink shader). Setelah dibuka, Save sekali
   untuk mengisi `.history` dan sidecar.
 
+## 7z. Visual di version history + crash recovery (24 Nov)
+
+- **Riwayat versi**: `visuals/composition.json` ikut di-snapshot bersama manifest, dan media
+  visual (nama `<sha256>.<ext>`) diperlakukan seperti sample: dipin oleh setiap versi yang
+  memakainya. Save memangkas media yang tidak dipakai working copy maupun versi mana pun;
+  GC saat `vizSave` dimatikan untuk project (flag `gc:false`) supaya engine tidak menghapus
+  file yang masih dibutuhkan versi lama. Checkout mengembalikan komposisi; versi lama yang
+  belum punya visual tidak mengubah visual working copy. Save As/`CopyTo` membawa media.
+- **Recovery**: snapshot periodik menyalin `visuals/` (komposisi + layout + media
+  content-named sekali saja). Restore memuat komposisi snapshot dengan media yang disalin ke
+  `visuals/media` project asli (atau `media-staging` untuk project yang belum pernah disimpan)
+  sebelum snapshot dihapus, sehingga playback tidak kehilangan file dan Save berikutnya
+  menulis path relatif yang benar.
+- **Bukti**: `dotnet run --project tests/Nota.SmokeTest -- --history` — 6 cek baru lulus
+  (version dari edit visual, media dipin, checkout komposisi, copy membawa visual, versi lama
+  tidak menghapus visual, erase membebaskan media). `cargo test -p openvj-app` 51 lulus
+  (termasuk `gc_media_keeps_referenced_files_only`).
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

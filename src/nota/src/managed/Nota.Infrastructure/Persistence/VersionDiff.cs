@@ -28,6 +28,7 @@ internal static class VersionDiff
         ["midimap.json"] = "MIDI map",
         ["modular-layout.json"] = "modular layout",
         ["freeze-links.json"] = "freeze",
+        ["visuals/composition.json"] = "visuals",
     };
 
     /// <summary>The first version of a project.</summary>

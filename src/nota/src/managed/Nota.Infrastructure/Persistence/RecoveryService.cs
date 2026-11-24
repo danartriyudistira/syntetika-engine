@@ -82,14 +82,57 @@ public sealed class RecoveryService : IRecoveryStore
     /// bundle path (null if the session was never saved).</summary>
     public bool Autosave(ProjectDocument doc, IAudioEngine engine, string? originalPath)
     {
+        bool visuals = SnapshotVisuals(originalPath);
         string manifest = ProjectService.SerializeManifest(doc);
-        if (manifest == _lastManifest) return false; // unchanged since last snapshot
+        if (manifest == _lastManifest) return visuals; // audio unchanged; visuals may still be new
         _lastManifest = manifest;
 
         ProjectService.Save(doc, _bundle, engine);
         var meta = new Meta { OriginalPath = originalPath, SavedAt = DateTime.Now.ToString("o") };
         File.WriteAllText(_meta, JsonSerializer.Serialize(meta, MetaOpts));
         return true;
+    }
+
+    /// <summary>The snapshot carries the project's visuals as well, so a crash — or a project
+    /// folder that disappears — can restore the composition and its media, not just the audio.
+    /// Media names are content hashes, so a file is copied once and shared by later snapshots.
+    /// Returns true when the composition changed since the last snapshot.</summary>
+    private bool SnapshotVisuals(string? originalPath)
+    {
+        if (originalPath is not { Length: > 0 } source) return false;
+        string from = Path.Combine(source, "visuals");
+        if (!Directory.Exists(from)) return false;
+        string to = Path.Combine(_bundle, "visuals");
+        string composition = Path.Combine(from, "composition.json");
+        if (SameContent(composition, Path.Combine(to, "composition.json")) == true) return false;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+            {
+                string rel = Path.GetRelativePath(from, file);
+                string target = Path.Combine(to, rel);
+                if (rel.StartsWith("media" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                    && File.Exists(target)) continue;   // content-named: same file, already here
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target, overwrite: true);
+            }
+            return true;
+        }
+        catch (IOException) { return false; /* best-effort: the audio snapshot is already written */ }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    // True when both files exist with the same bytes; null when the source can't be read.
+    private static bool? SameContent(string a, string b)
+    {
+        try
+        {
+            if (!File.Exists(a)) return null;
+            if (!File.Exists(b) || new FileInfo(a).Length != new FileInfo(b).Length) return false;
+            return File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b));
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>IRecoveryStore entry point: captures the engine first, then autosaves.</summary>

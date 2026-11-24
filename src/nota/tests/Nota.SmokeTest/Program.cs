@@ -1171,6 +1171,7 @@ if (args.Length >= 1 && args[0] == "--history")
 {
     Console.WriteLine("-- project: version history --");
     foreach (var (ok, label) in HistoryTests.Run()) Check(ok, label);
+    foreach (var (ok, label) in HistoryTests.RunVisuals()) Check(ok, label);
     foreach (var (ok, label) in HistoryTests.RunGraph()) Check(ok, label);
     foreach (var (ok, label) in HistoryTests.RunSummary()) Check(ok, label);
     foreach (var (ok, label) in HistoryTests.RunCleanup()) Check(ok, label);
@@ -16245,6 +16246,7 @@ foreach (var (ok, label) in BundleContentTests.Run()) Check(ok, label);
 foreach (var (ok, label) in LanguageProjectTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: version history --");
 foreach (var (ok, label) in HistoryTests.Run()) Check(ok, label);
+foreach (var (ok, label) in HistoryTests.RunVisuals()) Check(ok, label);
 foreach (var (ok, label) in HistoryTests.RunGraph()) Check(ok, label);
 foreach (var (ok, label) in HistoryTests.RunSummary()) Check(ok, label);
 foreach (var (ok, label) in HistoryTests.RunCleanup()) Check(ok, label);

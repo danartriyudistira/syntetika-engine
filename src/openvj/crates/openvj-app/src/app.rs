@@ -978,7 +978,7 @@ impl App {
                         eprintln!("openVJ: NOTA clear visual {layer}:{col}");
                     }
                 }
-                NotaCommand::VizSave { path, uids, media_dirs } => self.viz_save(&path, uids, &media_dirs),
+                NotaCommand::VizSave { path, uids, media_dirs, gc } => self.viz_save(&path, uids, &media_dirs, gc),
                 NotaCommand::VizLoad { path, media_dir } => self.viz_load(&path, &media_dir),
                 NotaCommand::VizLayer { layer, opacity, blend, bypass } => {
                     self.mark_visual_edit(&[], &[layer], format!("layer:{layer}"), 0.8);
@@ -1411,7 +1411,7 @@ impl App {
     }
 
     /// Writes the composition + its track identity map into the project bundle.
-    fn viz_save(&mut self, path: &str, uids: Vec<String>, media_dirs: &[String]) {
+    fn viz_save(&mut self, path: &str, uids: Vec<String>, media_dirs: &[String], gc: bool) {
         if path.is_empty() {
             return;
         }
@@ -1454,7 +1454,9 @@ impl App {
                     self.clear_history();
                     eprintln!("openVJ: viz save cleared {had} visual history step(s)");
                 }
-                if let Some(media_dir) = Path::new(path).parent().map(|d| d.join("media")).filter(|d| d.is_dir()) {
+                if gc
+                    && let Some(media_dir) = Path::new(path).parent().map(|d| d.join("media")).filter(|d| d.is_dir())
+                {
                     let removed = crate::viz::gc_media(&media_dir, &comp);
                     if removed > 0 {
                         eprintln!("openVJ: viz save removed {removed} unused media file(s)");

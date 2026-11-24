@@ -5,17 +5,19 @@
 //
 //   MySong.nota/
 //     project.json, *.json            working copy: the manifest + sidecars
+//     visuals/composition.json        the openVJ composition (a versioned file too)
+//     visuals/media/<hash>.<ext>      content-named visual media (shared like samples)
 //     samples/<hash>.wav              shared by every version (content-addressed, BundleContent)
 //     plugin-states/<hash>.bin        shared by every version
 //     .history/
 //       versions.json                 the tree: versions, parents, head
 //       objects/ab/cdef….br           manifests + sidecars of every version, Brotli
 //
-// A version is the set of top-level files (by content hash, stored in objects/) plus the
-// list of binaries its manifest references (left where they are — a save already names them
-// by content, so a sample shared by twenty versions is one file). Checkout writes a
-// version's top-level files back; the binaries are already there. A save prunes binaries no
-// version needs (BundleContent.PruneUnreferenced asks PinnedBinaries).
+// A version is the set of tracked files (by content hash, stored in objects/) plus the list
+// of binaries it references (left where they are — a save already names them by content, so a
+// sample shared by twenty versions is one file). Checkout writes a version's files back; the
+// binaries are already there. A save prunes binaries no version needs
+// (BundleContent.PruneUnreferenced asks PinnedBinaries).
 
 using System;
 using System.Collections.Generic;
@@ -36,6 +38,11 @@ public sealed partial class ProjectHistory : IProjectHistory
     private const string VersionsFile = "versions.json";
     private const string ObjectsDir = "objects";
     private const int HistoryFormat = 1;
+
+    /// <summary>The openVJ composition rides in the bundle's visuals/ folder; it is versioned
+    /// with the manifest so switching versions restores the matching visuals.</summary>
+    internal const string VisualsFile = "visuals/composition.json";
+    internal const string VisualsMediaDir = "visuals/media";
 
     private static readonly object Gate = new();
 
@@ -154,11 +161,19 @@ public sealed partial class ProjectHistory : IProjectHistory
             if (missing > 0)
                 throw new ProjectHistoryException($"This version can't be restored: {missing} of its files are missing.");
 
-            foreach (var name in SnapshotFileNames(bundleDir))
-                if (!contents.ContainsKey(name))
-                    File.Delete(Path.Combine(bundleDir, name));   // a sidecar this version didn't have
+            bool versionTracksVisuals = node.Files.ContainsKey(VisualsFile);
+            foreach (var name in VersionFiles(bundleDir))
+            {
+                if (contents.ContainsKey(name)) continue;
+                if (name == VisualsFile && !versionTracksVisuals) continue;   // older versions don't own visuals
+                File.Delete(Path.Combine(bundleDir, name));   // a sidecar this version didn't have
+            }
             foreach (var (name, bytes) in contents.Where(kv => kv.Key != ProjectService.ManifestName))
-                BundleContent.WriteAtomic(Path.Combine(bundleDir, name), tmp => File.WriteAllBytes(tmp, bytes));
+            {
+                string file = Path.Combine(bundleDir, name);
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                BundleContent.WriteAtomic(file, tmp => File.WriteAllBytes(tmp, bytes));
+            }
             // The manifest last: until it lands, the bundle still opens as the previous state.
             if (contents.TryGetValue(ProjectService.ManifestName, out var manifest))
                 BundleContent.WriteAtomic(Path.Combine(bundleDir, ProjectService.ManifestName), tmp => File.WriteAllBytes(tmp, manifest));
@@ -285,7 +300,7 @@ public sealed partial class ProjectHistory : IProjectHistory
     {
         var files = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var contents = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        foreach (var name in SnapshotFileNames(bundleDir))
+        foreach (var name in VersionFiles(bundleDir))
         {
             var bytes = File.ReadAllBytes(Path.Combine(bundleDir, name));
             string hash = BundleContent.BlobHash(bytes);
@@ -304,8 +319,60 @@ public sealed partial class ProjectHistory : IProjectHistory
                 throw new ProjectHistoryException("Save the project once more before recording a version.");
             if (File.Exists(Path.Combine(bundleDir, rel))) binaries.Add(rel);   // a sample that failed to write stays missing
         }
+        // Visual media are content-named too (`<sha256>.<ext>`), so versions share them like
+        // samples instead of nesting a copy in every history object.
+        if (files.TryGetValue(VisualsFile, out var compositionHash)
+            && contents.TryGetValue(compositionHash, out var composition))
+            foreach (var name in MediaNames(composition).Distinct().Order(StringComparer.Ordinal))
+            {
+                if (!IsMediaName(name)) continue;
+                string rel = $"{VisualsMediaDir}/{name}";
+                if (File.Exists(Path.Combine(bundleDir, rel))) binaries.Add(rel);
+            }
+        binaries = binaries.Distinct().Order(StringComparer.Ordinal).ToList();
         int format = manifest?["formatVersion"]?.GetValue<int>() ?? 1;
         return new Snapshot(files, binaries, format, contents);
+    }
+
+    // Every file a version owns: the top-level sidecars plus the visual composition.
+    private static IEnumerable<string> VersionFiles(string bundleDir)
+    {
+        foreach (var name in SnapshotFileNames(bundleDir)) yield return name;
+        if (File.Exists(Path.Combine(bundleDir, VisualsFile))) yield return VisualsFile;
+    }
+
+    internal static bool IsMediaName(string name) => MediaNameRx().IsMatch(name);
+
+    // `media/<file>` paths inside a saved composition (openVJ rewrites bundle media to that
+    // form before writing the file).
+    private static List<string> MediaNames(byte[] composition)
+    {
+        var names = new List<string>();
+        JsonNode? root;
+        try { root = JsonNode.Parse(composition); }
+        catch (JsonException) { return names; }
+        CollectMediaNames(root, names);
+        return names;
+    }
+
+    private static void CollectMediaNames(JsonNode? node, List<string> names)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (key, value) in obj)
+                {
+                    if (key == "path" && value is JsonValue v && v.TryGetValue<string>(out var path)
+                        && path.StartsWith("media/", StringComparison.Ordinal))
+                        names.Add(path["media/".Length..]);
+                    else
+                        CollectMediaNames(value, names);
+                }
+                break;
+            case JsonArray array:
+                foreach (var child in array) CollectMediaNames(child, names);
+                break;
+        }
     }
 
     // Top-level files that make up a version: the manifest and its sidecars. Hidden files
@@ -351,7 +418,24 @@ public sealed partial class ProjectHistory : IProjectHistory
     }
 
     private static HashSet<string> WorkingBinaries(string bundleDir)
-        => new(ManifestBinaries(ParseManifest(bundleDir)), StringComparer.Ordinal);
+    {
+        var set = new HashSet<string>(ManifestBinaries(ParseManifest(bundleDir)), StringComparer.Ordinal);
+        string composition = Path.Combine(bundleDir, VisualsFile);
+        if (File.Exists(composition))
+        {
+            try
+            {
+                foreach (var name in MediaNames(File.ReadAllBytes(composition)))
+                    if (IsMediaName(name)) set.Add($"{VisualsMediaDir}/{name}");
+            }
+            catch (IOException) { /* unreadable: keep everything it might reference */ }
+        }
+        return set;
+    }
+
+    /// <summary>Bundle-relative files the working copy references (samples, plugin states,
+    /// visual media). The save's prune keeps these plus every version's binaries.</summary>
+    internal static IReadOnlySet<string> WorkingBinariesForPrune(string bundleDir) => WorkingBinaries(bundleDir);
 
     // --- garbage collection ------------------------------------------------
 
@@ -393,6 +477,13 @@ public sealed partial class ProjectHistory : IProjectHistory
                 string name = Path.GetFileName(file);
                 if (BundleContent.IsSaveOutput(name, dir)) yield return ($"{dir}/{name}", FileSize(file));
             }
+        }
+        string media = Path.Combine(bundleDir, VisualsMediaDir);
+        if (!Directory.Exists(media)) yield break;
+        foreach (var file in Directory.EnumerateFiles(media))
+        {
+            string name = Path.GetFileName(file);
+            if (IsMediaName(name)) yield return ($"{VisualsMediaDir}/{name}", FileSize(file));
         }
     }
 
@@ -543,4 +634,8 @@ public sealed partial class ProjectHistory : IProjectHistory
 
     [GeneratedRegex(@"^(samples/[0-9a-f]{32}\.wav|plugin-states/[0-9a-f]{32}\.bin)$")]
     private static partial Regex ContentNamedRx();
+
+    // Visual media: MediaFiles.Prepare names a picked file <sha256>.<ext>.
+    [GeneratedRegex(@"^[0-9a-f]{64}\.[a-z0-9]+$")]
+    private static partial Regex MediaNameRx();
 }

@@ -92,8 +92,11 @@ internal static partial class BundleContent
     public static void PruneUnreferenced(string bundleDir, ProjectDocument doc)
     {
         if (ProjectHistory.PinnedBinaries(bundleDir) is not { } pinned) return;
+        // The working composition's media count too: Nota owns their GC now (the engine's
+        // save-time GC is off for project saves), and the history keeps older versions' files.
+        var working = ProjectHistory.WorkingBinariesForPrune(bundleDir);
         bool Keep(string rel) => doc.SampleRefs.ContainsKey(rel) || doc.TableRefs.ContainsKey(rel) || doc.StateBlobs.ContainsKey(rel)
-                                 || pinned.Contains(rel);
+                                 || working.Contains(rel) || pinned.Contains(rel);
         foreach (var relDir in new[] { SamplesDir, StatesDir })
         {
             string dir = Path.Combine(bundleDir, relDir);
@@ -104,6 +107,20 @@ internal static partial class BundleContent
                 if (!IsSaveOutput(name, relDir) || Keep($"{relDir}/{name}")) continue;
                 try { File.Delete(file); } catch { /* in use or read-only: leave it for the next save */ }
             }
+        }
+        PruneMedia(bundleDir, Keep);
+    }
+
+    /// <summary>Deletes content-named visual media no working document or version references.</summary>
+    private static void PruneMedia(string bundleDir, Func<string, bool> keep)
+    {
+        string dir = Path.Combine(bundleDir, "visuals", "media");
+        if (!Directory.Exists(dir)) return;
+        foreach (var file in Directory.EnumerateFiles(dir))
+        {
+            string name = Path.GetFileName(file);
+            if (!ProjectHistory.IsMediaName(name) || keep($"visuals/media/{name}")) continue;
+            try { File.Delete(file); } catch { /* in use or read-only: leave it for the next save */ }
         }
     }
 
