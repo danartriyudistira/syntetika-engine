@@ -28,10 +28,10 @@ APP_NAME="$(basename "${APP}" .app)"
 OUT_DIR="${NOTA_DMG_DIR:-dist}"
 # The installer carries the product version (About); the bundle keeps Nota's upstream
 # version. Override either with NOTA_DMG_VERSION.
-APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP}/Contents/Info.plist")"
+NOTA_VERSION="$(tr -d '[:space:]' < VERSION)"
 PRODUCT_VERSION="$(sed -n 's/.*public const string ProductVersion = "\([^"]*\)".*/\1/p' \
   src/managed/Nota.Application/Branding.cs | head -1)"
-VERSION="${NOTA_DMG_VERSION:-${PRODUCT_VERSION:-${APP_VERSION}}}"
+VERSION="${NOTA_DMG_VERSION:-${PRODUCT_VERSION:-0.1.0}}"
 ARCH="$(lipo -archs "${APP}/Contents/MacOS/Nota.App" 2>/dev/null | tr ' ' '-')"
 [ -n "${ARCH}" ] || ARCH="$(uname -m)"
 DMG="${OUT_DIR}/Syntetika-Engine-${VERSION}-${ARCH}.dmg"
@@ -51,7 +51,7 @@ ln -s /Applications "${WORK}/root/Applications"
 
 # The standard unsigned-build note: Finder on another Mac needs one manual approval.
 cat > "${WORK}/root/Read me.txt" <<NOTE
-Syntetika Engine ${VERSION} (Nota ${APP_VERSION})
+Syntetika Engine ${VERSION} (Nota ${NOTA_VERSION})
 
 Drag Syntetika Engine.app onto Applications.
 

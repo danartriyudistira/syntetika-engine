@@ -198,15 +198,21 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 - [x] Tap audio master NotA → shared memory → band/hits openVJ (tanpa BlackHole).
 - Kriteria: offset < 20 ms; visual bereaksi ke kick/bass; tidak menambah stall.
 
-### P3 — Paket rilis v0.1.0 (±3–5 hari)
+### P3 — Paket rilis v0.1.1 (±3–5 hari)
 
-- [x] **DMG drag-to-Applications** (`scripts/package-dmg-syntetika.sh`): 111 MB, berisi app,
-  symlink Applications, Read me Gatekeeper, dan `.sha256`. Nama memakai versi produk (0.1.0).
-- [ ] Developer ID signing + notarization (`notarytool`); bundle masih ad-hoc dan versi
-  `CFBundleShortVersionString` masih mengikuti Nota (0.60.4).
-- [ ] `release.yml`: build macOS arm64, DMG, checksum, catatan rilis.
+- [x] Versi produk **0.1.1** di `Branding.ProductVersion`, `CFBundleShortVersionString` dan
+  `CFBundleGetInfoString` (Nota 0.60.4 tetap sebagai versi upstream).
+- [x] **DMG drag-to-Applications** 0.1.1 (`scripts/package-dmg-syntetika.sh`): 111 MB, app +
+  symlink Applications + Read me Gatekeeper + `.sha256`.
+- [x] `scripts/notarize-mac.sh` + `docs/release.md`: signing inside-out, notarytool, staple,
+  `spctl`; siap dipakai begitu ada Developer ID.
+- [ ] **Developer ID signing + notarization — BLOCKED**: mesin build tidak punya identitas
+  signing (`security find-identity` = 0) maupun kredensial notary. DMG masih ad-hoc.
+- [ ] `release.yml`: butuh macOS arm64 runner + secrets sertifikat/notary.
 - [ ] Halaman unduhan + panduan “Open Anyway”.
-- Kriteria: unduhan bersih bisa dibuka di Mac lain; About menampilkan versi yang benar.
+- Kriteria: unduhan bersih bisa dibuka di Mac lain; About/Get Info menampilkan versi produk.
+- Bukti: app+DMG 0.1.1, `codesign --verify --deep --strict` lolos (ad-hoc), readme menyebut
+  Nota 0.60.4; `bash scripts/notarize-mac.sh` berhenti dengan instruksi Developer ID.
 
 ### P4 — Editing lanjutan (±5–8 hari)
 

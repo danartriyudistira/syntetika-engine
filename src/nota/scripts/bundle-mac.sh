@@ -20,8 +20,12 @@ BUNDLE_ID="studio.syntetika.engine"
 # App version: single source of truth is the repo-root VERSION file.
 # CFBundleVersion must monotonically increase per build;
 # derive it from the semver so QA can tell builds apart.
-VERSION="$(tr -d '[:space:]' < VERSION)"
-BUILD_NUMBER="$(echo "${VERSION}" | awk -F. '{ printf "%d%03d%03d", $1, $2, $3 }')"
+VERSION="$(tr -d '[:space:]' < VERSION)"                 # Nota engine version
+# The product version is what Finder/About show; it lives in Branding.cs.
+PRODUCT_VERSION="$(sed -n 's/.*public const string ProductVersion = "\([^"]*\)".*/\1/p' \
+  src/managed/Nota.Application/Branding.cs | head -1)"
+PRODUCT_VERSION="${PRODUCT_VERSION:-0.1.0}"
+PRODUCT_BUILD="$(echo "${PRODUCT_VERSION}" | awk -F. '{ printf "%d%03d%03d", $1, $2, $3 }')"
 NATIVE_BUILD="$(pwd)/src/native/nota.engine/build"
 APP_DIR="${NOTA_APP_DIR:-$PWD/dist}"
 APP="${APP_DIR}/${APP_NAME}.app"
@@ -99,8 +103,9 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <key>CFBundleExecutable</key>      <string>${APP_EXE}</string>
   <key>CFBundleIconFile</key>        <string>${APP_NAME}</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
-  <key>CFBundleShortVersionString</key> <string>${VERSION}</string>
-  <key>CFBundleVersion</key>         <string>${BUILD_NUMBER}</string>
+  <key>CFBundleShortVersionString</key> <string>${PRODUCT_VERSION}</string>
+  <key>CFBundleVersion</key>         <string>${PRODUCT_BUILD}</string>
+  <key>CFBundleGetInfoString</key>   <string>Syntetika Engine ${PRODUCT_VERSION} · Nota ${VERSION}</string>
   <key>CFBundleDevelopmentRegion</key> <string>en</string>
   <!-- The languages of src/managed/Nota.App/Languages: macOS shows its own text (Hide, Quit, the
        open panels) in one of these when the app asks for it (MacSystemLanguage.cs). -->
