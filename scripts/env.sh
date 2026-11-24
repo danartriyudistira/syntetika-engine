@@ -23,7 +23,7 @@ export CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-$HOME/.cache/CPM}"
 export SYNTETIKA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export NOTA_DIR="${NOTA_DIR:-$SYNTETIKA_ROOT/src/nota}"
 export OPENVJ_DIR="${OPENVJ_DIR:-$SYNTETIKA_ROOT/src/openvj}"
-export NOTA_BUILD="${NOTA_BUILD:-$NOTA_DIR/build-arm64}"
+export NOTA_BUILD="${NOTA_BUILD:-$NOTA_DIR/src/native/nota.engine/build}"
 
 # Nota: lewati build halaman Remote (butuh Node).
 export NOTA_SKIP_WEB="-p:NotaSkipWebBuild=true"

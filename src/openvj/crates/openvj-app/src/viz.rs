@@ -8,7 +8,8 @@
 use openvj_core::{library, ClipId, EffectType};
 use openvj_core::{Clip, ClipSource, Composition, Effect, GeneratorKind};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// A short name for the clip's source, for the tab's header line.
@@ -349,6 +350,49 @@ pub fn paths_absolute(value: &mut Value, media_dir: &str) {
     });
 }
 
+/// Removes files in `media_dir` that the saved composition no longer references.
+/// Returns how many it removed. Only `media/<file>` paths count.
+pub fn gc_media(media_dir: &Path, composition: &Value) -> usize {
+    let mut keep = HashSet::new();
+    collect_media(composition, &mut keep);
+    let Ok(entries) = std::fs::read_dir(media_dir) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !keep.contains(&name) && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+fn collect_media(value: &Value, out: &mut HashSet<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == "path"
+                    && let Value::String(s) = child
+                    && let Some(rest) = s.strip_prefix("media/")
+                {
+                    out.insert(rest.to_owned());
+                } else {
+                    collect_media(child, out);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_media(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn walk_paths(value: &mut Value, f: &mut impl FnMut(&mut String)) {
     match value {
         Value::Object(map) => {
@@ -416,4 +460,28 @@ pub fn catalog(kind: &str, query: &str) -> Value {
         }
     }
     json!({ "items": items.into_iter().take(500).collect::<Vec<_>>() })
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gc_media_keeps_referenced_files_only() {
+        let dir = std::env::temp_dir().join(format!("openvj-gc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kept.png"), b"x").unwrap();
+        std::fs::write(dir.join("stale.mp4"), b"y").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"z").unwrap();
+        let comp = json!({
+            "layers": [{ "clips": [{ "source": { "kind": "image", "path": "media/kept.png" } }] }],
+        });
+        assert_eq!(gc_media(&dir, &comp), 2, "drops the unreferenced files");
+        assert!(dir.join("kept.png").exists());
+        assert!(!dir.join("stale.mp4").exists());
+        assert!(!dir.join("notes.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -37,6 +37,9 @@ diffs are in `patches/`.
   or drop a video from the library. Its sound is extracted with the bundled FFmpeg into the
   slot and its picture is assigned to the matching visual, beat-synced to the clip's length.
   Images drop the same way and become the visual only.
+- **Media GC on save**: after a project saves its visuals, files in `visuals/media` that the
+  composition no longer references are deleted, so removing a clip or replacing its media
+  doesn't leave the bundle growing.
 - **Video follows the audio trim**: shortening/looping an audio slot retimes its video to the
   same musical loop at normal speed (it trims the video instead of squeezing the whole file),
   a trimmed start moves the video's in-point to the same source time (e.g. audio 10–20 s plays

@@ -45,9 +45,9 @@ Script environment: `scripts/env.sh` (menambahkan PATH + variabel build).
 source scripts/env.sh
 
 # Nota — engine saja (arm64)
-cmake -G Ninja -S src/nota/src/native/nota.engine -B src/nota/build-arm64 \
+cmake -S src/nota/src/native/nota.engine -B src/nota/src/native/nota.engine/build \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
-cmake --build src/nota/build-arm64 -j 4
+cmake --build src/nota/src/native/nota.engine/build -j 4
 
 # Nota — aplikasi (.NET)
 dotnet build src/nota/Nota.sln -c Release -p:NotaSkipWebBuild=true
@@ -85,7 +85,7 @@ Syntetika Engine/
   docs/
   patches/           0001-clang14-structured-binding-lambda.patch
   scripts/           env.sh (PATH + variabel build)
-  src/nota/          fork Nota (upstream = nota-daw/nota) + build-arm64/
+  src/nota/          fork Nota (upstream = nota-daw/nota) + src/native/nota.engine/build/
   src/openvj/        fork openVJ (upstream = openwave-studio/openvj) + target/
 ```
 

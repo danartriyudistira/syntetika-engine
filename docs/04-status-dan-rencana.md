@@ -147,11 +147,13 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 
 - macOS Apple Silicon saja yang teruji.
 - Visual hanya untuk slot Session; clip Arrangement hanya menampilkan petunjuk.
-- Pemilih sumber: generator + ISF. Media/kamera/Syphon belum; belum ada copy media ke bundle.
-- Belum ada undo untuk parameter visual, preset visual, atau MIDI mapping visual.
-- Belum ada offset A/V, kalibrasi, atau audio reactivity.
+- Pemilih sumber: generator, ISF, media (video/gambar), kamera, Syphon; media disalin
+  content-addressed ke bundle. Daftar Files Nota masih menampilkan media sebagai ikon;
+  thumbnail ada di media browser openVJ.
+- Belum ada undo/preset/MIDI mapping parameter visual (P4).
 - Effect color/point2D tampil sebagai slider float (belum color picker/XY).
-- Project belum disimpan → visual hanya di memori.
+- Project yang belum disimpan kehilangan komposisi visual saat engine restart; project yang
+  sudah disimpan membawa `visuals/composition.json` + media.
 - Bundle unsigned/notarized; repo source-only (tanpa binary); belum ada CI.
 - Mesin 8 GB + swap: sesekali gap frame 20–40 ms dari pacing macOS/WindowServer.
 
@@ -183,10 +185,12 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
 - [x] Syphon.framework ikut di bundle + izin kamera di Info.plist.
 - [x] **FFmpeg decode-only (LGPL) dibundel** di `Contents/Helpers` + lisensi di
   `Contents/Resources/FFmpeg`; video jalan tanpa install terpisah.
-- [ ] Thumbnail media di katalog.
-- [ ] GC media tak terpakai saat save.
+- [x] Thumbnail media di katalog openVJ (media browser; Nota memakai dialog file).
+- [x] GC media tak terpakai saat save: setelah `composition.json` berhasil ditulis, file di
+  `visuals/media` yang tidak direferensikan dihapus.
 - Bukti: image 720×720 dan video 640×360 ter-decode dari bundle; save menyimpan
-  `media/<hash>.mp4`, load memulihkannya.
+  `media/<hash>.mp4`, load memulihkannya. Uji GC: log `viz save removed 4` lalu
+  `removed 3 unused media file(s)`; folder media uji hanya menyisakan 1 PNG yang direferensikan.
 
 ### P2 — Sinkronisasi A/V & reaktivitas audio (±5–7 hari)
 

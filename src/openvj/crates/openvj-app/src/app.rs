@@ -1291,7 +1291,7 @@ impl App {
         let doc = serde_json::json!({
             "version": 1,
             "layout_uids": uids,
-            "composition": comp,
+            "composition": comp.clone(),
         });
         let text = match serde_json::to_string_pretty(&doc) {
             Ok(t) => t,
@@ -1308,6 +1308,14 @@ impl App {
         match std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, target)) {
             Ok(()) => {
                 eprintln!("openVJ: viz saved to {path}");
+                // Only after a successful write: the host copies staging media in first, and a
+                // failed save must keep the old composition (and its files) intact.
+                if let Some(media_dir) = Path::new(path).parent().map(|d| d.join("media")).filter(|d| d.is_dir()) {
+                    let removed = crate::viz::gc_media(&media_dir, &comp);
+                    if removed > 0 {
+                        eprintln!("openVJ: viz save removed {removed} unused media file(s)");
+                    }
+                }
                 if let Some(bridge) = &self.nota {
                     bridge.send(&serde_json::json!({ "t": "vizSaved", "path": path }).to_string());
                 }
