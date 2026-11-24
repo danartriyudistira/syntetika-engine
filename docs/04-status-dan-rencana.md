@@ -568,7 +568,8 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 
 ## 7t. Demo project + regresi undo/persistensi (24 Nov)
 
-- **Demo**: `~/Documents/Nota Projects/syntetika_demo.nota` (panduan di `DEMO.md`).
+- **Demo**: `~/Documents/Nota Projects/Syntetika Demo.nota`, dibangun ulang dengan
+  `scripts/make-demo.sh` (panduan di `demo/README.md`).
   **Ink Industrial** 105 BPM F minor, **2:59** otomatis lewat Follow Actions. 3 layer:
   DrumBrute (drum rack Volta), Model D (Monolith Reese Bass, unison detune, Valve+Crush),
   Kobol (Monolith Portamento) + 2 return. Follow presisi 61,25/64,75/92,75/70/24,5 beat
