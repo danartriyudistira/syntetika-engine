@@ -281,6 +281,53 @@ internal static class HistoryTests
         }
     }
 
+    /// <summary>Crash snapshots carry the visuals: the composition is refreshed on an autosave
+    /// even when the audio didn't change, and the media it uses are copied once.</summary>
+    public static IEnumerable<(bool Ok, string Label)> RunRecoveryVisuals()
+    {
+        string tmp = Path.GetTempPath();
+        string bundle = Path.Combine(tmp, "nota-smoke-recsrc-" + Guid.NewGuid().ToString("N") + ".nota");
+        string recovery = Path.Combine(tmp, "nota-smoke-rec-" + Guid.NewGuid().ToString("N"));
+        var transport = new TransportState(120.0, 1.0, false, false);
+        string visuals = Path.Combine(bundle, "visuals");
+        string composition = Path.Combine(visuals, "composition.json");
+        string mediaName = new string('b', 64) + ".png";
+        string media = Path.Combine(visuals, "media", mediaName);
+        string snapshot = Path.Combine(recovery, "project.nota");
+
+        try
+        {
+            using var eng = new NotaEngine();
+            eng.AddInstrumentTrack();
+            ProjectService.Save(ProjectService.Capture(eng, transport, new List<string>()), bundle, eng);
+            Directory.CreateDirectory(Path.Combine(visuals, "media"));
+            File.WriteAllBytes(media, [9, 9, 9]);
+            File.WriteAllText(composition, $"{{\"version\":1,\"composition\":{{\"path\":\"media/{mediaName}\"}}}}");
+
+            var store = new RecoveryService(recovery);
+            store.BeginSession();
+            var doc = ProjectService.Capture(eng, transport, new List<string>());
+            bool wrote = store.Autosave(doc, eng, bundle);
+            yield return (wrote && File.Exists(Path.Combine(snapshot, "visuals", "composition.json")),
+                "an autosave copies the composition into the snapshot");
+            yield return (File.Exists(Path.Combine(snapshot, "visuals", "media", mediaName)),
+                "…and the media it references");
+
+            // Audio is unchanged, but a new visual edit still refreshes the snapshot.
+            File.WriteAllText(composition, "{\"version\":1,\"composition\":{\"tag\":\"second\"}}");
+            bool refreshed = store.Autosave(doc, eng, bundle);
+            yield return (refreshed && File.ReadAllText(Path.Combine(snapshot, "visuals", "composition.json")).Contains("second"),
+                "a visual-only change refreshes the snapshot");
+            yield return (File.Exists(Path.Combine(snapshot, "visuals", "media", mediaName)),
+                "the snapshot's prune keeps media the copied composition uses");
+        }
+        finally
+        {
+            try { Directory.Delete(bundle, true); } catch { }
+            try { Directory.Delete(recovery, true); } catch { }
+        }
+    }
+
     public static IEnumerable<(bool Ok, string Label)> Run()
     {
         string tmp = Path.GetTempPath();
