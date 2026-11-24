@@ -103,7 +103,7 @@ public sealed partial class SessionView
             Orientation = Orientation.Horizontal, Spacing = 7,
             Children = { new Glyph(GlyphKind.Stop, 7), new TextBlock { Text = Loc.T("session.grid.stop_all_clips"), FontSize = 9, FontWeight = FontWeight.SemiBold } },
         };
-        var foot = new StackPanel { Width = SceneRailW, Spacing = Gap, Children = { addScene, stopAll } };
+        var foot = new StackPanel { Width = SceneRailW, Spacing = Gap, Children = { stopAll, addScene } };
         foot.Children.Add(MixerRailLabels());
         _footerRow.Children.Add(foot);
     }
@@ -131,7 +131,6 @@ public sealed partial class SessionView
         _cellsRow.Children.Add(mid);
 
         var foot = LaneStack(_across ? _laneH : c.Width);
-        if (!_across) foot.Children.Add(new Border { Height = SpacerH });
         double stopW = _across ? StopColW : double.NaN, stopH = _across ? _laneH : StopRowH;
         if (c.Kind is ColKind.Track or ColKind.Group)
         {
@@ -141,6 +140,7 @@ public sealed partial class SessionView
             foot.Children.Add(stop);
         }
         else foot.Children.Add(new Border { Width = stopW, Height = stopH });
+        if (!_across) foot.Children.Add(new Border { Height = SpacerH });
         c.Mixer = BuildMixer(c);
         foot.Children.Add(c.Mixer.Root);
         _footerRow.Children.Add(foot);
