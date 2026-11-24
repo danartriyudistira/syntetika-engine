@@ -744,6 +744,17 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   visual untuk deck yang tidak terbuka baru dijalankan saat deck dibuka; tool MCP/remote
   masih memakai index scene global; demo 2-deck dan rilis 0.1.4 belum.
 
+## 7ac. Rilis 0.1.4 (24 Nov)
+
+- Produk **0.1.4**; Nota 0.60.4, openVJ 0.1.0. Isi: Session decks (format v36), deck bar,
+  scene per deck, deck visual mirror + switch dua arah, sinkron trigger clip/scene/deck lintas
+  deck, reset visual untuk New Project, media video/gambar dimuat ulang saat project/deck
+  dibuka, rekonsiliasi deck pada undo/redo, fix tab OpenVJ deck 2.
+- Bukti: 173 tes openvj-core + 51 openvj-app, 18 cek smoke deck, history suite; DMG berisi
+  `0.1.4` + helper baru (ffprobe bersebelahan, media ready 854x480 saat load).
+- DMG `Syntetika-Engine-0.1.4-arm64.dmg` 112 MB, ad-hoc signed.
+  SHA-256 `6fa760321c9fd881a7087379b268eecd633eb07f7f88d116f216c9d3f2d1b441`.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

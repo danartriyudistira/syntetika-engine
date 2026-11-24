@@ -6,7 +6,7 @@ diffs are in `patches/`.
 ## Branding and packaging
 
 - Product is **Syntetika Engine** (`studio.syntetika.engine`); the app menu, window title,
-  Welcome, Splash and About use it. Product version **0.1.3** now drives
+  Welcome, Splash and About use it. Product version **0.1.4** now drives
   `CFBundleShortVersionString`/`CFBundleGetInfoString` (Nota's version stays the upstream base).
 - Notarization is **deferred**: releases use an ad-hoc DMG with a one-time "Open Anyway".
   `scripts/notarize-mac.sh` + `docs/release.md` remain ready for a future Developer ID.
@@ -222,6 +222,12 @@ diffs are in `patches/`.
 - The FFmpeg availability probe is cached, so it is not re-run on every state poll.
 
 ## Known limitations
+
+- Undoing a **deck removal** restores the audio deck; its visual clips start empty.
+- Follow/stop while a deck is not open shows when that deck is opened again; visual-only
+  clips (no audio) are not resumed automatically.
+- MCP/remote scene tools address the global scene index, not a deck-local one.
+- Project format v36 (decks) needs 0.1.4 or newer; older builds refuse it.
 
 - macOS Apple Silicon is the only tested target.
 - Visuals exist per Session slot; arrangement clips show a hint.
