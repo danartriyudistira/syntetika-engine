@@ -31,6 +31,14 @@ diffs are in `patches/`.
   deck list (`vizDeck*` + `vizDecks`): one visual deck per Nota deck, one column per scene,
   duplicate copies the visual deck, remove drops it, and a deletion's undo restores the audio
   deck while its visual content starts empty (documented limitation).
+- **Deck-aware triggers**: every scene ↔ openVJ column, clip ↔ slot and deck ↔ deck trigger
+  now maps through the open deck (engine scenes are global, openVJ columns are per deck). A
+  scene launched from Nota schedules each layer's visual on its clip quantum; a column clicked
+  in openVJ asks Nota to launch that scene (audio + visuals) instead of starting a picture with
+  no music; an openVJ deck tab switches Nota's deck (and vice versa) without an echo loop.
+  Scheduled launches carry their deck, so a launch queued just before a deck switch can't fire
+  on the new deck's same column. The OpenVJ tab compares replies against the open deck's
+  column (a deck-2 slot no longer sits at "Loading the visual").
 
 - **Visuals ride with version history and crash recovery**: a save records
   `visuals/composition.json` beside the manifest, and the content-named media files a

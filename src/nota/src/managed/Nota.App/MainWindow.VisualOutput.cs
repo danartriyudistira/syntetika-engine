@@ -222,6 +222,19 @@ public partial class MainWindow
             bridge.SlotAudioRequested += (layer, scene, path) =>
                 Dispatcher.UIThread.Post(() => _ = PairSlotAudioAsync(layer, scene, path));
             bridge.LayoutChanged += () => Dispatcher.UIThread.Post(RefreshVisualTab);
+            bridge.SceneLaunchRequested += scene => Dispatcher.UIThread.Post(() =>
+            {
+                bool launched = _session?.LaunchSceneFromOpenVJ(scene) == true;
+                if (_vm is not null)
+                    _vm.StatusText = launched
+                        ? Loc.T("session.scene_launched_from_openvj")
+                        : Loc.T("session.the_scene_is_not_in_this_deck");
+            });
+            bridge.DeckSwitchRequested += index => Dispatcher.UIThread.Post(() =>
+            {
+                if (_session?.SwitchDeckFromOpenVJ(index) == true)
+                    VisualBridge.Current?.DeckSwitchedFromOpenVJ();
+            });
             bridge.SlotLaunchRequested += (layer, scene) => Dispatcher.UIThread.Post(() =>
             {
                 bool audio = _session?.LaunchSlotFromVisual(layer, scene) == true;

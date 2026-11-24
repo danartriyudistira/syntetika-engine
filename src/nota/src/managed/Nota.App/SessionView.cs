@@ -525,6 +525,8 @@ public sealed partial class SessionView : UserControl
         if (trackId <= 0 || scene < 0 || scene >= _engine.SceneCount) return false;
         if (ColumnFor(trackId) is not { Kind: ColKind.Track } c) return false;
         Select(new Selection(SelKind.Slot, trackId, scene));
+        // Hosted openVJ asks Nota to launch both sides (it doesn't trigger the clip locally),
+        // so schedule the visual here on the same quantum as the audio.
         LaunchSlotVisual(c, scene);
         // A visual-only clip still launches; only touch the audio when the slot has a take.
         bool audio = _engine.SessionSlotState(trackId, scene) != 0;
@@ -549,13 +551,21 @@ public sealed partial class SessionView : UserControl
         for (int i = 0; i < _engine.TrackCount; i++)
         {
             if (!_engine.TryGetTrackInfo(i, out var ti) || ti.Type is not (0 or 1)) continue;
-            for (int s = 0; s < _engine.SceneCount; s++)
+            for (int s = _deckStart; s < _deckEnd; s++)
                 if (s != scene && _engine.SessionSlotState(ti.Id, s) == 3)
                 {
                     bridge.VizCopy(VisualLayer(ti.Id), s, VisualLayer(ti.Id), scene, move: false);
                     break;
                 }
         }
+    }
+
+    /// <summary>openVJ's column trigger: launch the matching Nota scene (audio + visuals).</summary>
+    internal bool LaunchSceneFromOpenVJ(int scene)
+    {
+        if (scene < _deckStart || scene >= _deckEnd) return false;
+        LaunchSceneRow(scene);
+        return true;
     }
 
     private void LaunchSceneRow(int scene)

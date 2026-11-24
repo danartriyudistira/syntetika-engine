@@ -980,7 +980,7 @@ impl App {
                 }
                 NotaCommand::VizSave { path, uids, media_dirs, gc } => self.viz_save(&path, uids, &media_dirs, gc),
                 NotaCommand::VizLoad { path, media_dir } => self.viz_load(&path, &media_dir),
-                NotaCommand::VizDeck { index } => self.deck_clicked(index),
+                NotaCommand::VizDeck { index } => self.deck_clicked_from_nota(index),
                 NotaCommand::VizDeckAdd { index } => self.deck_add_at(index),
                 NotaCommand::VizDeckRemove { index } => self.deck_remove(index),
                 NotaCommand::VizDeckDuplicate { index } => {
@@ -1137,12 +1137,21 @@ impl App {
                 let (at_beat, cmd) = self.nota_queue.remove(i);
                 let drift_ms = (beat - at_beat) * 60_000.0 / f64::from(self.comp.bpm.max(1.0));
                 match cmd {
-                    NotaCommand::Scene { col, .. } => {
-                        self.comp.trigger_column(col, now);
-                        eprintln!("openVJ: NOTA scene col={col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
+                    NotaCommand::Scene { col, deck, .. } => {
+                        // A launch queued in a deck the user has left must not fire on the new
+                        // deck's same column; the audio keeps playing and the visual catches up
+                        // when that deck is opened again.
+                        if deck.is_some_and(|d| d != self.comp.current_deck) {
+                            eprintln!("openVJ: NOTA scene col={col} dropped (deck left)");
+                        } else {
+                            self.comp.trigger_column(col, now);
+                            eprintln!("openVJ: NOTA scene col={col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
+                        }
                     }
-                    NotaCommand::Slot { layer, col, .. } => {
-                        if self.comp.clip(layer, col).is_some() {
+                    NotaCommand::Slot { layer, col, deck, .. } => {
+                        if deck.is_some_and(|d| d != self.comp.current_deck) {
+                            eprintln!("openVJ: NOTA clip {layer}:{col} dropped (deck left)");
+                        } else if self.comp.clip(layer, col).is_some() {
                             self.comp.trigger(layer, col, now);
                             eprintln!("openVJ: NOTA clip {layer}:{col} at={at_beat:.3} applied={beat:.3} drift={drift_ms:.2}ms");
                         } else {
@@ -2933,6 +2942,19 @@ impl App {
 
     pub fn column_clicked(&mut self, col: usize) {
         self.stop_automix_for_mixer();
+        // Hosted by Nota, the DAW owns the audio: ask it to launch the matching scene, and it
+        // schedules the visual slots on the same quantum. Triggering here too would start the
+        // picture without the music (and then restart it when Nota's slots arrive).
+        let hosted = self.nota.as_ref().is_some_and(|b| b.connected());
+        if hosted {
+            if let Some(bridge) = &self.nota {
+                bridge.send(&format!("{{\"t\":\"launchScene\",\"col\":{col}}}"));
+            }
+            eprintln!("openVJ: NOTA scene request {col}");
+            self.last_column = Some(col);
+            self.grid_dirty = true;
+            return;
+        }
         let now = self.now();
         self.comp.trigger_column(col, now);
         self.last_column = Some(col);
@@ -3030,13 +3052,30 @@ impl App {
 
     // ---------------------------------------------------------------- decks
 
-    /// Shows another deck. What's playing keeps playing.
+    /// Shows another deck. What's playing keeps playing. User-initiated (the deck tabs), so
+    /// Nota follows: its Session deck is the same project state, not a separate view.
     pub fn deck_clicked(&mut self, index: usize) {
         if index == self.comp.current_deck {
             return;
         }
         self.comp.switch_deck(index);
         self.after_deck_change();
+        self.notify_nota_deck(index);
+    }
+
+    /// The bridge asked for a deck: Nota already switched, so this must not echo back.
+    pub fn deck_clicked_from_nota(&mut self, index: usize) {
+        if index == self.comp.current_deck {
+            return;
+        }
+        self.comp.switch_deck(index);
+        self.after_deck_change();
+    }
+
+    fn notify_nota_deck(&self, index: usize) {
+        if let Some(bridge) = &self.nota {
+            bridge.send(&serde_json::json!({ "t": "deck", "index": index }).to_string());
+        }
     }
 
     pub fn deck_add(&mut self) {

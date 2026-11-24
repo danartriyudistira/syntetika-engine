@@ -60,6 +60,10 @@ public sealed class VisualBridge : IDisposable
 
     /// <summary>Raised on the UI thread after a layout snapshot was sent.</summary>
     public event Action? LayoutChanged;
+    /// <summary>openVJ's own deck tab was clicked; the Session view switches to that Nota deck.</summary>
+    public event Action<int>? DeckSwitchRequested;
+    /// <summary>openVJ's column trigger: Nota launches the matching scene (audio + visuals).</summary>
+    public event Action<int>? SceneLaunchRequested;
 
     private volatile bool _canUndo;
     private volatile bool _canRedo;
@@ -271,6 +275,7 @@ public sealed class VisualBridge : IDisposable
                 scenes.Add(new { index = i, name });
             }
             int deck = _engine.CurrentDeck;
+            sig.Append("cur:").Append(deck).Append('|');
             var decks = new List<object>();
             for (int d = 0; d < _engine.DeckCount; d++)
             {
@@ -344,6 +349,10 @@ public sealed class VisualBridge : IDisposable
         var (start, count) = OpenDeckRows;
         return col >= 0 && col < count ? start + col : -1;
     }
+
+    /// <summary>openVJ switched decks itself (its tabs): reset the deck-scoped mirrors and
+    /// resend the layout, without asking the engine to switch again.</summary>
+    public void DeckSwitchedFromOpenVJ() => DeckChanged();
 
     /// <summary>Forgets the deck-scoped mirrors after the open deck changed.</summary>
     private void DeckChanged()
@@ -1004,6 +1013,43 @@ public sealed class VisualBridge : IDisposable
     /// <summary>Handles messages about the engine itself; true when consumed here.</summary>
     private bool HandleControlMessage(string line)
     {
+        // openVJ's deck tab: Nota is the source of truth for decks, so switch its Session deck
+        // too (the Session view refreshes; no `vizDeck` goes back).
+        if (line.Contains("\"t\":\"deck\"", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var v = doc.RootElement;
+                if (!v.TryGetProperty("t", out var t) || t.GetString() != "deck") return false;
+                int index = v.TryGetProperty("index", out var i) ? i.GetInt32() : -1;
+                if (index < 0) return true;
+                AppLog($"[viz<-] deck {index}");
+                try { DeckSwitchRequested?.Invoke(index); }
+                catch (Exception ex) { AppLog("deck switch handler failed: " + ex.Message); }
+                return true;
+            }
+            catch (JsonException) { return false; }
+        }
+        // openVJ's column trigger: Nota owns the audio, so it launches the scene on its quantum
+        // and schedules the matching visual slots (openVJ does not trigger them locally).
+        if (line.Contains("\"t\":\"launchScene\"", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var v = doc.RootElement;
+                if (!v.TryGetProperty("t", out var t) || t.GetString() != "launchScene") return false;
+                int col = v.TryGetProperty("col", out var c) ? c.GetInt32() : -1;
+                int scene = GlobalScene(col);
+                if (scene < 0) return true;
+                AppLog($"[viz<-] launchScene C{col} (scene {scene})");
+                try { SceneLaunchRequested?.Invoke(scene); }
+                catch (Exception ex) { AppLog("scene launch handler failed: " + ex.Message); }
+                return true;
+            }
+            catch (JsonException) { return false; }
+        }
         // openVJ's own clip click: launch the matching Session slot (audio + visual) in Nota.
         if (line.Contains("\"launchSlot\"", StringComparison.Ordinal))
         {

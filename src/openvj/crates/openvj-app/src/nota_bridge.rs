@@ -58,8 +58,8 @@ pub struct LayoutTrack {
 
 #[derive(Clone, Debug)]
 pub enum Command {
-    Scene { col: usize, at_beat: f64 },
-    Slot { layer: usize, col: usize, at_beat: f64 },
+    Scene { col: usize, at_beat: f64, deck: Option<usize> },
+    Slot { layer: usize, col: usize, at_beat: f64, deck: Option<usize> },
     StopLayer { layer: usize, at_beat: Option<f64> },
     StopAll { at_beat: Option<f64> },
     Layout { tracks: Vec<LayoutTrack>, scenes: Vec<String> },
@@ -262,13 +262,15 @@ fn handle(line: &str, tx: &Sender<Command>, clock: &Arc<Mutex<Option<ClockSample
         Some("scene") => {
             let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let at_beat = v.get("atBeat").and_then(|x| x.as_f64()).unwrap_or(0.0);
-            let _ = tx.send(Command::Scene { col, at_beat });
+            let deck = v.get("deck").and_then(|x| x.as_u64()).map(|d| d as usize);
+            let _ = tx.send(Command::Scene { col, at_beat, deck });
         }
         Some("slot") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let col = v.get("col").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             let at_beat = v.get("atBeat").and_then(|x| x.as_f64()).unwrap_or(0.0);
-            let _ = tx.send(Command::Slot { layer, col, at_beat });
+            let deck = v.get("deck").and_then(|x| x.as_u64()).map(|d| d as usize);
+            let _ = tx.send(Command::Slot { layer, col, at_beat, deck });
         }
         Some("stopLayer") => {
             let layer = v.get("layer").and_then(|x| x.as_u64()).unwrap_or(0) as usize;

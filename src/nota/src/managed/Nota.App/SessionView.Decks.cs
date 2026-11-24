@@ -92,6 +92,16 @@ public sealed partial class SessionView
         }
     }
 
+    /// <summary>openVJ's deck tab was clicked: switch the Session deck without echoing the
+    /// command back (the visual engine already switched).</summary>
+    internal bool SwitchDeckFromOpenVJ(int index)
+    {
+        if (index < 0 || index >= _engine.DeckCount || index == _engine.CurrentDeck) return false;
+        _engine.SwitchDeck(index);
+        Refresh();
+        return true;
+    }
+
     private void SwitchDeck(int index)
     {
         if (index == _engine.CurrentDeck) return;

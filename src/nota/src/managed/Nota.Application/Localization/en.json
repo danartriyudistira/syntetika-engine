@@ -2697,6 +2697,8 @@
     "session.deck.last": "The last deck can't be removed.",
     "session.deck.recording": "A deck can't be removed while recording.",
     "session.deck.name": "Deck name",
+    "session.scene_launched_from_openvj": "Scene launched from openVJ",
+    "session.the_scene_is_not_in_this_deck": "That scene is in another deck.",
     "main.fill_the_window_with_the": "Fill the window with the clip editor (⌘⇧F)",
     "main.flatten": "Flatten",
     "main.flatten_remove_source": "Flatten (remove source)",
