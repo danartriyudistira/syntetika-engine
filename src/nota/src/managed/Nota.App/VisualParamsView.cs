@@ -28,12 +28,13 @@ namespace Nota.App;
 
 public sealed class VisualParamsView : UserControl
 {
-    private readonly StackPanel _root = new() { Spacing = 12, Margin = new Thickness(14, 10, 14, 18) };
+    private readonly StackPanel _root = new() { Spacing = 8, Margin = new Thickness(14, 8, 14, 18) };
     private readonly DispatcherTimer _timer;
     private int _layer = -1, _col = -1;
     private DateTime _lastEditAt;
     private bool _offlineShown;
     private bool _wasConnected;
+    private bool _hasVisual;
     private string _stateKey = "";
     private readonly List<(string Kind, string Id, string Name)> _catalogAll = new();
     private readonly List<(string Kind, string Id, string Name)> _catalogShown = new();
@@ -45,40 +46,88 @@ public sealed class VisualParamsView : UserControl
     private readonly List<(string Kind, string Id, string Name)> _catalogItems = new();
     private readonly Button _undoBtn;
     private readonly Button _redoBtn;
+    private readonly Button _replaceBtn;
+    private readonly Button _removeBtn;
+    private readonly StackPanel _actions;
+    private readonly Control _speedRow;
+    private Action _speedSync = () => { };
+    private double _speed = 1.0;
 
     private static VisualBridge? Bridge => VisualBridge.Current;
 
     public VisualParamsView()
     {
-        _undoBtn = new Button
+        static Button ActionButton(string text) => new()
         {
-            Content = Loc.T("common.undo"),
-            Padding = new Thickness(10, 4),
-            FontSize = 12,
-            IsEnabled = false,
+            Content = text,
+            Height = 24,
+            Padding = new Thickness(8, 0),
+            FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
         };
-        _redoBtn = new Button
-        {
-            Content = Loc.T("common.redo"),
-            Padding = new Thickness(10, 4),
-            FontSize = 12,
-            IsEnabled = false,
-        };
+
+        _undoBtn = ActionButton(Loc.T("common.undo"));
+        _redoBtn = ActionButton(Loc.T("common.redo"));
+        _replaceBtn = ActionButton(Loc.T("visual.replace"));
+        _removeBtn = ActionButton(Loc.T("visual.clear"));   // "Remove"
+
         _undoBtn.Click += (_, _) => Bridge?.VisualUndo();
         _redoBtn.Click += (_, _) => Bridge?.VisualRedo();
-        var tools = new StackPanel
+        _replaceBtn.Click += (_, _) => OpenCatalog("generators", item =>
+            Bridge?.VizAssign(_layer, _col, item.GetProperty("kind").GetString() ?? "generator", item.GetProperty("id").GetString() ?? ""));
+        _removeBtn.Click += (_, _) => Bridge?.VizClear(_layer, _col);
+
+        // Two neat rows: Undo/Redo, then Replace/Remove. Equal widths keep the block tidy.
+        var buttons = new Grid
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Margin = new Thickness(14, 10, 14, 0),
+            ColumnDefinitions = new ColumnDefinitions("*,*"),
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
+            ColumnSpacing = 6,
+            RowSpacing = 6,
         };
-        tools.Children.Add(_undoBtn);
-        tools.Children.Add(_redoBtn);
-        var dock = new DockPanel();
-        DockPanel.SetDock(tools, Dock.Top);
-        dock.Children.Add(tools);
-        dock.Children.Add(new ScrollViewer { Content = _root, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
-        Content = dock;
+        void Place(Control c, int col, int row)
+        {
+            Grid.SetColumn(c, col);
+            Grid.SetRow(c, row);
+            buttons.Children.Add(c);
+        }
+        Place(_undoBtn, 0, 0);
+        Place(_redoBtn, 1, 0);
+        Place(_replaceBtn, 0, 1);
+        Place(_removeBtn, 1, 1);
+
+        _speedRow = ClipEditorKit.SliderRow(
+            Loc.T("visual.speed"), 52,
+            () => Math.Clamp((_speed - 0.1) / 3.9, 0.0, 1.0),
+            norm =>
+            {
+                _lastEditAt = DateTime.UtcNow;
+                _speed = 0.1 + norm * 3.9;
+                Bridge?.VizPlayback(_layer, _col, _speed, null, null, null);
+            },
+            () => $"{_speed:0.00}×",
+            out Action speedSync,
+            reset: () =>
+            {
+                _speed = 1.0;
+                Bridge?.VizPlayback(_layer, _col, _speed, null, null, null);
+            },
+            dim: () => !_hasVisual);
+        _speedSync = speedSync;
+        _speedRow.Margin = new Thickness(0, 2, 0, 0);
+
+        _actions = new StackPanel { Spacing = 6 };
+        _actions.Children.Add(buttons);
+        _actions.Children.Add(_speedRow);
+        _actions.Children.Add(new Border
+        {
+            Height = 1,
+            Margin = new Thickness(0, 2, 0, 0),
+            Background = NotaPalette.BorderDefault,
+        });
+
+        Content = new ScrollViewer { Content = _root, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Background, (_, _) => Pump());
         AttachedToVisualTree += (_, _) => _timer.Start();
         DetachedFromVisualTree += (_, _) =>
@@ -100,6 +149,8 @@ public sealed class VisualParamsView : UserControl
     {
         _layer = -1;
         _col = -1;
+        _hasVisual = false;
+        SyncActionState();
         _root.Children.Clear();
         _root.Children.Add(Text(text, NotaPalette.TextSecondary, 12));
     }
@@ -128,6 +179,7 @@ public sealed class VisualParamsView : UserControl
     {
         _undoBtn.IsEnabled = Bridge is { Connected: true, CanUndo: true };
         _redoBtn.IsEnabled = Bridge is { Connected: true, CanRedo: true };
+        SyncActionState();
         if (Bridge is not { Connected: true })
         {
             _wasConnected = false;
@@ -145,6 +197,16 @@ public sealed class VisualParamsView : UserControl
             if (_layer >= 0) Bridge.VizGet(_layer, _col);   // fresh state after a reconnect
         }
         while (Bridge.TakeMessage() is { } line) Handle(line);
+    }
+
+    /// <summary>The action block is always on screen (even after Remove), so Undo can bring a
+    /// cleared visual back; only the actions that need a live slot or a visual are disabled.</summary>
+    private void SyncActionState()
+    {
+        bool ready = Bridge is { Connected: true } && _layer >= 0;
+        _replaceBtn.IsEnabled = ready;
+        _removeBtn.IsEnabled = ready && _hasVisual;
+        _speedRow.IsEnabled = ready && _hasVisual;
     }
 
     private void Handle(string line)
@@ -173,6 +235,8 @@ public sealed class VisualParamsView : UserControl
 
     private void ShowOffline()
     {
+        _hasVisual = false;
+        SyncActionState();
         _root.Children.Clear();
         _root.Children.Add(Text(Loc.T("visual.offline"), NotaPalette.TextSecondary, 12));
         if (Nota.Infrastructure.Visuals.VisualEngineProcess.Current is { IsAvailable: true } engine)
@@ -205,67 +269,85 @@ public sealed class VisualParamsView : UserControl
         _root.Children.Clear();
 
         bool has = v.TryGetProperty("has_visual", out var h) && h.GetBoolean();
-        if (!has)
-        {
-            _root.Children.Add(Text(Loc.T("visual.no_visual"), NotaPalette.TextSecondary, 12));
-            var assign = new Button { Content = Loc.T("visual.assign"), Margin = new Thickness(0, 6, 0, 0) };
-            assign.Click += (_, _) => OpenCatalog("generators", item => Bridge?.VizAssign(_layer, _col, item.GetProperty("kind").GetString() ?? "generator", item.GetProperty("id").GetString() ?? ""));
-            _root.Children.Add(assign);
-            return;
-        }
-
+        _hasVisual = has;
         var source = v.TryGetProperty("source", out var s) ? s : default;
         string kind = source.ValueKind == JsonValueKind.Object && source.TryGetProperty("kind", out var sk) ? sk.GetString() ?? "" : "";
         string name = source.ValueKind == JsonValueKind.Object && source.TryGetProperty("name", out var sn) ? sn.GetString() ?? "" : "";
-        string note = source.ValueKind == JsonValueKind.Object && source.TryGetProperty("note", out var nn) ? nn.GetString() ?? "" : "";
 
-        // ---- header: what this visual is, and the two whole-clip actions
-        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        header.Children.Add(Text(name, NotaPalette.TextHeading, 13, FontWeight.SemiBold));
-        header.Children.Add(Text(kind, NotaPalette.TextSecondary, 11));
-        var replace = new Button { Content = Loc.T("visual.replace") };
-        replace.Click += (_, _) => OpenCatalog("generators", item => Bridge?.VizAssign(_layer, _col, item.GetProperty("kind").GetString() ?? "generator", item.GetProperty("id").GetString() ?? ""));
-        var clear = new Button { Content = Loc.T("visual.clear") };
-        clear.Click += (_, _) => Bridge?.VizClear(_layer, _col);
-        header.Children.Add(replace);
-        header.Children.Add(clear);
-        _root.Children.Add(header);
+        JsonElement playback = default;
+        bool hasPlayback = has
+            && v.TryGetProperty("playback", out playback)
+            && playback.ValueKind == JsonValueKind.Object;
+        _speed = hasPlayback && playback.TryGetProperty("speed", out var sp)
+            ? Math.Clamp(sp.GetDouble(), 0.1, 4.0)
+            : 1.0;
+        _speedSync();
 
-        // ---- three areas side by side: transport | source & playback | effects
+        // ---- three areas side by side: transport | source & layer | effects
         var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*"), ColumnSpacing = 10 };
 
+        // The action block lives inside Transport, above its controls. It stays on screen when
+        // the slot has no visual so Undo can bring a removed visual back.
         var transport = new StackPanel { Spacing = 4 };
-        transport.Children.Add(Section(Loc.T("visual.transport")));
-        if (v.TryGetProperty("playback", out var pb) && pb.ValueKind == JsonValueKind.Object)
-            BuildPlayback(pb, transport);
+        if (_actions.Parent is Panel old) old.Children.Remove(_actions);
+        transport.Children.Add(_actions);
+        if (hasPlayback)
+        {
+            transport.Children.Add(Section(Loc.T("visual.transport")));
+            BuildPlayback(playback, transport);
+        }
         columns.Children.Add(Area(transport));
 
         var left = new StackPanel { Spacing = 4 };
+        if (!string.IsNullOrEmpty(name))
+            left.Children.Add(Text(name, NotaPalette.TextHeading, 13, FontWeight.SemiBold));
+        if (!string.IsNullOrEmpty(kind))
+            left.Children.Add(Text(kind, NotaPalette.TextSecondary, 11));
         left.Children.Add(Section(Loc.T("visual.source_playback")));
-        if (v.TryGetProperty("groups", out var groups)
-            && groups.TryGetProperty("source", out var src) && src.ValueKind == JsonValueKind.Array)
-            foreach (var p in src.EnumerateArray()) left.Children.Add(ParamRow(p, "source"));
-
-        if (v.TryGetProperty("layer_state", out var lyr) && lyr.ValueKind == JsonValueKind.Object)
+        if (!has)
         {
-            left.Children.Add(Section(Loc.T("visual.layer")));
-            double opacity = lyr.TryGetProperty("opacity", out var op) ? op.GetDouble() : 1.0;
-            left.Children.Add(NotaSliderRow(Loc.T("visual.opacity"), 0, 100, opacity * 100, "%",
-                value => Bridge?.VizLayer(_layer, value / 100.0, null, null)));
-
-            string blend = lyr.TryGetProperty("blend", out var bl) ? bl.GetString() ?? "Normal" : "Normal";
-            var blends = new[] { "Normal", "Add", "Screen", "Multiply", "Overlay", "Difference", "Lighten", "Darken", "Subtract" };
-            var blendCombo = new ComboBox { ItemsSource = blends, SelectedIndex = Math.Max(0, Array.IndexOf(blends, blend)), Width = 150 };
-            blendCombo.SelectionChanged += (_, _) =>
+            left.Children.Add(Text(Loc.T("visual.no_visual"), NotaPalette.TextSecondary, 11));
+            var assign = new Button
             {
-                if (blendCombo.SelectedItem is string m) Bridge?.VizLayer(_layer, null, m, null);
+                Content = Loc.T("visual.assign"),
+                Margin = new Thickness(0, 4, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left,
             };
-            left.Children.Add(ParamRowRaw(Text(Loc.T("visual.blend"), NotaPalette.TextSecondary, 11), blendCombo, null));
+            assign.Click += (_, _) => OpenCatalog("generators", item => Bridge?.VizAssign(_layer, _col, item.GetProperty("kind").GetString() ?? "generator", item.GetProperty("id").GetString() ?? ""));
+            left.Children.Add(assign);
+        }
+        else
+        {
+            if (v.TryGetProperty("groups", out var groups)
+                && groups.TryGetProperty("source", out var src) && src.ValueKind == JsonValueKind.Array)
+                foreach (var p in src.EnumerateArray()) left.Children.Add(ParamRow(p, "source"));
 
-            bool bypass = lyr.TryGetProperty("bypass", out var by) && by.GetBoolean();
-            var bypassBox = new CheckBox { IsChecked = bypass, Content = Loc.T("visual.bypass") };
-            bypassBox.IsCheckedChanged += (_, _) => Bridge?.VizLayer(_layer, null, null, bypassBox.IsChecked == true);
-            left.Children.Add(ParamRowRaw(Text("", NotaPalette.TextSecondary, 11), bypassBox, null));
+            if (v.TryGetProperty("layer_state", out var lyr) && lyr.ValueKind == JsonValueKind.Object)
+            {
+                left.Children.Add(Section(Loc.T("visual.layer")));
+                double opacity = lyr.TryGetProperty("opacity", out var op) ? op.GetDouble() : 1.0;
+                left.Children.Add(NotaSliderRow(Loc.T("visual.opacity"), 0, 100, opacity * 100, "%",
+                    value => Bridge?.VizLayer(_layer, value / 100.0, null, null)));
+
+                string blend = lyr.TryGetProperty("blend", out var bl) ? bl.GetString() ?? "Normal" : "Normal";
+                var blends = new[] { "Normal", "Add", "Screen", "Multiply", "Overlay", "Difference", "Lighten", "Darken", "Subtract" };
+                var blendCombo = new ComboBox
+                {
+                    ItemsSource = blends,
+                    SelectedIndex = Math.Max(0, Array.IndexOf(blends, blend)),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                };
+                blendCombo.SelectionChanged += (_, _) =>
+                {
+                    if (blendCombo.SelectedItem is string m) Bridge?.VizLayer(_layer, null, m, null);
+                };
+                left.Children.Add(ParamRowRaw(Text(Loc.T("visual.blend"), NotaPalette.TextSecondary, 11), blendCombo, null, labelW: 52));
+
+                bool bypass = lyr.TryGetProperty("bypass", out var by) && by.GetBoolean();
+                var bypassBox = new CheckBox { IsChecked = bypass, Content = Loc.T("visual.bypass") };
+                bypassBox.IsCheckedChanged += (_, _) => Bridge?.VizLayer(_layer, null, null, bypassBox.IsChecked == true);
+                left.Children.Add(ParamRowRaw(Text("", NotaPalette.TextSecondary, 11), bypassBox, null, labelW: 52));
+            }
         }
         var leftCard = Area(left);
         Grid.SetColumn(leftCard, 1);
@@ -274,29 +356,33 @@ public sealed class VisualParamsView : UserControl
         var right = new StackPanel { Spacing = 4 };
         var fxHeader = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         fxHeader.Children.Add(Section(Loc.T("visual.effects")));
-        var add = new Button { Content = Loc.T("visual.add_effect"), Margin = new Thickness(8, 0, 0, 0) };
+        var add = new Button { Content = Loc.T("visual.add_effect"), Margin = new Thickness(8, 0, 0, 0), IsEnabled = has };
         add.Click += (_, _) => OpenCatalog("effects", item => Bridge?.VizFx(_layer, _col, "add", id: item.GetProperty("id").GetString()));
         fxHeader.Children.Add(add);
         right.Children.Add(fxHeader);
 
-        if (v.TryGetProperty("groups", out var groups2)
-            && groups2.TryGetProperty("transform", out var tf) && tf.ValueKind == JsonValueKind.Object)
-            AddEffectCard(tf, isTransform: true, index: -1, right);
-
-        if (v.TryGetProperty("groups", out var groups3)
-            && groups3.TryGetProperty("effects", out var fx) && fx.ValueKind == JsonValueKind.Array)
+        if (has)
         {
-            int i = 0;
-            foreach (var card in fx.EnumerateArray())
+            if (v.TryGetProperty("groups", out var groups2)
+                && groups2.TryGetProperty("transform", out var tf) && tf.ValueKind == JsonValueKind.Object)
+                AddEffectCard(tf, isTransform: true, index: -1, right);
+
+            if (v.TryGetProperty("groups", out var groups3)
+                && groups3.TryGetProperty("effects", out var fx) && fx.ValueKind == JsonValueKind.Array)
             {
-                AddEffectCard(card, isTransform: false, index: i, right);
-                i++;
+                int i = 0;
+                foreach (var card in fx.EnumerateArray())
+                {
+                    AddEffectCard(card, isTransform: false, index: i, right);
+                    i++;
+                }
             }
         }
         var rightCard = Area(right);
         Grid.SetColumn(rightCard, 2);
         columns.Children.Add(rightCard);
         _root.Children.Add(columns);
+        SyncActionState();
     }
 
     /// <summary>One of the three framed areas.</summary>
@@ -305,6 +391,7 @@ public sealed class VisualParamsView : UserControl
         var card = ClipEditorKit.Card(content);
         card.Padding = new Thickness(10, 8);
         card.Margin = new Thickness(0, 2, 0, 2);
+        card.VerticalAlignment = VerticalAlignment.Top;
         return card;
     }
 
@@ -330,10 +417,6 @@ public sealed class VisualParamsView : UserControl
 
         if (!isTransform)
         {
-            var mixRow = NotaSliderRow(Loc.T("visual.mix"), 0, 100, mix * 100, "%",
-                v => Bridge?.VizFx(_layer, _col, "mix", index, value: v / 100.0), labelW: 34);
-            mixRow.Width = 140;
-            head.Children.Add(mixRow);
             var up = new Button { Content = "↑", Padding = new Thickness(4, 0), MinWidth = 22 };
             up.Click += (_, _) => Bridge?.VizFx(_layer, _col, "move", index, to: Math.Max(0, index - 1));
             var down = new Button { Content = "↓", Padding = new Thickness(4, 0), MinWidth = 22 };
@@ -346,6 +429,13 @@ public sealed class VisualParamsView : UserControl
         }
         col.Children.Add(head);
 
+        if (!isTransform)
+        {
+            // Mix on its own row: title + three buttons already fill a narrow column.
+            col.Children.Add(NotaSliderRow(Loc.T("visual.mix"), 0, 100, mix * 100, "%",
+                v => Bridge?.VizFx(_layer, _col, "mix", index, value: v / 100.0), labelW: 34));
+        }
+
         if (card.TryGetProperty("params", out var ps) && ps.ValueKind == JsonValueKind.Array)
             foreach (var p in ps.EnumerateArray())
                 col.Children.Add(ParamRow(p, isTransform ? "transform" : $"fx:{index}"));
@@ -356,14 +446,10 @@ public sealed class VisualParamsView : UserControl
 
     private void BuildPlayback(JsonElement pb, StackPanel target)
     {
-        double speed = pb.TryGetProperty("speed", out var sp) ? sp.GetDouble() : 1.0;
         bool sync = pb.TryGetProperty("sync_beats", out var sb) && sb.ValueKind == JsonValueKind.Number;
         double beats = sync ? sb.GetDouble() : 4.0;
         string mode = pb.TryGetProperty("play_mode", out var pm) ? pm.GetString() ?? "Loop" : "Loop";
         string trigger = pb.TryGetProperty("trigger", out var tr) ? tr.GetString() ?? "Normal" : "Normal";
-
-        _root.Children.Add(NotaSliderRow(Loc.T("visual.speed"), 0.1, 4, speed, "×",
-            v => Bridge?.VizPlayback(_layer, _col, v, null, null, null)));
 
         var syncRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var cb = new CheckBox { Content = Loc.T("visual.beat_sync"), IsChecked = sync };
@@ -372,7 +458,7 @@ public sealed class VisualParamsView : UserControl
             ItemsSource = new[] { "1", "2", "4", "8", "16", "32", "64", "128" },
             SelectedIndex = Math.Max(0, Array.IndexOf(new[] { 1, 2, 4, 8, 16, 32, 64, 128 }, (int)beats)),
             IsEnabled = sync,
-            Width = 80,
+            Width = 72,
         };
         cb.IsCheckedChanged += (_, _) =>
         {
@@ -390,23 +476,33 @@ public sealed class VisualParamsView : UserControl
         };
         syncRow.Children.Add(cb);
         syncRow.Children.Add(beatsCombo);
-        target.Children.Add(ParamRowRaw(Text(Loc.T("visual.sync"), NotaPalette.TextSecondary, 11), syncRow, null));
+        target.Children.Add(ParamRowRaw(Text(Loc.T("visual.sync"), NotaPalette.TextSecondary, 11), syncRow, null, labelW: 52));
 
         var modes = new[] { "Loop", "Bounce", "Random", "Play once & clear", "Play once & hold" };
-        var modeCombo = new ComboBox { ItemsSource = modes, SelectedIndex = Math.Max(0, Array.IndexOf(modes, mode)), Width = 170 };
+        var modeCombo = new ComboBox
+        {
+            ItemsSource = modes,
+            SelectedIndex = Math.Max(0, Array.IndexOf(modes, mode)),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
         modeCombo.SelectionChanged += (_, _) =>
         {
             if (modeCombo.SelectedItem is string m) Bridge?.VizPlayback(_layer, _col, null, null, m, null);
         };
-        target.Children.Add(ParamRowRaw(Text(Loc.T("visual.mode"), NotaPalette.TextSecondary, 11), modeCombo, null));
+        target.Children.Add(ParamRowRaw(Text(Loc.T("visual.mode"), NotaPalette.TextSecondary, 11), modeCombo, null, labelW: 52));
 
         var triggers = new[] { "Normal", "Toggle", "Piano" };
-        var trigCombo = new ComboBox { ItemsSource = triggers, SelectedIndex = Math.Max(0, Array.IndexOf(triggers, trigger)), Width = 120 };
+        var trigCombo = new ComboBox
+        {
+            ItemsSource = triggers,
+            SelectedIndex = Math.Max(0, Array.IndexOf(triggers, trigger)),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
         trigCombo.SelectionChanged += (_, _) =>
         {
             if (trigCombo.SelectedItem is string m) Bridge?.VizPlayback(_layer, _col, null, null, null, m);
         };
-        target.Children.Add(ParamRowRaw(Text(Loc.T("visual.trigger"), NotaPalette.TextSecondary, 11), trigCombo, null));
+        target.Children.Add(ParamRowRaw(Text(Loc.T("visual.trigger"), NotaPalette.TextSecondary, 11), trigCombo, null, labelW: 52));
     }
 
     private Control ParamRow(JsonElement p, string group)
@@ -440,7 +536,7 @@ public sealed class VisualParamsView : UserControl
                         if (d < best) { best = d; index = i; }
                     }
                 }
-                var combo = new ComboBox { ItemsSource = labels, SelectedIndex = index, Width = 170 };
+                var combo = new ComboBox { ItemsSource = labels, SelectedIndex = index, HorizontalAlignment = HorizontalAlignment.Stretch };
                 combo.SelectionChanged += (_, _) =>
                 {
                     int i = Math.Clamp(combo.SelectedIndex, 0, Math.Max(0, values.Count - 1));
@@ -495,12 +591,18 @@ public sealed class VisualParamsView : UserControl
         _ => $"{v:0.0}{unit}",
     };
 
-    private Control ParamRowRaw(Control label, Control control, Action? _)
+    private Control ParamRowRaw(Control label, Control control, Action? _, double labelW = 88)
     {
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("140,*"), Margin = new Thickness(0, 1, 0, 1) };
+        var row = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions($"{labelW},*"),
+            ColumnSpacing = 8,
+            Margin = new Thickness(0, 1, 0, 1),
+        };
         var l = label;
         Grid.SetColumn(l, 0);
         Grid.SetColumn(control, 1);
+        control.HorizontalAlignment = HorizontalAlignment.Stretch;
         row.Children.Add(l);
         row.Children.Add(control);
         return row;

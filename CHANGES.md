@@ -36,6 +36,9 @@ diffs are in `patches/`.
 - **OpenVJ tab** in the detail panel (`VisualParamsView`): source parameters, transport,
   layer controls, transform and the full effect chain, using Nota's slider controls; two-way
   with openVJ.
+- **OpenVJ tab layout**: Undo/Redo, Replace/Remove and the Speed slider sit in the Transport
+  card above its controls; the source name/kind moved into the Source card. Effect headers
+  keep only their title and buttons, with Mix on its own row, so narrow columns no longer clip.
 - **Persistence**: visuals are written to `visuals/composition.json` in the project bundle on
   save/quit and restored on open, together with the layer→track uid map.
 - **Visual engine lifecycle**: the app starts the bundled `syntetika-visual` process (pointing
