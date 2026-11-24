@@ -145,7 +145,7 @@ diffs are in `patches/`.
 - **Branding**: window title and wordmark “Syntetika Visual”; binary `syntetika-visual`.
 - **Shader pack**: Ghost Arcade ISF plus Syntetika's `ink-kaleido` — an eight-fold monochrome
   ink kaleidoscope (rings, shards, snake bands, star, smoke, grain) used by the industrial
-  demo.
+  demo; each section sets its own ring count, shard/snake mix, star size, smoke and contrast.
 - **Output window**: always on top, and Nota can show/hide it over the bridge (`vizOutput`),
   with `vizOut` reports keeping the menu checkmark in step.
 

@@ -574,10 +574,14 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   Kobol (Monolith Portamento) + 2 return. Follow presisi 61,25/64,75/92,75/70/24,5 beat
   (total 313,25 ≈ 2:59); **15 slot** audio dan **15 clip visual** di 3 layer memakai shader
   baru `syntetika/ink-kaleido` (kaleidoskop tinta 8 arah, monokrom, cincin/pecahan/ular/
-  bintang, asap, grain). Versi 5:15 atmospheric house disimpan sebagai
-  `syntetika_atmospheric_5m15.nota`.
+  bintang, asap, grain) dengan **lima resep per bagian**: Intro 2 cincin + bintang besar,
+  Drop 1 6 cincin rapat, Break gelombang ular, Drop 2 pecahan shard, Outro bintang raksasa.
+  Versi 5:15 atmospheric house disimpan sebagai `syntetika_atmospheric_5m15.nota`.
+- **Struktur otomatis**: scene follow 61,25/64,75/92,75/70/24,5 beat; follow per-clip
+  dimatikan. File sound pengguna sempat membawa scene-follow 8 beat yang membuat scene
+  melompat tiap 8 beat; nilai itu diganti sesuai struktur.
 - **Bukti**: 15 clip/3 layer bertahan save → quit → buka; run otomatis transisi
-  35,3/72,6/125,0/165,3 dtk dan stop 179,4 dtk; visual semua kolom 0–4 ter-apply; render
+  35,3/71,6/123,9/165,2 dtk dan stop 179,3 dtk; visual semua kolom 0–4 ter-apply; render
   3 layer ISF **60 fps**; semua layer berbunyi di tiap bagian.
 - **Bug ditemukan saat uji quit → buka ulang**: Nota mengirim `uids` kosong saat engine-nya
   sudah shutdown, jadi file tersimpan `layout_uids: []`. Saat dibuka, `apply_layout` menganggap
@@ -650,7 +654,7 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   menyalin `../openvj/shaders` ke `Contents/Resources/shaders` (termasuk pak Ghost Arcade).
 - **Bukti**: `check_isf` 1 generator, 0 error; render frame uji via
   `openvj-render/examples/render_isf.rs` + `render_column.rs`; 3 layer di app 60 fps;
-  shader ada di bundle terpasang. Run 2:59 transisi 35,3/72,6/125,0/165,3 dtk, stop 179,4 dtk;
+  shader ada di bundle terpasang. Run 2:59 transisi 35,3/71,6/123,9/165,2 dtk, stop 179,3 dtk;
   semua kolom visual 0–4 ter-apply.
 
 ## 8. Risiko

@@ -11,7 +11,12 @@
         {"NAME": "grain", "TYPE": "float", "MIN": 0.0, "MAX": 1.0, "DEFAULT": 0.25},
         {"NAME": "contrast", "TYPE": "float", "MIN": 0.8, "MAX": 2.5, "DEFAULT": 1.7},
         {"NAME": "smoke", "TYPE": "float", "MIN": 0.0, "MAX": 1.0, "DEFAULT": 0.5},
-        {"NAME": "star", "TYPE": "float", "MIN": 0.0, "MAX": 1.0, "DEFAULT": 0.7}
+        {"NAME": "star", "TYPE": "float", "MIN": 0.0, "MAX": 1.0, "DEFAULT": 0.7},
+        {"NAME": "rings", "TYPE": "float", "MIN": 0.0, "MAX": 1.5, "DEFAULT": 1.0},
+        {"NAME": "ringCount", "TYPE": "float", "MIN": 1.0, "MAX": 6.0, "DEFAULT": 6.0},
+        {"NAME": "shards", "TYPE": "float", "MIN": 0.0, "MAX": 1.5, "DEFAULT": 1.0},
+        {"NAME": "snakes", "TYPE": "float", "MIN": 0.0, "MAX": 1.5, "DEFAULT": 1.0},
+        {"NAME": "starSize", "TYPE": "float", "MIN": 0.5, "MAX": 1.6, "DEFAULT": 1.0}
     ]
 }*/
 
@@ -70,19 +75,20 @@ void main() {
     paper *= 0.93 + 0.07 * fbm(p * 11.0 - t * 0.1);
 
     // Interlocking rings, two families wobbling against each other.
-    float rings = 0.0;
+    float ringInk = 0.0;
     for (int i = 0; i < 6; i++) {
         float fi = float(i);
+        if (fi >= ringCount) break;
         float rr = 0.20 + 0.125 * fi
                  + 0.022 * sin(a * 8.0 + t * 0.35 + fi * 0.9)
                  + 0.010 * sin(a * 16.0 - t * 0.22 + fi * 2.1)
                  + beat * 0.012 * sin(fi * 1.7);
         float w = 0.006 + 0.0025 * (1.0 + sin(fi * 2.3 + t));
-        rings += smoothstep(w, 0.0, abs(r - rr));
+        ringInk += smoothstep(w, 0.0, abs(r - rr));
         float rr2 = rr + 0.018;
-        rings += 0.55 * smoothstep(w * 0.7, 0.0, abs(r - rr2));
+        ringInk += 0.55 * smoothstep(w * 0.7, 0.0, abs(r - rr2));
     }
-    rings = clamp(rings, 0.0, 1.0);
+    ringInk = clamp(ringInk, 0.0, 1.0);
 
     // Snake-like ink bands winding around the star.
     float snake = abs(sin(r * 15.0 - a * 8.0 * 0.5 + t * 1.1));
@@ -111,16 +117,19 @@ void main() {
     hatchLine = (hatchLine + hatchLine2 + curvedHatch) * hatchMask;
 
     // Central eight-point star and radial starlight.
-    float starPoints = pow(max(0.0, cos(a * 8.0)), 30.0) * smoothstep(0.66, 0.0, r);
-    float starCore = smoothstep(0.21, 0.0, r);
-    float starRing = smoothstep(0.018, 0.0, abs(r - 0.19)) * smoothstep(0.35, 0.12, r);
+    float starScale = starSize;
+    float starPoints = pow(max(0.0, cos(a * 8.0)), 30.0) * smoothstep(0.66 * starScale, 0.0, r);
+    float starCore = smoothstep(0.21 * starScale, 0.0, r);
+    float starRing = smoothstep(0.018, 0.0, abs(r - 0.19 * starScale))
+                   * smoothstep(0.35 * starScale, 0.12 * starScale, r);
     float fineRays = pow(max(0.0, cos(af * 16.0 + t * 0.08)), 8.0) * exp(-r * 1.1);
     float rayPoints = pow(max(0.0, cos(a * 8.0)), 16.0) * exp(-r * 0.9);
     float rays = 0.6 * fineRays + 0.4 * rayPoints;
     float glow = exp(-r * 2.6) * 0.16 + pow(max(0.0, 1.0 - r), 6.0) * 0.10;
 
-    float ink = rings * 0.95 + snakeInk * 1.05 + shardEdge * 0.65 + shardBands * 0.5
-              + hatchLine * 0.9 + shardTone
+    float ink = ringInk * rings * 0.95 + snakeInk * snakes * 1.05
+              + (shardEdge * 0.65 + shardBands * 0.5) * shards
+              + hatchLine * 0.9 + shardTone * shards
               + (starPoints * 0.9 + starCore * 0.95 + starRing * 0.8) * star;
     ink = clamp(ink, 0.0, 1.0);
 
