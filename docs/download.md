@@ -1,0 +1,55 @@
+# Download Syntetika Engine
+
+The latest installer is on GitHub:
+
+**[Syntetika Engine releases](https://github.com/danartriyudistira/syntetika-engine/releases/latest)**
+
+| | |
+|---|---|
+| Latest release | **0.1.1** |
+| File | `Syntetika-Engine-0.1.1-arm64.dmg` (111 MB) |
+| Requires | macOS 12 or newer, Apple Silicon (arm64) |
+| SHA-256 | `358fcdcc44cc240cfe66c5903b0c6875860c52f9adc8934d3b964adef23bae3c` |
+
+## Install
+
+1. Download the `.dmg` and its `.sha256` from the release.
+2. Verify the download:
+
+   ```bash
+   shasum -a 256 Syntetika-Engine-0.1.1-arm64.dmg
+   ```
+
+3. Open the image and drag **Syntetika Engine** onto **Applications**.
+4. Launch it.
+
+### Gatekeeper
+
+The current DMG is **ad-hoc signed, not notarized** (no Developer ID certificate on the build
+machine). On another Mac, macOS may say the app is from an unidentified developer. Approve it
+once:
+
+- Right-click the app in Finder → **Open** → **Open**, or
+- System Settings → Privacy & Security → **Open Anyway**.
+
+A notarized build will replace this file when a Developer ID is available; see
+[release.md](release.md).
+
+## What's inside
+
+One app bundle: Nota is the DAW host and `syntetika-visual` (openVJ) runs from
+`Contents/Helpers`, together with FFmpeg and Syphon. Session clips carry visuals; the DAW's
+transport, launches and master audio drive the picture.
+
+First launch creates `~/Library/Application Support/Syntetika Engine`. An older
+`NotAopenVJ` profile is copied once, without deleting the original.
+
+## Staying up to date
+
+The self-updater is disabled on purpose: it would replace this fork with a stock Nota release.
+Install a new DMG over the old app; projects and settings stay in the application-support
+folder.
+
+## Older builds
+
+All releases: <https://github.com/danartriyudistira/syntetika-engine/releases>

@@ -71,6 +71,10 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 open "./src/nota/dist/Syntetika Engine.app"
 ```
 
+Prebuilt macOS installers (Apple Silicon) are on the
+[releases page](https://github.com/danartriyudistira/syntetika-engine/releases/latest); see
+[docs/download.md](docs/download.md) for install, Gatekeeper and checksums.
+
 The app starts its bundled visual engine (`Contents/Helpers/syntetika-visual`), restarts it if
 it crashes, and stops it on quit. Then open **Session View**, select a clip, and use the
 **OpenVJ** tab to assign a visual. Build instructions live in

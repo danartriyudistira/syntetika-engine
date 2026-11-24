@@ -206,13 +206,17 @@ Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SEL
   symlink Applications + Read me Gatekeeper + `.sha256`.
 - [x] `scripts/notarize-mac.sh` + `docs/release.md`: signing inside-out, notarytool, staple,
   `spctl`; siap dipakai begitu ada Developer ID.
-- [ ] **Developer ID signing + notarization — BLOCKED**: mesin build tidak punya identitas
-  signing (`security find-identity` = 0) maupun kredensial notary. DMG masih ad-hoc.
-- [ ] `release.yml`: butuh macOS arm64 runner + secrets sertifikat/notary.
-- [ ] Halaman unduhan + panduan “Open Anyway”.
+- [x] Halaman unduhan + panduan “Open Anyway”: `docs/download.md` dan tautan di README.
+- [x] Verifikasi aset rilis publik: SHA-256 cocok, `Info.plist` 0.1.1, `codesign --verify
+  --deep --strict` lolos; `spctl` menolak karena ad-hoc (sesuai harapan).
+- [ ] **Developer ID signing + notarization — BLOCKED (eksternal)**: mesin build tidak punya
+  identitas signing (`security find-identity` = 0) maupun kredensial notary. DMG masih
+  ad-hoc; perlu sertifikat Developer ID + App Store Connect/notary dari pemilik akun.
+- [ ] `release.yml` → dipindah ke **P6**: butuh runner macOS arm64 dan scope `workflow` pada
+  token GitHub (token saat ini: gist, read:org, repo).
 - Kriteria: unduhan bersih bisa dibuka di Mac lain; About/Get Info menampilkan versi produk.
-- Bukti: app+DMG 0.1.1, `codesign --verify --deep --strict` lolos (ad-hoc), readme menyebut
-  Nota 0.60.4; `bash scripts/notarize-mac.sh` berhenti dengan instruksi Developer ID.
+- Bukti: app+DMG 0.1.1, readme menyebut Nota 0.60.4; `bash scripts/notarize-mac.sh` berhenti
+  dengan instruksi Developer ID. Rilis publik v0.1.1 sudah diunduh ulang dan diverifikasi.
 
 ### P4 — Editing lanjutan (±5–8 hari)
 
@@ -519,6 +523,20 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   `calibration_strobe_follows_the_offset` lulus (43 tes render).
 - **Hook**: `NOTA_AV_CAL_TEST=1` membuka dialog 16 dtk setelah start; `NOTA_VISUAL_PORT`
   memindahkan bridge (mutex per port) untuk instance dev di samping app terpasang.
+
+## 7r. Rilis 0.1.1 (24 Nov)
+
+- Produk **0.1.1** di `Branding.ProductVersion`, `CFBundleShortVersionString`,
+  `CFBundleGetInfoString` (Nota 0.60.4 tetap base upstream). DMG 111 MB + `.sha256`.
+- GitHub release **v0.1.1** (tag `07f06bf`), aset DMG + checksum; catatan rilis di
+  `release-notes/0.1.1.md`.
+- Verifikasi aset publik: SHA-256 `358fcdcc…23bae3c` cocok, `Info.plist` 0.1.1,
+  `codesign --verify --deep --strict` lolos; `spctl` menolak (ad-hoc, belum notarized).
+- `docs/download.md` berisi syarat, langkah install, Gatekeeper, checksum. `scripts/notarize-mac.sh`
+  + `docs/release.md` siap untuk signing/notarization.
+- **Blocker**: tidak ada Developer ID Application certificate dan kredensial notary di mesin
+  build. Setelah sertifikat tersedia: jalankan `notarize-mac.sh`, lalu ganti aset rilis.
+- CI `release.yml` belum: butuh runner arm64 + token dengan scope `workflow`.
 
 ## 8. Risiko
 
