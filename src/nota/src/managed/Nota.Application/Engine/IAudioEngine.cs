@@ -427,6 +427,12 @@ public interface IAudioEngine : IDisposable
     /// connected it receives nothing from hardware. False for a non-instrument track.</summary>
     bool SetTrackMidiInput(int trackId, string? uid, int channel);
     TrackMidiInput GetTrackMidiInput(int trackId);
+    /// <summary>Routes an instrument track's MIDI to an output port (a hardware or virtual
+    /// synth): the device output uid (null = off) and a channel (1-16). Notes, controllers and
+    /// pitch bend from the track's clips play on it; notes stop when the transport stops.</summary>
+    bool SetTrackMidiOutput(int trackId, string? uid, int channel);
+    string? GetTrackMidiOutputUid(int trackId);
+    int GetTrackMidiOutputChannel(int trackId);
     /// <summary>The capture device's input channels (0 when none is open) and their names
     /// ("" where the device gives none).</summary>
     int AudioInputChannelCount();

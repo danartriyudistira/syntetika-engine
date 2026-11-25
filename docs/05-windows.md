@@ -102,6 +102,7 @@ langkah itu dilewati dan SmartScreen tetap menampilkan "Unknown publisher".
 |---|---|---|
 | GPU | Metal | **DX12** (default), Vulkan bisa dipaksa `WGPU_BACKEND=vulkan` |
 | Berbagi frame | Syphon | **Spout** (Settings → Output, default mati; nama pengirim "Syntetika Engine") |
+| MIDI out ke synth eksternal | MIDI out per track (RtMidi) | sama: track menu → **MIDI out** (port + channel) |
 | Audio tap Nota → openVJ | `mmap` POSIX | `CreateFileMapping`/`MapViewOfFile` (`AudioTap.cpp`, `nota_tap.rs`) |
 | FFmpeg | dibundel di `Helpers/` | dibundel di folder app (LGPL, `scripts/get-ffmpeg-win.ps1`) |
 | Runtime VC++ | ikut sistem | app-local (`Microsoft.VC143.CRT` dari Visual Studio) |
@@ -110,6 +111,14 @@ langkah itu dilewati dan SmartScreen tetap menampilkan "Unknown publisher".
 | Instans kedua | `open -b` (fokus) | fokus + project yang diklik ikut dibuka |
 | Data pengguna | `~/Library/Application Support/Syntetika Engine` | `%APPDATA%\Syntetika Engine` |
 | Log | `.../logs` | `%APPDATA%\Syntetika Engine\logs` |
+
+### MIDI out ke synth eksternal
+
+Track instrument bisa memutar synth hardware/virtual: menu track (atau inspector) → **MIDI out** → pilih port
+lalu **Channel** 1–16. Engine mengirim note, CC, pitch bend dan channel pressure dari clip
+track itu ke port tersebut; stop/seek mengirim all-notes-off (CC 123/120/64). Pengiriman
+berjalan di thread pump sendiri (RtMidi tidak realtime-safe), jadi audio tidak pernah menunggu.
+Route disimpan di project (midiOutputUid / midiOutputChannel).
 
 ### Kenapa DX12
 

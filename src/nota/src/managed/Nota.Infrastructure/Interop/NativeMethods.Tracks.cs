@@ -376,6 +376,21 @@ internal static partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "nota_track_get_midi_input_uid")]
     internal static partial int TrackGetMidiInputUid(IntPtr engine, int trackId, [Out] byte[] outBuf, int cap);
 
+    [LibraryImport(Lib, EntryPoint = "nota_track_set_midi_output", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial NotaResult TrackSetMidiOutput(IntPtr engine, int trackId, string? uid, int channel);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_get_midi_output_uid")]
+    internal static partial int TrackGetMidiOutputUid(IntPtr engine, int trackId, [Out] byte[] outBuf, int cap);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_get_midi_output_channel")]
+    internal static partial int TrackGetMidiOutputChannel(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_add_test_midi_port", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int EngineAddTestMidiPort(IntPtr engine, string name);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_take_test_midi_sent")]
+    internal static partial int EngineTakeTestMidiSent(IntPtr engine, int source, [Out] byte[] outBuf, int cap);
+
     [LibraryImport(Lib, EntryPoint = "nota_track_set_midi_input")]
     internal static partial NotaResult TrackSetMidiInput(IntPtr engine, int trackId, int source, int channel);
 

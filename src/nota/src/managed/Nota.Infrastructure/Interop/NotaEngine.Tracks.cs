@@ -591,6 +591,40 @@ public sealed partial class NotaEngine
     public bool SetTrackMidiInputSourceForTest(int trackId, int source, int channel)
     { ThrowIfDisposed(); return NativeMethods.TrackSetMidiInput(_handle, trackId, source, channel) == NativeMethods.NotaResult.Ok; }
 
+    /// <summary>Routes an instrument track's MIDI to an output port: a device output uid
+    /// (null = off) and a channel (1-16). The engine plays it from its MIDI pump thread.</summary>
+    public bool SetTrackMidiOutput(int trackId, string? uid, int channel)
+    {
+        ThrowIfDisposed();
+        return NativeMethods.TrackSetMidiOutput(_handle, trackId, string.IsNullOrEmpty(uid) ? null : uid, channel)
+               == NativeMethods.NotaResult.Ok;
+    }
+
+    /// <summary>The track's external MIDI output uid (null = off).</summary>
+    public string? GetTrackMidiOutputUid(int trackId)
+    {
+        ThrowIfDisposed();
+        string uid = ReadNativeString((b, c) => NativeMethods.TrackGetMidiOutputUid(_handle, trackId, b, c));
+        return uid.Length == 0 ? null : uid;
+    }
+
+    /// <summary>The track's external MIDI output channel (1-16; 1 when off).</summary>
+    public int GetTrackMidiOutputChannel(int trackId)
+    { ThrowIfDisposed(); return NativeMethods.TrackGetMidiOutputChannel(_handle, trackId); }
+
+    /// <summary>Tests: a virtual MIDI port whose output is readable (source index, or -1).</summary>
+    public int AddTestMidiPort(string name)
+    { ThrowIfDisposed(); return NativeMethods.EngineAddTestMidiPort(_handle, name); }
+
+    /// <summary>Tests: the bytes the engine sent to a test port's output since the last call.</summary>
+    public byte[] TakeTestMidiSent(int source)
+    {
+        ThrowIfDisposed();
+        var buf = new byte[8192];
+        int n = NativeMethods.EngineTakeTestMidiSent(_handle, source, buf, buf.Length);
+        return n <= 0 ? Array.Empty<byte>() : buf[..Math.Min(n, buf.Length)];
+    }
+
     /// <summary>Tests: feeds a MIDI message as if hardware source <paramref name="source"/> sent it.</summary>
     public void PushMidiForTest(int source, int status, int channel, int d1, int d2)
     { ThrowIfDisposed(); NativeMethods.EnginePushMidiForTest(_handle, source, status, channel, d1, d2); }

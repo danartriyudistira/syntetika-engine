@@ -160,6 +160,15 @@ class Engine {
     // Sends to the output with `outputUid` (opened on first use); an identity request opens
     // the SysEx window of every input paired with that output. Message thread.
     bool midiSend(const std::string& outputUid, const uint8_t* data, int32_t len);
+
+    // --- external MIDI output (per track): play an external synth from a clip ------------
+    // Routes a track's notes, controllers and pitch bend to a hardware/virtual output port.
+    // `channel` 1-16 (0 = 1); an empty uid turns it off. Message thread.
+    bool setTrackMidiOutput(int32_t trackId, const std::string& outputUid, int32_t channel);
+    const char* trackMidiOutputUid(int32_t trackId) const; // "" when off
+    int32_t trackMidiOutputChannel(int32_t trackId) const;
+    // Realtime-safe: queues a short channel message for the pump thread (audio thread).
+    void queueMidiOut(int32_t port, const uint8_t* data, int32_t len) noexcept;
     // Test ports (MCP controller_inject): a virtual input + loopback output. Message thread.
     int32_t addTestMidiPort(const std::string& name);
     bool injectTestMidi(int32_t source, const uint8_t* data, int32_t len);
@@ -1829,6 +1838,33 @@ class Engine {
     void onMidiSysex(int32_t source, const uint8_t* data, int32_t len);
     MidiSurface midiSurface_;
     std::map<std::string, std::unique_ptr<MidiOutput>> midiOutputs_; // by output uid (message thread)
+
+    // External MIDI out: the audio thread only pushes to this ring; a small pump thread sends
+    // it through RtMidi (opening a port can block, so it never runs on the audio thread).
+    struct MidiOutMsg {
+        int32_t port;
+        uint8_t len;
+        uint8_t data[3];
+    };
+    static constexpr uint32_t kMidiOutRing = 1024;
+    std::array<MidiOutMsg, kMidiOutRing> midiOutRing_{};
+    std::atomic<uint32_t> midiOutHead_{0};
+    std::atomic<uint32_t> midiOutTail_{0};
+    // Stable port slots: an index stays valid while routes point at it. Guarded by the mutex
+    // because the pump reads the uid while the message thread appends.
+    static constexpr int32_t kMidiOutPorts = 64;
+    std::array<std::string, kMidiOutPorts> midiOutPorts_{};
+    int32_t midiOutPortCount_ = 0;
+    mutable std::mutex midiOutPortsMutex_;
+    std::mutex midiSendMutex_;
+    std::thread midiOutPump_;
+    std::atomic<bool> midiOutPumpRun_{false};
+    void startMidiOutPump();
+    void stopMidiOutPump();
+    void pumpMidiOut();
+    int32_t registerMidiOutPort(const std::string& uid);
+    std::string midiOutPortUid(int32_t index) const;
+    void queueAllNotesOff(int32_t port, int32_t channel) noexcept;
     struct TestMidiPort {
         std::string name;
         int32_t source = 0;

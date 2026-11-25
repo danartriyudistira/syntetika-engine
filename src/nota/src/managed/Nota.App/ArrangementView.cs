@@ -2991,6 +2991,9 @@ public sealed partial class ArrangementView : UserControl
                 midiFrom.Items.Add(Src(v.Name.Length > 0 ? v.Name : Loc.F("common.track_n", v.Id), v.Id));
         }
 
+        // MIDI out ▸ (instrument tracks): play a hardware/virtual synth from this track.
+        MenuItem? midiOutput = vm is { IsInstrument: true } ? MidiOutputPick.Menu(_engine, trackId) : null;
+
         // Group / Ungroup (submix). "Group" folds the multi-selection (or this track) into a
         // new group; on a group "Ungroup" dissolves it, on a member "Remove from group" takes
         // just this track out (#489).
@@ -3015,7 +3018,7 @@ public sealed partial class ArrangementView : UserControl
         MenuKit.AddGroups(flyout.Items,
             new Control[] { MenuKit.Header(vm?.Name ?? "", TrackBrush(EffectiveColorIndex(_engine, trackId)), TrackBadge(trackId)) },
             new Control[] { TrackColourRow(one), TrackHeightRow(one) },
-            new Control?[] { rename, showInModular, recInput, midiInput, midiFrom }.OfType<Control>(),
+            new Control?[] { rename, showInModular, recInput, midiInput, midiFrom, midiOutput }.OfType<Control>(),
             FreezeMenuItems?.Invoke(trackId),
             create,
             clipboard,

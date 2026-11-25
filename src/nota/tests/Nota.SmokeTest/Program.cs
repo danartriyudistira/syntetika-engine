@@ -316,6 +316,14 @@ if (args.Length >= 1 && args[0] == "--smart-samples")
     Console.WriteLine(failures == 0 ? "SMART SAMPLES PASSED" : $"SMART SAMPLES FAILED ({failures})");
     return failures == 0 ? 0 : 1;
 }
+// External MIDI out alone: `--midi-out`.
+if (args.Length >= 1 && args[0] == "--midi-out")
+{
+    Console.WriteLine("-- external MIDI out --");
+    foreach (var (ok, label) in MidiOutTests.Run()) Check(ok, label);
+    Console.WriteLine(failures == 0 ? "MIDI OUT PASSED" : $"MIDI OUT FAILED ({failures})");
+    return failures == 0 ? 0 : 1;
+}
 // Self-update alone: `--updater`.
 if (args.Length >= 1 && args[0] == "--updater")
 {

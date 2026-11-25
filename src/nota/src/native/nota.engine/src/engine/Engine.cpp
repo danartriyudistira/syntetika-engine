@@ -208,6 +208,7 @@ const std::vector<MidiInput::PortInfo>& Engine::midiPorts() {
 }
 
 bool Engine::midiSend(const std::string& outputUid, const uint8_t* data, int32_t len) {
+    std::lock_guard<std::mutex> sendLock(midiSendMutex_);
     if (!data || len <= 0) return false;
     // An Identity Request (F0 7E <id> 06 01 F7) lets the reply in from every input paired
     // with this output, claimed or not (specs/051 research R5).
@@ -234,8 +235,103 @@ bool Engine::midiSend(const std::string& outputUid, const uint8_t* data, int32_t
     return false;
 }
 
-int32_t Engine::addTestMidiPort(const std::string& name) {
-    if (name.empty()) return -1;
+// --- external MIDI output (per track) --------------------------------------
+
+int32_t Engine::registerMidiOutPort(const std::string& uid) {
+    if (uid.empty()) return -1;
+    std::lock_guard<std::mutex> lock(midiOutPortsMutex_);
+    for (int32_t i = 0; i < midiOutPortCount_; ++i)
+        if (midiOutPorts_[i] == uid) return i;
+    if (midiOutPortCount_ >= kMidiOutPorts) return -1;
+    midiOutPorts_[midiOutPortCount_] = uid;
+    return midiOutPortCount_++;
+}
+
+std::string Engine::midiOutPortUid(int32_t index) const {
+    std::lock_guard<std::mutex> lock(midiOutPortsMutex_);
+    if (index < 0 || index >= midiOutPortCount_) return {};
+    return midiOutPorts_[index];
+}
+
+void Engine::queueMidiOut(int32_t port, const uint8_t* data, int32_t len) noexcept {
+    if (port < 0 || !data || len <= 0) return;
+    if (len > 3) len = 3;
+    const uint32_t head = midiOutHead_.load(std::memory_order_relaxed);
+    const uint32_t tail = midiOutTail_.load(std::memory_order_acquire);
+    if (head - tail >= kMidiOutRing) return; // a stuck port drops messages, never blocks audio
+    MidiOutMsg& m = midiOutRing_[head % kMidiOutRing];
+    m.port = port;
+    m.len = static_cast<uint8_t>(len);
+    for (int32_t i = 0; i < len; ++i) m.data[i] = data[i];
+    midiOutHead_.store(head + 1, std::memory_order_release);
+}
+
+void Engine::queueAllNotesOff(int32_t port, int32_t channel) noexcept {
+    const uint8_t ch = static_cast<uint8_t>(std::clamp(channel, 1, 16) - 1);
+    const uint8_t all[3] = {static_cast<uint8_t>(0xB0 | ch), 123, 0};
+    const uint8_t reset[3] = {static_cast<uint8_t>(0xB0 | ch), 120, 0};
+    const uint8_t pedal[3] = {static_cast<uint8_t>(0xB0 | ch), 64, 0};
+    queueMidiOut(port, pedal, 3);
+    queueMidiOut(port, all, 3);
+    queueMidiOut(port, reset, 3);
+}
+
+void Engine::startMidiOutPump() {
+    if (midiOutPumpRun_.load(std::memory_order_relaxed)) return;
+    midiOutPumpRun_.store(true, std::memory_order_relaxed);
+    midiOutPump_ = std::thread([this] { pumpMidiOut(); });
+}
+
+void Engine::stopMidiOutPump() {
+    midiOutPumpRun_.store(false, std::memory_order_relaxed);
+    if (midiOutPump_.joinable()) midiOutPump_.join();
+}
+
+void Engine::pumpMidiOut() {
+    while (midiOutPumpRun_.load(std::memory_order_relaxed)) {
+        bool sent = false;
+        uint32_t tail = midiOutTail_.load(std::memory_order_relaxed);
+        const uint32_t head = midiOutHead_.load(std::memory_order_acquire);
+        while (tail != head) {
+            const MidiOutMsg m = midiOutRing_[tail % kMidiOutRing];
+            ++tail;
+            const std::string uid = midiOutPortUid(m.port);
+            if (!uid.empty()) midiSend(uid, m.data, m.len);
+            sent = true;
+        }
+        midiOutTail_.store(tail, std::memory_order_release);
+        // A sleep keeps the pump off the audio thread's back; 1 ms is under any MIDI jitter
+        // a synth cares about, and the audio thread never waits for it.
+        std::this_thread::sleep_for(std::chrono::milliseconds(sent ? 0 : 2));
+    }
+}
+
+bool Engine::setTrackMidiOutput(int32_t trackId, const std::string& outputUid, int32_t channel) {
+    auto t = findTrackAuthoring(trackId);
+    if (!t) return false;
+    channel = std::clamp(channel <= 0 ? 1 : channel, 1, 16);
+    const int32_t oldPort = t->midiOutPort();
+    const int32_t port = outputUid.empty() ? -1 : registerMidiOutPort(outputUid);
+    if (!outputUid.empty() && port < 0) return false;
+    t->setMidiOutPort(port);
+    t->setMidiOutChannel(channel);
+    t->midiOutUid = port >= 0 ? outputUid : std::string();
+    if (port >= 0) startMidiOutPump();
+    if (oldPort >= 0) queueAllNotesOff(oldPort, channel);
+    return true;
+}
+
+const char* Engine::trackMidiOutputUid(int32_t trackId) const {
+    auto t = findTrackAuthoring(trackId);
+    return t ? t->midiOutUid.c_str() : "";
+}
+
+int32_t Engine::trackMidiOutputChannel(int32_t trackId) const {
+    auto t = findTrackAuthoring(trackId);
+    return t ? t->midiOutChannel() : 1;
+}
+
+int32_t Engine::addTestMidiPort(const std::string& name) {    if (name.empty()) return -1;
     for (const auto& t : testMidiPorts_)
         if (t->name == name) return t->source;
     // Take the highest source index no real or test port uses.
@@ -304,6 +400,7 @@ int32_t Engine::gamepadAxisValues(int32_t pad, int32_t* out, int32_t max) const 
 }
 
 void Engine::stop() {
+    stopMidiOutPump();
     if (midiInput_) midiInput_->close();
     midiOutputs_.clear();
     setPluginAudioWorkgroup(nullptr); // before the device (and its workgroup) goes

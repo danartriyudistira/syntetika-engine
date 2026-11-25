@@ -1169,6 +1169,9 @@ void Engine::drainCommands(Graph* g) {
         case CommandType::TransportStop:
             endCountIn();
             transport_.stop();
+            if (g)
+                for (auto& t : g->tracks)
+                    if (t->midiOutPort() >= 0) queueAllNotesOff(t->midiOutPort(), t->midiOutChannel());
             break;
         case CommandType::SetBpm: transport_.setBpm(c.d0); break;
         case CommandType::SetTimeSignature: transport_.setTimeSignature(c.i0, c.i1); break;
@@ -1197,6 +1200,9 @@ void Engine::drainCommands(Graph* g) {
             seekedWhileRolling_ |= transport_.isPlaying(); // a jump mid-playback, not Stop→Seek→Play
             transport_.seekBeats(c.d0);
             seekedThisBlock_ = true;
+            if (g)
+                for (auto& t : g->tracks)
+                    if (t->midiOutPort() >= 0) queueAllNotesOff(t->midiOutPort(), t->midiOutChannel());
             break;
         case CommandType::TakeRestart: // specs/078: the blocks from here belong to the retried take
             if ((c.i1 & 4) != 0) { // a take started normally: the current epoch, nothing waits
@@ -1986,6 +1992,45 @@ void Engine::renderInstrumentRaw(
 
     std::sort(evs, evs + n, midiEvLess);
     std::stable_sort(xev, xev + xn, [](const ExprEv& a, const ExprEv& b) { return a.off < b.off; });
+
+    // External MIDI output (Syntetika Engine): the notes and controllers this track plays go
+    // to its output port, on its channel, so a hardware synth follows the clip.
+    const int32_t midiOutPort = t.midiOutPort();
+    if (midiOutPort >= 0) {
+        const uint8_t outCh = static_cast<uint8_t>(std::clamp(t.midiOutChannel(), 1, 16) - 1);
+        for (int32_t i = 0; i < n; ++i) {
+            uint8_t msg[3] = {
+                static_cast<uint8_t>((evs[i].on ? 0x90 : 0x80) | outCh),
+                static_cast<uint8_t>(std::clamp(evs[i].pitch, 0, 127)),
+                0,
+            };
+            if (evs[i].on)
+                msg[2] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(std::lround(evs[i].vel * 127.0f)), 1, 127));
+            queueMidiOut(midiOutPort, msg, 3);
+        }
+        for (int32_t i = 0; i < xn; ++i) {
+            const ExprEv& e = xev[i];
+            if (e.dim < kCtlDimBase) continue; // per-note expression stays with the instrument
+            const int32_t ctl = e.dim - kCtlDimBase;
+            uint8_t msg[3];
+            if (ctl == kCtlPitchWheel) {
+                const int32_t v14 = std::clamp(static_cast<int32_t>(std::lround((e.value * 0.5f + 0.5f) * 16383.0f)), 0, 16383);
+                msg[0] = static_cast<uint8_t>(0xE0 | outCh);
+                msg[1] = static_cast<uint8_t>(v14 & 0x7F);
+                msg[2] = static_cast<uint8_t>((v14 >> 7) & 0x7F);
+                queueMidiOut(midiOutPort, msg, 3);
+            } else if (ctl == kCtlChannelPressure) {
+                msg[0] = static_cast<uint8_t>(0xD0 | outCh);
+                msg[1] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(std::lround(e.value * 127.0f)), 0, 127));
+                queueMidiOut(midiOutPort, msg, 2);
+            } else if (ctl >= 0 && ctl < 128) {
+                msg[0] = static_cast<uint8_t>(0xB0 | outCh);
+                msg[1] = static_cast<uint8_t>(ctl);
+                msg[2] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(std::lround(e.value * 127.0f)), 0, 127));
+                queueMidiOut(midiOutPort, msg, 3);
+            }
+        }
+    }
 
     // Articulation MIDI (specs/085): the track's own arrangement clips, past its MIDI FX, only to an
     // instrument that takes it. A stack array like the notes' (AR-6); overflow is dropped, never grown.

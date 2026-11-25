@@ -286,6 +286,25 @@ internal sealed class TrackInspectorView : UserControl
         if (MidiInputPick.MpeWarning(_engine, id))
             rows.Children.Add(Note(Loc.T("midi_input.mpe_warning")));
         rows.Children.Add(MidiFromRow(id));
+
+        // External MIDI output: the same notes go to a hardware or virtual synth.
+        string? outUid = _engine.GetTrackMidiOutputUid(id);
+        var outPorts = MidiOutputPick.Outputs(_engine);
+        int outAt = outPorts.FindIndex(p => p.Uid == outUid);
+        string outLabel = string.IsNullOrEmpty(outUid) ? Loc.T("midi_output.off")
+            : outAt >= 0 ? outPorts[outAt].Name : outUid;
+        var outChip = SessionView.Chip(outLabel, false, a =>
+            SessionView.Pick(a,
+                new (string?, string)[] { (null, Loc.T("midi_output.off")) }
+                    .Concat(outPorts.Select(p => ((string?)p.Uid, p.Name))),
+                u => u == outUid,
+                u => { _engine.SetTrackMidiOutput(id, u, _engine.GetTrackMidiOutputChannel(id)); Edited(); }));
+        ToolTip.SetTip(outChip, Loc.T("midi_output.tooltip"));
+        rows.Children.Add(SessionView.Row(Loc.T("midi_output.menu"), outChip));
+        int outCh = _engine.GetTrackMidiOutputChannel(id);
+        rows.Children.Add(SessionView.Row(Loc.T("midi_input.channel"), SessionView.Chip(outCh.ToString(), false, a =>
+            SessionView.Pick(a, Enumerable.Range(1, 16).Select(c => (c, Loc.F("midi_input.channel_n", c))), c => c == outCh,
+                c => { _engine.SetTrackMidiOutput(id, _engine.GetTrackMidiOutputUid(id), c); Edited(); }))));
         return rows;
     }
 

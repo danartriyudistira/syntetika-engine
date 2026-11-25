@@ -778,8 +778,35 @@ int32_t nota_track_get_midi_input_uid(const NotaEngine* e, int32_t track_id, cha
 int32_t nota_midi_source_of_uid(const NotaEngine* e, const char* uid) {
     return e && uid ? CENG(e)->midiSourceOfUid(uid) : -1;
 }
+// --- external MIDI output (per track): play a hardware/virtual synth from a clip ----------
+NotaResult nota_track_set_midi_output(NotaEngine* e, int32_t track_id, const char* uid, int32_t channel) {
+    if (!e || channel < 0 || channel > 16) return NOTA_ERR_INVALID_ARG;
+    return ENG(e)->setTrackMidiOutput(track_id, uid ? uid : "", channel) ? NOTA_OK : NOTA_ERR_INVALID_ARG;
+}
+int32_t nota_track_get_midi_output_uid(const NotaEngine* e, int32_t track_id, char* out, int32_t cap) {
+    if (!e) return 0;
+    const std::string uid = CENG(e)->trackMidiOutputUid(track_id);
+    if (out && cap > 0) {
+        const size_t n = std::min(uid.size(), static_cast<size_t>(cap - 1));
+        std::memcpy(out, uid.data(), n);
+        out[n] = '\0';
+    }
+    return static_cast<int32_t>(uid.size());
+}
+int32_t nota_track_get_midi_output_channel(const NotaEngine* e, int32_t track_id) {
+    return e ? CENG(e)->trackMidiOutputChannel(track_id) : 1;
+}
 void nota_engine_push_midi_for_test(NotaEngine* e, int32_t source, int32_t status, int32_t channel, int32_t d1, int32_t d2) {
     if (e) ENG(e)->pushMidiForTest(source, status & 0xF0, channel & 0x0F, d1 & 0x7F, d2 & 0x7F);
+}
+// Tests: a virtual MIDI input + loopback output ("test:<name>"), so external-MIDI routing can
+// be verified without hardware. Returns its source index, or -1.
+int32_t nota_engine_add_test_midi_port(NotaEngine* e, const char* name) {
+    return e && name ? ENG(e)->addTestMidiPort(name) : -1;
+}
+// Tests: the bytes the engine sent to that test port's output since the last call.
+int32_t nota_engine_take_test_midi_sent(NotaEngine* e, int32_t source, uint8_t* out, int32_t cap) {
+    return e ? ENG(e)->takeTestMidiSent(source, out, cap) : 0;
 }
 int32_t nota_audio_input_channel_count(const NotaEngine* e) {
     return e ? CENG(e)->inputChannelCount() : 0;

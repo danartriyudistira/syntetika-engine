@@ -405,6 +405,11 @@ class Track {
     static constexpr int32_t kMidiAllInputs = -2;
     int32_t midiInputSource() const { return midiInputSource_.load(std::memory_order_relaxed); }
     int32_t midiInputChannel() const { return midiInputChannel_.load(std::memory_order_relaxed); }
+    // External MIDI output route: a stable port index (-1 = off) and a 1-16 channel.
+    int32_t midiOutPort() const { return midiOutPort_.load(std::memory_order_relaxed); }
+    void setMidiOutPort(int32_t port) { midiOutPort_.store(port, std::memory_order_relaxed); }
+    int32_t midiOutChannel() const { return midiOutChannel_.load(std::memory_order_relaxed); }
+    void setMidiOutChannel(int32_t channel) { midiOutChannel_.store(channel, std::memory_order_relaxed); }
     void setMidiInput(int32_t source, int32_t channel) {
         midiInputSource_.store(source, std::memory_order_relaxed);
         midiInputChannel_.store(channel, std::memory_order_relaxed);
@@ -527,9 +532,14 @@ class Track {
     // The uid of the MIDI input the filter names ("" = All inputs); message thread only. The
     // source index above is re-resolved from it whenever the MIDI inputs re-open.
     std::string midiInputUid;
+    // The external MIDI output port this track plays ("" = off); message thread only (the
+    // audio thread reads the resolved index above).
+    std::string midiOutUid;
 
   private:
     std::atomic<int32_t> midiInputChannel_{0};
+    std::atomic<int32_t> midiOutPort_{-1};                              // external MIDI out route (port index)
+    std::atomic<int32_t> midiOutChannel_{1};                            // 1-16
     std::atomic<bool> frozen_{false};                                   // M7: play frozenBuf instead of the live chain
 };
 

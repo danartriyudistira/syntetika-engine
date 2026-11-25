@@ -1817,6 +1817,19 @@ NOTA_API int32_t    nota_track_get_midi_input(const NotaEngine* engine, int32_t 
  * `out` and returns its length. */
 NOTA_API NotaResult nota_track_set_midi_input_uid(NotaEngine* engine, int32_t track_id, const char* uid, int32_t channel);
 NOTA_API int32_t    nota_track_get_midi_input_uid(const NotaEngine* engine, int32_t track_id, char* out, int32_t cap);
+/* External MIDI output: plays an instrument track's notes, controllers and pitch bend on a
+ * hardware/virtual output port, so a hardware synth follows the clip. uid is the output uid
+ * of an input port (nota_midi_port_output_uid); "" or NULL turns it off. channel 1-16
+ * (0 = 1). The engine sends from its own pump thread, never from the audio thread; notes
+ * stop (CC 123/120) when the transport stops or jumps. get copies the uid and returns its
+ * length; get_channel returns 1 when off. */
+NOTA_API NotaResult nota_track_set_midi_output(NotaEngine* engine, int32_t track_id, const char* uid, int32_t channel);
+NOTA_API int32_t    nota_track_get_midi_output_uid(const NotaEngine* engine, int32_t track_id, char* out, int32_t cap);
+NOTA_API int32_t    nota_track_get_midi_output_channel(const NotaEngine* engine, int32_t track_id);
+/* Tests: a virtual MIDI input plus its loopback output ("test:<name>"), so external-MIDI
+ * routing can be checked without hardware; take returns the bytes sent to that output. */
+NOTA_API int32_t    nota_engine_add_test_midi_port(NotaEngine* engine, const char* name);
+NOTA_API int32_t    nota_engine_take_test_midi_sent(NotaEngine* engine, int32_t source, uint8_t* out, int32_t cap);
 /* The source index of a connected MIDI input by its uid (nota_midi_input_device_uid);
  * -1 when it is not connected or switched off. Indices change when the inputs re-open. */
 NOTA_API int32_t    nota_midi_source_of_uid(const NotaEngine* engine, const char* uid);

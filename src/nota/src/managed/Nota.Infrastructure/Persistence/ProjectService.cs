@@ -137,6 +137,11 @@ public sealed class ProjectService
                 t.MidiInputUid = midiIn.Uid;
                 t.MidiInputChannel = midiIn.Channel > 0 ? midiIn.Channel : null;
             }
+            if (ti.IsInstrument)                                                    // external MIDI out
+            {
+                t.MidiOutputUid = engine.GetTrackMidiOutputUid(ti.Id);
+                t.MidiOutputChannel = t.MidiOutputUid is { Length: > 0 } ? engine.GetTrackMidiOutputChannel(ti.Id) : null;
+            }
             for (int b = 0; b < t.Sends.Length; b++) t.Sends[b] = engine.GetTrackSend(ti.Id, b);
 
             if (ti.IsInstrument)
@@ -840,6 +845,8 @@ public sealed class ProjectService
             if (t.MidiFrom >= 0) midiFromDeferred.Add((id, t.MidiFrom));           // resolve after all tracks exist
             if (t.MidiInputUid is { Length: > 0 } || t.MidiInputChannel is > 0)    // MIDI input (specs/086)
                 engine.SetTrackMidiInput(id, t.MidiInputUid, t.MidiInputChannel ?? 0);
+            if (t.MidiOutputUid is { Length: > 0 })                                // external MIDI out
+                engine.SetTrackMidiOutput(id, t.MidiOutputUid, t.MidiOutputChannel ?? 1);
             if (t.MidiOffsetMs is { } offMs && double.IsFinite(offMs)) engine.SetTrackMidiOffsetMs(id, offMs);   // v30; absent = 0, engine clamps
             if (t.Type == 1 && t.ArticulationMap is { } artMap) ApplyArticulationMap(engine, id, artMap, warnings);   // v30
             for (int b = 0; b < t.Sends.Length && b < 4; b++) engine.SetTrackSend(id, b, t.Sends[b]);

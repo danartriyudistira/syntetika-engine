@@ -137,3 +137,65 @@ internal static class MidiInputPick
         return menu;
     }
 }
+
+/// <summary>An instrument track's external MIDI output: a hardware/virtual synth port and a
+/// channel, so the track's clips play that synth.</summary>
+internal static class MidiOutputPick
+{
+    /// <summary>The output ports the MIDI devices expose (output uid + the device's name).</summary>
+    public static List<(string Uid, string Name)> Outputs(IAudioEngine engine)
+    {
+        var list = new List<(string, string)>();
+        foreach (var p in engine.MidiPorts())
+        {
+            if (string.IsNullOrEmpty(p.OutputUid)) continue;
+            if (list.Exists(x => x.Item1 == p.OutputUid)) continue;
+            list.Add((p.OutputUid, p.Name.Length > 0 ? p.Name : p.OutputUid));
+        }
+        return list;
+    }
+
+    /// <summary>What the track plays, short: "Off", or a device and "Ch 3".</summary>
+    public static string ShortLabel(IAudioEngine engine, int trackId)
+    {
+        string? uid = engine.GetTrackMidiOutputUid(trackId);
+        if (string.IsNullOrEmpty(uid)) return Loc.T("midi_output.off");
+        var ports = Outputs(engine);
+        int at = ports.FindIndex(p => p.Uid == uid);
+        string name = at >= 0 ? ports[at].Name : uid;
+        return Loc.F("midi_input.device_channel", name, engine.GetTrackMidiOutputChannel(trackId));
+    }
+
+    /// <summary>MIDI out ▸, for the track menu: Off, the output ports, Channel ▸ 1–16.</summary>
+    public static MenuItem Menu(IAudioEngine engine, int trackId, Action? edited = null)
+    {
+        string? curUid = engine.GetTrackMidiOutputUid(trackId);
+        int curCh = Math.Clamp(engine.GetTrackMidiOutputChannel(trackId), 1, 16);
+        var menu = MenuKit.ValueItem(Loc.T("midi_output.menu"), GlyphKind.Output, ShortLabel(engine, trackId));
+        var off = new MenuItem { Header = Loc.T("midi_output.off"), ToggleType = MenuItemToggleType.Radio, IsChecked = string.IsNullOrEmpty(curUid) };
+        off.Click += (_, _) => { engine.SetTrackMidiOutput(trackId, null, curCh); edited?.Invoke(); };
+        menu.Items.Add(off);
+        var ports = Outputs(engine);
+        foreach (var (uid, name) in ports)
+        {
+            var mi = new MenuItem { Header = name, ToggleType = MenuItemToggleType.Radio, IsChecked = uid == curUid };
+            string port = uid;
+            mi.Click += (_, _) => { engine.SetTrackMidiOutput(trackId, port, curCh); edited?.Invoke(); };
+            menu.Items.Add(mi);
+        }
+        if (ports.Count == 0)
+            menu.Items.Add(new MenuItem { Header = Loc.T("midi_output.none"), IsEnabled = false });
+        menu.Items.Add(new Separator());
+        var ch = MenuKit.ValueItem(Loc.T("midi_input.channel"), null,
+            curCh.ToString(System.Globalization.CultureInfo.CurrentCulture));
+        for (int c = 1; c <= 16; c++)
+        {
+            var mi = new MenuItem { Header = Loc.F("midi_input.channel_n", c), ToggleType = MenuItemToggleType.Radio, IsChecked = c == curCh };
+            int channel = c;
+            mi.Click += (_, _) => { engine.SetTrackMidiOutput(trackId, curUid, channel); edited?.Invoke(); };
+            ch.Items.Add(mi);
+        }
+        menu.Items.Add(ch);
+        return menu;
+    }
+}
