@@ -3,6 +3,26 @@
 Base revisions are listed in [ATTRIBUTION.md](ATTRIBUTION.md). This is a summary; the exact
 diffs are in `patches/`.
 
+## Random MIDI parts
+
+- **Random… in the MIDI clip editor**: next to Tools, it opens a dialog that writes a
+  **bassline**, **pad** or **melody** from a genre, the clip's key and mode, and a seed. The
+  20 genres are the same book as the drum Random dialog (House … Lo-Fi), with an optional
+  second genre and a Mix amount.
+- `MidiPartGenerator` is pure and deterministic: the same settings and seed produce the same
+  notes, so Generate previews a take in the roll, Reroll auditions another, and Apply commits
+  exactly the preview as one undo step. The bass and melody are monophonic; the pad holds
+  chords and moves by voice leading. Density keeps the signature notes at 0 and fills the
+  part at 1; Variation re-rolls bars, adds a bass walk-up every four bars and answers every
+  second melody phrase.
+- Length stops the take after 1/2/4/8 bars or fills the clip; Octave shifts each part's
+  register; Chromatic is folded to natural minor so chords stay diatonic. Replace writes
+  over the clip, Add layers the take without doubling a note already at that pitch and
+  instant.
+- Tests: `--midi-part` (genre-book parity with drums, legal notes in every genre × part,
+  determinism, key/mode, chromatic fallback, monophony and registers, pad chords, motif
+  repetition, density, octave, length, mix, 3/4 meter).
+
 ## Realtime tempo
 
 - **BPM changes no longer freeze on warped audio**: changing the tempo used to rebuild every

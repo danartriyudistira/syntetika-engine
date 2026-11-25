@@ -11,6 +11,7 @@
 // (specs/029) the header, inspector and envelopes follow the roll's active clip.
 
 using System;
+using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -18,6 +19,8 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Nota.Application;
+using Nota.Application.Editing;
+using Nota.Application.Midi;
 using static Nota.App.ClipEditorKit;
 using Nota.Application.Localization;
 
@@ -34,6 +37,7 @@ public sealed class ClipEditorView : UserControl
     private readonly ClipPropsView _props;
     private readonly MidiToolsView _tools;
     private readonly ToggleButton _toolsToggle;
+    private MidiRandomWindow? _random;
     private Action<int> _setTab = _ => { };
     private bool _envMode;
 
@@ -61,12 +65,19 @@ public sealed class ClipEditorView : UserControl
         _toolsToggle = new ToggleButton { Content = Loc.T("clip_editor.tools"), Padding = new Thickness(12, 0), Classes = { "chip", "flat" } };
         _toolsToggle.Click += (_, _) => SetTools(_toolsToggle.IsChecked == true);
 
+        var randomButton = new Button
+        {
+            Content = Loc.T("midi_random.random"), Padding = new Thickness(12, 0), Classes = { "chip", "flat" },
+        };
+        ToolTip.SetTip(randomButton, Loc.T("midi_random.title"));
+        randomButton.Click += (_, _) => ShowRandom();
+
         var tabs = Segments(new[] { Loc.T("clip_editor.notes"), Loc.T("clip_editor.envelopes") }, 0, i => ShowTab(i == 1), out _setTab);
         if (_envOverlay is null) Inactive.Set(tabs, true);   // session slots carry no clip envelope
         var right = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 12,
-            Children = { AuditionControl(), NoteColourControl(), FitControl(roll), SnapControl(roll), HeaderDivider(), ScaleControls(), HeaderDivider(), _toolsToggle },
+            Children = { AuditionControl(), NoteColourControl(), FitControl(roll), SnapControl(roll), HeaderDivider(), ScaleControls(), HeaderDivider(), _toolsToggle, randomButton },
         };
         // The gesture hint fills the header's free space: one line when there is room, two in
         // a narrower editor (the header holds two caption lines), trimmed only past that, and
@@ -207,6 +218,87 @@ public sealed class ClipEditorView : UserControl
         _tools.IsVisible = show;
         _toolsToggle.IsChecked = show;
         _tools.SetActive(show);
+    }
+
+    // ---- Random MIDI part (Bassline / Pad / Melody) ----
+
+    /// <summary>Opens the Random MIDI dialog over this clip. The dialog previews through the
+    /// roll and leaves the committing to Apply, so closing it never writes anything.</summary>
+    private void ShowRandom()
+    {
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        if (_random is { IsVisible: true } open) { open.Activate(); return; }
+        Roll.CancelPreview();   // a Tools preview and a random take never share the roll
+
+        int root = Roll.ScaleOn ? Roll.ScaleRoot : 0;
+        // Chromatic has no diatonic chords; the dialog opens in natural minor instead of
+        // clamping to the last named mode (which would be Lydian).
+        int scale = Roll.ScaleOn && Roll.ScaleIndex is >= 0 and < 9 ? Roll.ScaleIndex : 1;
+        var dialog = new MidiRandomWindow(MidiPartGenerator.Genres, root, scale);
+        dialog.GenerateRequested = PreviewRandom;
+        dialog.ApplyRequested = count =>
+        {
+            Roll.ApplyPreview();
+            return Loc.F("midi_random.applied", count);
+        };
+        dialog.RevertRequested = Roll.CancelPreview;
+
+        void Detached(object? _, VisualTreeAttachmentEventArgs __)
+        {
+            DetachedFromVisualTree -= Detached;
+            if (dialog.IsVisible) dialog.Close();
+        }
+        DetachedFromVisualTree += Detached;
+        dialog.Closed += (_, _) =>
+        {
+            DetachedFromVisualTree -= Detached;
+            if (ReferenceEquals(_random, dialog)) _random = null;
+            Roll.CancelPreview();
+        };
+        _random = dialog;
+        dialog.Show(owner);
+        dialog.Generate();   // a take is already on screen when the dialog opens
+    }
+
+    /// <summary>Writes one take into the active clip as a preview and reports what the dialog's
+    /// status line should say. Reads the clip fresh on every roll, so a generation never
+    /// compounds on its own preview.</summary>
+    private MidiRandomPreview PreviewRandom(MidiRandomOptions picked, int seed)
+    {
+        Roll.CancelPreview();
+        var active = Roll.ActiveClip;
+        var source = Roll.SourceByClip();
+        int slot = Roll.Clips.Active;
+        var original = slot >= 0 && slot < source.Clips.Count ? source.Clips[slot].Notes : Array.Empty<NotaNote>();
+        double length = active.LengthBeats;
+
+        var options = new MidiPartOptions(picked.Part, picked.GenreA, picked.GenreB, picked.Mix,
+            picked.Root, picked.ScaleIndex, picked.Density, picked.Variation, picked.Octave, picked.LengthBars);
+        var generated = MidiPartGenerator.Generate(length, Roll.BeatsPerBar, options, seed);
+        if (generated.Count == 0) return new MidiRandomPreview(0, Loc.T("midi_random.no_notes"));
+
+        var notes = picked.Replace ? generated : MergeRandom(original, generated, length);
+        Roll.ShowPreview(new[] { new ClipNotes(active.TrackId, active.ClipIndex, notes) });
+
+        string genre = picked.GenreB is null
+            ? MidiPartGenerator.NameOf(picked.GenreA)
+            : $"{MidiPartGenerator.NameOf(picked.GenreA)} + {MidiPartGenerator.NameOf(picked.GenreB)}";
+        string label = $"{genre} · {MidiPartGenerator.PartName(picked.Part)}";
+        return new MidiRandomPreview(notes.Count, Loc.F("midi_random.generated", notes.Count, label));
+    }
+
+    /// <summary>Add mode: the take layers over the clip, but a note the clip already has at
+    /// the same pitch and instant is not doubled.</summary>
+    private static List<NotaNote> MergeRandom(IReadOnlyList<NotaNote> original, IReadOnlyList<NotaNote> added, double length)
+    {
+        var notes = new List<NotaNote>(original);
+        var occupied = new HashSet<(int Pitch, long Start)>();
+        foreach (var n in original) occupied.Add((n.Pitch, At(n.StartBeat)));
+        foreach (var n in added)
+            if (occupied.Add((n.Pitch, At(n.StartBeat)))) notes.Add(n);
+        return MidiToolUtil.Deoverlap(MidiToolUtil.Tidy(notes, length));
+
+        static long At(double beat) => (long)Math.Round(beat * 960);
     }
 
     // ---- scale overlay ("Set Scale"): a switch, then the key and the mode ----

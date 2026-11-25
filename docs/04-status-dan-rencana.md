@@ -897,6 +897,37 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   dan device-rate change tetap membangun cache. CPU live untuk banyak stem belum diukur
   di app; uji dengan 4–8 stem.
 
+## 7ak. Random MIDI part — bassline / pad / melody (25 Nov)
+
+- **Fitur**: chip **Random…** di header editor clip MIDI membuka dialog bagian instrumen.
+  Selain genre, pengguna memilih **part**: **Bassline**, **Pad**, atau **Melody**. Genre
+  memakai 20 nama yang sama dengan Random drum (House … Lo-Fi), plus **Mix with** dan **Mix**
+  untuk memadukan dua genre.
+- **Nada**: **Key** dan **Mode** default mengikuti scale clip; 9 mode tonal ditawarkan
+  (Chromatic jatuh ke natural minor agar chord tidak menumpuk semitone). **Octave** −1/0/+1
+  menggeser register; bass ±C1–G3, pad ±C2–F#6, melodi ±C3–E7.
+- **Aturan per part**: bass monofonik mengikuti progresi dengan pulse khas genre, ghost note,
+  lompatan oktaf/kuint, dan walk-up tiap 4 bar. Pad memakai progresi diatonik per genre,
+  triad/7th/9th, voice-leading antar chord, gate/stab sesuai genre. Melody membangun motif
+  1–2 bar (contour + rest), mengulangnya dengan variasi, mendarat di chord tone, dan menjawab
+  tiap frasa 4 bar.
+- **Kontrol**: **Length** 1/2/4/8 bar atau seluruh clip; **Density** menambah/mengurangi hit
+  opsional (density 0 tetap menulis signature notes); **Variation** me-roll ulang tiap bar,
+  menambah fill, dan mengubah frasa jawaban; **Seed + Reroll** deterministik.
+  **Surprise me** mengacak part/genre/key/length/octave lalu langsung generate.
+- **Tulis**: **Replace** mengganti isi clip, **Add** menumpuk take tanpa menduplikasi
+  pitch+start yang sama. **Generate** hanya preview di piano roll; **Apply** menyimpan sebagai
+  **satu undo step**; **Close/Revert** membuang preview tanpa mengubah clip. Dialog non-modal,
+  jadi transport bisa diputar saat mengaudisi. Preview dibatalkan otomatis saat editor/clip
+  berganti.
+- **Bukti**: mode `--midi-part` lulus 24 cek: genre book sama dengan drum, semua genre × part
+  menghasilkan note legal di dalam clip, determinisme seed, semua nada in-scale, fallback
+  Chromatic, bass/melodi monofonik + register, jangkauan melodi ≤ 2 oktaf, pad chord +
+  voice-leading, motif berulang, density, octave, trim Length, mix 0/100%, meter 3/4, dan
+  nama part.
+- **Belum**: glide/808 pitch-bend, swing/triplet grid, preview audio khusus, akses dari Tools
+  rail/MCP, dan generate multi-clip dari dialog (Tools rail sudah multi-clip).
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

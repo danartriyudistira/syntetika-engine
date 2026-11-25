@@ -1184,6 +1184,15 @@ if (args.Length >= 1 && args[0] == "--drum-genre")
     return failures == 0 ? 0 : 1;
 }
 
+// Random MIDI parts alone: `--midi-part`. Also part of the full run.
+if (args.Length >= 1 && args[0] == "--midi-part")
+{
+    Console.WriteLine("-- midi: random parts --");
+    foreach (var (ok, label) in MidiPartTests.Run()) Check(ok, label);
+    Console.WriteLine(failures == 0 ? "MIDI PART PASSED" : $"MIDI PART FAILED ({failures})");
+    return failures == 0 ? 0 : 1;
+}
+
 // Audio→MIDI note hygiene alone: `--transcription`. Also part of the full run.
 if (args.Length >= 1 && args[0] == "--transcription")
 {
@@ -16328,6 +16337,8 @@ Console.WriteLine("-- tempo: live warped audio --");
 foreach (var (ok, label) in LiveTempoTests.Run()) Check(ok, label);
 Console.WriteLine("-- drums: genre patterns --");
 foreach (var (ok, label) in DrumPatternTests.Run()) Check(ok, label);
+Console.WriteLine("-- midi: random parts --");
+foreach (var (ok, label) in MidiPartTests.Run()) Check(ok, label);
 Console.WriteLine("-- ai: transcription notes --");
 foreach (var (ok, label) in TranscriptionTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: container --");
