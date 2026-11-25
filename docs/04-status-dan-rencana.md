@@ -868,8 +868,13 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Bukti**: 45 entri kit (25 base + 20 genre), preset House memuat 16 pad dengan timing sendiri,
   setiap base kit dan setiap genre preset dikenali kembali, Rhythm mengingat preset; full
   smoke lulus di bagian kit.
-- **DMG**: `Syntetika-Engine-0.1.6-arm64.dmg` 112 MB, ad-hoc signed.
-  SHA-256 `6f307c5e5f9007c950c0e4bede490d6c983577ff8ed76a44a81b397955b82143`.
+- **DMG macOS**: `Syntetika-Engine-0.1.6-arm64.dmg` 112 MB, ad-hoc signed; dibangun ulang
+  dari sumber yang sama dengan Windows. SHA-256
+  `bc16054b56441ba80edd52855ee4b985f535014dcbb7cb17b872a5c375b567c8`.
+- **Installer Windows x64**: `Syntetika-Engine-Setup-0.1.6-x64.exe`, self-contained, per-user.
+  SHA-256 `e88cca792ffbd0bd9e3be9898ca04437fd0e808a415062f78dabb8a43a160ee5`.
+- **Perbaikan lintas platform**: instans kedua membuka `.syntetika` lewat container (bukan
+  folder), jendela yang berjalan dinaikkan, dan file asosiasi dibuka saat window siap.
 
 ## 8. Risiko
 
