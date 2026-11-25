@@ -90,6 +90,8 @@ Copy-Item (Join-Path $nota 'LICENSES/THIRD-PARTY-NOTICES.md') $lic -Force
 Copy-Item (Join-Path $nota 'LICENSES/third-party.md') (Join-Path $lic 'NOTA-THIRD-PARTY.md') -Force
 Copy-Item (Join-Path $nota 'LICENSES/OFL-1.1-Geist.txt') $lic -Force
 Copy-Item (Join-Path $openvj 'LICENSE') (Join-Path $lic 'OPENVJ-GPL-3.0-or-later.txt') -Force
+Copy-Item (Join-Path $openvj 'THIRD_PARTY_NOTICES.md') (Join-Path $lic 'OPENVJ-THIRD-PARTY.md') -Force
+Copy-Item (Join-Path $openvj 'LICENSES/SPOUT-BSD-2-Clause.txt') $lic -Force
 Copy-Item (Join-Path $root 'ATTRIBUTION.md') $lic -Force
 Copy-Item (Join-Path $root 'TRADEMARKS.md') $lic -Force
 Copy-Item (Join-Path $root 'README.md') $lic -Force

@@ -81,6 +81,11 @@ pub struct Target {
 }
 
 impl Target {
+    /// Pixel size of the target.
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     fn new(device: &wgpu::Device, label: &str, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let texture = device.create_texture(&wgpu::TextureDescriptor {

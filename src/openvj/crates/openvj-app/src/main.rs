@@ -16,6 +16,9 @@ mod nota_tap;
 mod player;
 mod prefs;
 mod shadertoy_import;
+mod share_out;
+#[cfg(all(target_os = "windows", feature = "spout"))]
+mod spout_out;
 mod synth_controls;
 mod syphon_out;
 mod viz;

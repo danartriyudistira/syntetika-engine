@@ -1335,6 +1335,7 @@ export component MainWindow inherits Window {
     in property <bool> syphon-on;
     in property <bool> syphon-receiving;
     in property <string> syphon-error;
+    in property <string> share-kind;
     callback syphon-toggle();
     in property <int> missing-media;
     in property <string> status;
@@ -2052,6 +2053,7 @@ export component MainWindow inherits Window {
             syphon-on: root.syphon-on;
             syphon-receiving: root.syphon-receiving;
             syphon-error: root.syphon-error;
+            share-kind: root.share-kind;
             media-folder: root.browser-path;
             missing-media: root.missing-media;
             audio-toggle => { root.audio-toggle(); }

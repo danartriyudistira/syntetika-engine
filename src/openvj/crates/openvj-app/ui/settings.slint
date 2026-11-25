@@ -263,6 +263,7 @@ export component SettingsOverlay inherits Rectangle {
     in property <bool> syphon-on;
     in property <bool> syphon-receiving;
     in property <string> syphon-error;
+    in property <string> share-kind;
     // Media.
     in property <string> media-folder;
     in property <int> missing-media;
@@ -285,7 +286,7 @@ export component SettingsOverlay inherits Rectangle {
     property <[{name: string, words: string}]> pages: [
         { name: "Audio", words: "audio input device microphone line analyser fft bands gain smoothing" },
         { name: "Tempo", words: "tempo bpm ableton link sync tap beat" },
-        { name: "Output", words: "output window fullscreen screen projector display syphon share apps mapping advanced slices masks warp resolume test card" },
+        { name: "Output", words: "output window fullscreen screen projector display syphon spout share apps mapping advanced slices masks warp resolume test card" },
         { name: "Media", words: "media folder files browser relink missing shadertoy api key import" },
         { name: "Keyboard", words: "keyboard shortcuts keys" },
         { name: "About", words: "about version license licence credits syphon ffmpeg ghost arcade fonts help" },
@@ -520,12 +521,12 @@ export component SettingsOverlay inherits Rectangle {
                                 }
                             }
                             PrefRow {
-                                title: "Syphon output";
-                                detail: !root.syphon-available ? "Syphon is only available on macOS."
-                                    : root.syphon-error != "" ? "Syphon couldn't start: " + root.syphon-error
+                                title: root.share-kind + " output";
+                                detail: !root.syphon-available ? root.share-kind + " output isn't available in this build."
+                                    : root.syphon-error != "" ? root.share-kind + " couldn't start: " + root.syphon-error
                                     : !root.syphon-on ? "Off. Other apps can't see openVJ."
-                                    : root.syphon-receiving ? "An app is receiving the composition now."
-                                    : "Other Syphon apps can pick openVJ as a source. Nothing is sent until one does.";
+                                    : root.syphon-receiving ? "Publishing. Other " + root.share-kind + " apps can pick openVJ as a source."
+                                    : "On. " + root.share-kind + " publishes as soon as a frame renders.";
                                 Switch {
                                     on: root.syphon-on;
                                     enabled: root.syphon-available;

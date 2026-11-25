@@ -6,21 +6,21 @@ The latest installers are on GitHub:
 
 | | |
 |---|---|
-| Latest release | **0.1.6** |
-| macOS | `Syntetika-Engine-0.1.6-arm64.dmg` (112 MB) — macOS 12+, Apple Silicon |
-| Windows | `Syntetika-Engine-Setup-0.1.6-x64.exe` (110 MB) — Windows 10/11 x64 |
+| Latest Windows | **0.1.7** |
+| Latest macOS | **0.1.6** (`Syntetika-Engine-0.1.6-arm64.dmg`, 112 MB — macOS 12+, Apple Silicon) |
+| Windows | `Syntetika-Engine-Setup-0.1.7-x64.exe` (110 MB) — Windows 10/11 x64 |
 
 macOS SHA-256: `bc16054b56441ba80edd52855ee4b985f535014dcbb7cb17b872a5c375b567c8`
 
-Windows SHA-256: `e88cca792ffbd0bd9e3be9898ca04437fd0e808a415062f78dabb8a43a160ee5`
+Windows SHA-256: `ab9fe309d21b6dcfe0ed6481f024e7ba4f41e33e058fd6fc51a8353ec4967267`
 
 ## Install on Windows
 
-1. Download `Syntetika-Engine-Setup-0.1.6-x64.exe` and its `.sha256` from the release.
+1. Download `Syntetika-Engine-Setup-0.1.7-x64.exe` and its `.sha256` from the release.
 2. Verify the download (PowerShell):
 
    ```powershell
-   Get-FileHash .\Syntetika-Engine-Setup-0.1.6-x64.exe -Algorithm SHA256
+   Get-FileHash .\Syntetika-Engine-Setup-0.1.7-x64.exe -Algorithm SHA256
    ```
 
 3. Run the installer. It installs **per user** (no administrator prompt) into

@@ -82,9 +82,9 @@ if (-not $SkipNative) {
 
 if (-not $SkipVisual) {
     Write-Host '==> openVJ visual engine (release)'
-    # Syphon is macOS-only; the Windows build links camera input and, with -WithLink,
-    # Ableton Link (needs a C++ compiler, which a Developer PowerShell has).
-    $features = if ($WithLink) { 'camera,link' } else { 'camera' }
+    # Syphon is macOS-only; the Windows build links camera input, Spout output and, with
+    # -WithLink, Ableton Link (needs a C++ compiler, which a Developer PowerShell has).
+    $features = if ($WithLink) { 'camera,spout,link' } else { 'camera,spout' }
     Push-Location $openvj
     try {
         cargo build --release -p openvj-app --no-default-features --features $features

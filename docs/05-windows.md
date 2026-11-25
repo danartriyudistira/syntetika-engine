@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1
 ```
 
 Skrip itu menjalankan configure + build engine native (Ninja), `cargo build --release`
-openVJ (fitur `camera`, tanpa Syphon), `dotnet build Nota.sln`, lalu menyalin
+openVJ (fitur `camera,spout`, tanpa Syphon), `dotnet build Nota.sln`, lalu menyalin
 `syntetika-visual.exe` ke folder output aplikasi supaya `VisualEngineProcess.FindBinary()`
 menemukannya.
 
@@ -44,7 +44,7 @@ cmake -G Ninja -S src/nota/src/native/nota.engine -B src/nota/src/native/nota.en
 cmake --build src/nota/src/native/nota.engine/build -j 8
 
 cd src/openvj
-cargo build --release -p openvj-app --no-default-features --features camera
+cargo build --release -p openvj-app --no-default-features --features camera,spout
 
 cd ../..
 dotnet build src/nota/Nota.sln -c Release -p:NotaSkipWebBuild=true
@@ -101,7 +101,7 @@ langkah itu dilewati dan SmartScreen tetap menampilkan "Unknown publisher".
 | Bagian | macOS | Windows |
 |---|---|---|
 | GPU | Metal | **DX12** (default), Vulkan bisa dipaksa `WGPU_BACKEND=vulkan` |
-| Syphon | ada | tidak ada (fitur `syphon` hanya untuk macOS) |
+| Berbagi frame | Syphon | **Spout** (Settings → Output, default mati; nama pengirim "Syntetika Engine") |
 | Audio tap Nota → openVJ | `mmap` POSIX | `CreateFileMapping`/`MapViewOfFile` (`AudioTap.cpp`, `nota_tap.rs`) |
 | FFmpeg | dibundel di `Helpers/` | dibundel di folder app (LGPL, `scripts/get-ffmpeg-win.ps1`) |
 | Runtime VC++ | ikut sistem | app-local (`Microsoft.VC143.CRT` dari Visual Studio) |
@@ -134,7 +134,7 @@ engine baru menyambung lagi ke bridge tanpa perlu restart app.
 
 ## Batasan yang masih ada
 
-- **Syphon** tidak tersedia (memang macOS-only); belum ada Spout/NDI sebagai pengganti.
+- **Syphon** tetap macOS-only; di Windows dipakai **Spout**. Versi pertama memakai salinan GPU→CPU per frame (beberapa ms); jalur GPU-ke-GPU dan NDI menyusul.
 - **Ableton Link** tidak dikompilasi di build Windows (fitur `link` mati, tombol LINK nonaktif).
 - **Multi-monitor, HiDPI 150–200%, proyek simpan/buka, kamera, ASIO, fullscreen** belum
   melalui QA formal di Windows (uji dilakukan di 1 layar 1920×1080 @100%).

@@ -33,7 +33,7 @@ use crate::link::Link;
 use crate::midi::{self, MidiPorts};
 use crate::nota_bridge::{Command as NotaCommand, NotaBridge};
 use crate::player::PlayerState;
-use crate::syphon_out::{self, SyphonOutput};
+use crate::share_out::{self, ShareOutput};
 use crate::{
     AudioLevels, BrowserItem, CellData, ColumnData, DeckData, Disc, DiscParam, EffectData, LayerData, Lib, LibChip,
     LibSideRow, LibTile, MainWindow, MappingWindow, MediaTile, MidiLearn, MilkPack, ModNames, OutputWindow, ParamData,
@@ -231,7 +231,7 @@ pub struct App {
     pub library: crate::library::AppLibrary,
     /// Smoothed time between frames, in seconds; thumbnails pause while it is over budget.
     frame_time: f32,
-    syphon_out: SyphonOutput,
+    share_out: ShareOutput,
     clock: Instant,
     tap: TapTempo,
     beat_clock: BeatClock,
@@ -468,11 +468,11 @@ impl App {
         let performance_mode = default_performance_mode();
         engine.set_preview_interval(performance_preview_secs(performance_mode));
         let target_fps = Rc::new(Cell::new(performance_fps(performance_mode)));
-        let syphon_out = SyphonOutput::new(engine.device(), engine.queue());
+        let share_out = ShareOutput::new(engine.device(), engine.queue());
         let mut app = Self {
             comp: Composition::default(),
             engine,
-            syphon_out,
+            share_out,
             clock: Instant::now(),
             tap: TapTempo::default(),
             beat_clock: BeatClock::new(comp.bpm),
@@ -663,7 +663,8 @@ impl App {
         ui.set_trigger_styles(names(TriggerStyle::ALL.iter().map(|m| m.name()).collect()));
         ui.set_crossfade_curves(names(CrossfadeCurve::ALL.iter().map(|c| c.name()).collect()));
         ui.set_link_available(Link::AVAILABLE);
-        ui.set_syphon_available(syphon_out::AVAILABLE);
+        ui.set_syphon_available(share_out::AVAILABLE);
+        ui.set_share_kind(share_out::KIND.into());
 
         let names = ui.global::<ModNames>();
         let sources: Vec<SharedString> = ModSource::ALL.iter().map(|s| s.name().into()).collect();
@@ -2052,8 +2053,8 @@ impl App {
             if ui_visible { self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id) } else { None };
         // Keep the Syphon server discoverable while hidden; a receiving client then forces
         // rendering again instead of leaving it with a frozen frame.
-        self.syphon_out.before_render(&mut self.engine);
-        let render_needed = ui_visible || output_visible || self.mapping_window_open || self.syphon_out.is_receiving();
+        self.share_out.before_render(&mut self.engine);
+        let render_needed = ui_visible || output_visible || self.mapping_window_open || self.share_out.is_receiving();
         if render_needed && dt as f64 > 1.5 / self.target_fps.get().max(15) as f64 {
             self.dropped_frames = self.dropped_frames.saturating_add(1);
         }
@@ -2104,12 +2105,12 @@ impl App {
             }
         }
         if render_needed {
-            self.syphon_out.after_render(&self.engine);
+            self.share_out.after_render(&self.engine);
         }
         if ui_visible {
-            ui.set_syphon_on(self.syphon_out.is_enabled());
-            ui.set_syphon_receiving(self.syphon_out.is_receiving());
-            ui.set_syphon_error(self.syphon_out.error().unwrap_or_default().into());
+            ui.set_syphon_on(self.share_out.is_enabled());
+            ui.set_syphon_receiving(self.share_out.is_receiving());
+            ui.set_syphon_error(self.share_out.error().unwrap_or_default().into());
         }
         // Event inputs (such as Acuarela's Reset) fire for one frame.
         for fx in self
@@ -3454,12 +3455,13 @@ impl App {
     }
 
     pub fn syphon_toggle(&mut self) {
-        let on = !self.syphon_out.is_enabled();
-        self.syphon_out.set_enabled(on);
+        let on = !self.share_out.is_enabled();
+        self.share_out.set_enabled(on);
+        let kind = crate::share_out::KIND;
         self.set_status(if on {
-            "Syphon output on: other apps can pick openVJ as a source"
+            format!("{kind} output on: other apps can pick openVJ as a source")
         } else {
-            "Syphon output off"
+            format!("{kind} output off")
         });
     }
 

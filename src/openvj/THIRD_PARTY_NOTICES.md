@@ -12,6 +12,14 @@ Settings → About in the app. Bundled in `Contents/Frameworks` through the
 [syphon-core](https://github.com/BlueJayLouche/syphon-rs) crate (MIT).
 <https://syphon.github.io>
 
+## Spout2 (Windows app)
+
+Spout, © 2020 Lynn Jarvis. BSD 2-Clause licence, reproduced in full in
+[LICENSES/SPOUT-BSD-2-Clause.txt](LICENSES/SPOUT-BSD-2-Clause.txt). The Windows build compiles
+the vendored Spout SDK (2.007.017) through the [spout2-rs](https://crates.io/crates/spout2-rs)
+crate (BSD-2-Clause); no Spout DLL is shipped.
+<https://spout.zeal.co>
+
 ## FFmpeg and libvpx (macOS app)
 
 The app includes `ffmpeg` and `ffprobe` from [FFmpeg](https://ffmpeg.org) 7.1.1, built by

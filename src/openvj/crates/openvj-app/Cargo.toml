@@ -17,6 +17,8 @@ link = ["dep:rusty_link"]
 camera = ["openvj-media/camera"]
 # Syphon input and output (macOS only; Syphon.framework comes with the syphon-core crate).
 syphon = ["openvj-media/syphon", "dep:syphon-core", "dep:objc2", "dep:objc2-metal"]
+# Spout output (Windows only): publishes the composition for Resolume, OBS and other apps.
+spout = ["dep:spout2-rs"]
 
 [dependencies]
 openvj-audio.workspace = true
@@ -48,6 +50,10 @@ objc2 = { version = "0.6", optional = true }
 objc2-metal = { version = "0.3", optional = true, default-features = false, features = ["std", "MTLCommandQueue", "MTLCommandBuffer"] }
 # The cursor position during a file drag from the Finder (src/finder_drop.rs).
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Spout2 sender: the vendored SDK is compiled by the crate's build script (MSVC), no DLL to ship.
+spout2-rs = { version = "0.1", default-features = false, features = ["dx"], optional = true }
 
 [build-dependencies]
 slint-build = "1.18"

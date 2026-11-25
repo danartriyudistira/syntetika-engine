@@ -6,7 +6,7 @@ Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an 
 
 ![Syntetika Engine: the Session grid and OpenVJ tab driving a monochrome ink kaleidoscope in the always-on-top visual output](docs/images/syntetika-engine.png)
 
-> Status: **alpha (0.1.6)**. macOS Apple Silicon and Windows x64. Expect rough edges.
+> Status: **alpha (0.1.7)**. macOS Apple Silicon and Windows x64. Expect rough edges.
 > What works, known limits and the roadmap: [docs/04-status-dan-rencana.md](docs/04-status-dan-rencana.md).
 
 ## Built on two excellent open-source projects
@@ -35,7 +35,7 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
   single `.syntetika` file; copy it to another Mac and open it. Legacy `.nota` folders still
   open and migrate on Save As.
 - **Media sources** — generators, ISF, images, video (bundled decode-only FFmpeg), cameras and
-  Syphon; media is copied into the project bundle so it travels with the project.
+  Syphon (Spout on Windows); media is copied into the project bundle so it travels with the project.
 - **Video clips with sound in Nota** — drop a video on an audio Session slot: its audio is
   extracted into the slot and its picture becomes the slot's visual, beat-synced to the clip.
   Trimming the audio's start/end or looping it retimes and trims the video with it, with
