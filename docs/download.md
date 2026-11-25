@@ -12,7 +12,7 @@ The latest installers are on GitHub:
 
 macOS SHA-256: `b1c10c57a5801e7bc3c6f986221b84cfa1477ac980b02fc605be5c06f2b3c58a`
 
-Windows SHA-256: `8a0800f35ff7da629f979ab1b76857973a600b4f7e103b430c47d8e340ffd2c9`
+Windows SHA-256: `1f2f2af043c85c0c6b3fc19cf83b4768d7b9da7a01742242721788fb59b4fe1c`
 
 ## Install on Windows
 

@@ -15,6 +15,7 @@ tidak ada nada menggantung di synth.
 - Pengiriman lewat **thread pump** sendiri (antrean lock-free dari audio thread), karena RtMidi
 tidak realtime-safe. Audio thread tidak pernah menunggu.
 - Route disimpan di project (`MIDI out` + channel) dan dipulihkan saat project dibuka.
+- Rilis ini juga membawa **Random MIDI parts** (bassline, pad, melody) dan perbaikan tempo realtime untuk audio warped dari upstream 0.1.8.
 
 Cara pakai singkat: buat track instrument, isi clip MIDI (atau mainkan dari keyboard), buka
 menu track → **MIDI out** → pilih port dan channel synth Anda → tekan Play.
@@ -42,6 +43,6 @@ platform (RtMidi/CoreMIDI).
 ## Checksums
 
 ```
-8a0800f35ff7da629f979ab1b76857973a600b4f7e103b430c47d8e340ffd2c9  Syntetika-Engine-Setup-0.1.8-x64.exe
+1f2f2af043c85c0c6b3fc19cf83b4768d7b9da7a01742242721788fb59b4fe1c  Syntetika-Engine-Setup-0.1.8-x64.exe
 bc16054b56441ba80edd52855ee4b985f535014dcbb7cb17b872a5c375b567c8  Syntetika-Engine-0.1.6-arm64.dmg
 ```
