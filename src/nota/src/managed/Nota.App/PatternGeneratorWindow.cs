@@ -157,21 +157,11 @@ public sealed class PatternGeneratorWindow : NotaWindow
 
         // Footer: surprise, cancel, generate.
         var surprise = new Button { Content = Loc.T("drum_pattern.surprise_me"), Classes = { "ghost" } };
-        surprise.Click += (_, _) => Surprise();
+        surprise.Click += (_, _) => { Surprise(); Generate(); };   // one-click: roll and go
         var cancel = new Button { Content = Loc.T("common.cancel"), Classes = { "ghost" } };
         cancel.Click += (_, _) => Close(null);
         var generate = new Button { Content = Loc.T("drum_pattern.generate"), Classes = { "primary" } };
-        generate.Click += (_, _) =>
-        {
-            int ai = Math.Clamp(_genreA.SelectedIndex, 0, _genres.Count - 1);
-            int bi = _genreB.SelectedIndex - 1;
-            string? bId = bi >= 0 && bi < _genres.Count && bi != ai ? _genres[bi].Id : null;
-            var opts = new PatternGeneratorOptions(
-                _genres[ai].Id, bId, _mix.Value, _alternate.IsChecked == true,
-                _density.Value, _variation.Value, _replace.IsChecked == true);
-            s_last = opts;
-            Close(opts);
-        };
+        generate.Click += (_, _) => Generate();
         var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), ColumnSpacing = 8 };
         footer.Children.Add(surprise);
         Grid.SetColumn(cancel, 2); footer.Children.Add(cancel);
@@ -187,6 +177,18 @@ public sealed class PatternGeneratorWindow : NotaWindow
         for (int i = 0; i < _genres.Count; i++)
             if (_genres[i].Id.Equals(id, StringComparison.OrdinalIgnoreCase)) return i;
         return 0;
+    }
+
+    private void Generate()
+    {
+        int ai = Math.Clamp(_genreA.SelectedIndex, 0, _genres.Count - 1);
+        int bi = _genreB.SelectedIndex - 1;
+        string? bId = bi >= 0 && bi < _genres.Count && bi != ai ? _genres[bi].Id : null;
+        var opts = new PatternGeneratorOptions(
+            _genres[ai].Id, bId, _mix.Value, _alternate.IsChecked == true,
+            _density.Value, _variation.Value, _replace.IsChecked == true);
+        s_last = opts;
+        Close(opts);
     }
 
     private void UpdateMixEnabled()
