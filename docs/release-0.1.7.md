@@ -1,4 +1,4 @@
-# Syntetika Engine 0.1.7 — Windows x64 (Spout)
+# Syntetika Engine 0.1.7 — Windows x64 (Spout) & macOS
 
 Windows kini bisa mengirim gambar ke aplikasi lain lewat **Spout** — penerima seperti
 Resolume, OBS (plugin Spout), TouchDesigner, vMix, dan Notch melihat **Syntetika Engine**
@@ -32,13 +32,20 @@ Persyaratan: Windows 10/11 x64. Tidak perlu .NET/VC++/FFmpeg terpasang.
 
 ## macOS
 
-Build macOS terbaru tetap **0.1.6** (`Syntetika-Engine-0.1.6-arm64.dmg`); rilis ini berisi
-aset Windows. Syphon tetap menjadi jalur berbagi frame di macOS.
+- **Tempo realtime untuk audio warped** — mengganti BPM tidak lagi membangun ulang cache
+  stretch di UI thread. Cache yang masih cocok tempo dipakai; setelah tempo berubah, clip
+  warped diputar lewat `ClipWarpStream` live yang membaca tempo tiap block. Ini yang membuat
+  BPM drag di project stem tidak freeze lagi. Detail dan batasan ada di `CHANGES.md`.
+- Build macOS dibangun dari sumber 0.1.7 yang sama; Spout adalah fitur Windows-only, jadi
+  macOS tetap memakai Syphon.
+- Install: unduh `Syntetika-Engine-0.1.7-arm64.dmg`, buka, seret **Syntetika Engine** ke
+  **Applications**. Build belum dinotarisasi: klik kanan app → **Open**, atau izinkan di
+  System Settings → Privacy & Security → **Open Anyway** (sekali). Persyaratan: macOS 12+,
+  Apple Silicon.
 
 ## Checksums
 
 ```
-e88cca792ffbd0bd9e3be9898ca04437fd0e808a415062f78dabb8a43a160ee5  Syntetika-Engine-Setup-0.1.6-x64.exe (build sebelumnya)
 f915885a2ce21f4796f7ca5009282dc163bee37a19180db09159ba0fcb256435  Syntetika-Engine-Setup-0.1.7-x64.exe
-bc16054b56441ba80edd52855ee4b985f535014dcbb7cb17b872a5c375b567c8  Syntetika-Engine-0.1.6-arm64.dmg
+b1c10c57a5801e7bc3c6f986221b84cfa1477ac980b02fc605be5c06f2b3c58a  Syntetika-Engine-0.1.7-arm64.dmg
 ```

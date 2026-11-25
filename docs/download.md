@@ -7,10 +7,10 @@ The latest installers are on GitHub:
 | | |
 |---|---|
 | Latest Windows | **0.1.7** |
-| Latest macOS | **0.1.6** (`Syntetika-Engine-0.1.6-arm64.dmg`, 112 MB — macOS 12+, Apple Silicon) |
+| Latest macOS | **0.1.7** (`Syntetika-Engine-0.1.7-arm64.dmg`, 112 MB — macOS 12+, Apple Silicon) |
 | Windows | `Syntetika-Engine-Setup-0.1.7-x64.exe` (110 MB) — Windows 10/11 x64 |
 
-macOS SHA-256: `bc16054b56441ba80edd52855ee4b985f535014dcbb7cb17b872a5c375b567c8`
+macOS SHA-256: `b1c10c57a5801e7bc3c6f986221b84cfa1477ac980b02fc605be5c06f2b3c58a`
 
 Windows SHA-256: `f915885a2ce21f4796f7ca5009282dc163bee37a19180db09159ba0fcb256435`
 
@@ -54,7 +54,7 @@ settings in `%APPDATA%\Syntetika Engine` are kept.
 2. Verify the download:
 
    ```bash
-   shasum -a 256 Syntetika-Engine-0.1.6-arm64.dmg
+   shasum -a 256 Syntetika-Engine-0.1.7-arm64.dmg
    ```
 
 3. Open the image and drag **Syntetika Engine** onto **Applications**.
