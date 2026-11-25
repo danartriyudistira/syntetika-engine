@@ -806,7 +806,8 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Tulis**: pola 16th; grid otomatis pindah ke 1/16. Replace = hapus note pad lalu tulis pola
   baru dalam **satu undo step**; fill = hanya mengisi step kosong. **Generate tidak menutup
   dialog** — status di dialog menunjukkan hasil, bisa roll lagi, dan **Close** menutup manual.
-  Dialog punya **Surprise me** (acak + langsung generate).
+  Jendela non-modal, jadi transport bisa diputar sambil mendengarkan hasil; dialog ikut
+  tertutup kalau tab/clip berganti. Dialog punya **Surprise me** (acak + langsung generate).
 - **Bukti**: mode `--drum-genre` lulus 27 cek: mapping nama/GM/fallback, house four-on-floor +
   backbeat, trap 0/6/10, reggaeton dembow, jazz comp, mix 0/1, alternate bars, 3/4, clip < 1 bar,
   density/variation, dan semua genre (tidak ada pitch asing/duplikat/di luar clip).
