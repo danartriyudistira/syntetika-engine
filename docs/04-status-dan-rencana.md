@@ -814,6 +814,25 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Belum**: maksimal dua genre, belum ada triplet/swing grid di generator, belum ada preview
   audio, dan belum ada tool MCP `generate_drum_pattern` (note tetap bisa diedit lewat tool MIDI).
 
+## 7ag. Rilis 0.1.5 (25 Nov)
+
+- Produk **0.1.5**; Nota 0.60.4, openVJ 0.1.0. Isi: project satu file `.syntetika`, perbaikan
+  download model AI (runtime NuGet), dialog Audio to MIDI (grid/strength/shortest/voices),
+  pembersihan note hasil basic-pitch, dan generator **Random pattern by genre** di tab Pattern.
+- **Container**: `.syntetika` = ZIP berisi bundle project lengkap (project, sample, plugin state,
+  visuals/media, history) + manifest; open mengekstrak ke working folder, Save mem-pack atomik,
+  Save As legacy memigrasi dan menyisakan folder lama sebagai backup.
+- **AI model**: URL ONNX Runtime lama 404; runtime sekarang dari `Microsoft.ML.OnnxRuntime`
+  1.23.2 (SHA/ukuran dipin). Uji live: runtime + basic-pitch terunduh dan A4 dikenali.
+- **Audio → MIDI**: dialog timing (1/32–1/4 straight/triplet, quantize ends) + density
+  (strength 35%, shortest 1/32, max voices 4); pada stem asli 572→386 note (vocals),
+  909→691 (other), 100% start di grid 1/16 setelah quantize.
+- **Drum random**: 20 genre, mix dua genre (blend/alternate bars), density/variation, replace
+  atau fill, satu undo; window non-modal tetap terbuka setelah Generate dan ditutup manual.
+  27 cek `--drum-genre` lulus.
+- **DMG**: `Syntetika-Engine-0.1.5-arm64.dmg` 112 MB, ad-hoc signed.
+  SHA-256 `81083b6799be00b828c8a4bf40cddd334578752523971657226cad1ebf19d55c`.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

@@ -6,7 +6,7 @@ diffs are in `patches/`.
 ## Branding and packaging
 
 - Product is **Syntetika Engine** (`studio.syntetika.engine`); the app menu, window title,
-  Welcome, Splash and About use it. Product version **0.1.4** now drives
+  Welcome, Splash and About use it. Product version **0.1.5** now drives
   `CFBundleShortVersionString`/`CFBundleGetInfoString` (Nota's version stays the upstream base).
 - Notarization is **deferred**: releases use an ad-hoc DMG with a one-time "Open Anyway".
   `scripts/notarize-mac.sh` + `docs/release.md` remain ready for a future Developer ID.
