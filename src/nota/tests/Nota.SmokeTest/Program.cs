@@ -1166,6 +1166,15 @@ if (args.Length >= 1 && args[0] == "--remote")
     return failures == 0 ? 0 : 1;
 }
 
+// Random drum patterns alone: `--drum-genre`. Also part of the full run.
+if (args.Length >= 1 && args[0] == "--drum-genre")
+{
+    Console.WriteLine("-- drums: genre patterns --");
+    foreach (var (ok, label) in DrumPatternTests.Run()) Check(ok, label);
+    Console.WriteLine(failures == 0 ? "DRUM GENRE PASSED" : $"DRUM GENRE FAILED ({failures})");
+    return failures == 0 ? 0 : 1;
+}
+
 // Audio→MIDI note hygiene alone: `--transcription`. Also part of the full run.
 if (args.Length >= 1 && args[0] == "--transcription")
 {
@@ -16272,6 +16281,8 @@ foreach (var (ok, label) in ClipEditorTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: content-addressed bundle --");
 foreach (var (ok, label) in BundleContentTests.Run()) Check(ok, label);
 foreach (var (ok, label) in LanguageProjectTests.Run()) Check(ok, label);
+Console.WriteLine("-- drums: genre patterns --");
+foreach (var (ok, label) in DrumPatternTests.Run()) Check(ok, label);
 Console.WriteLine("-- ai: transcription notes --");
 foreach (var (ok, label) in TranscriptionTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: container --");

@@ -2278,6 +2278,24 @@ Nota.Application/Instruments/SamplerModel.cs	the key relative to the root note.\
 Nota.Application/Instruments/ScopeTrace.cs	$"{bars} bars"	# data: device parameter and value names, scale names (FR-004); instrument tool text for MCP
 Nota.Application/Instruments/ScopeTrace.cs	1 bar	# data: time-division value label
 Nota.Application/Midi/MidiFileReader.cs	Drums	# data: track name taken into the project
+Nota.Application/Midi/DrumPatternGenerator.cs	House	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Techno	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Tech House	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Deep House	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Trap	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Drill	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Drum & Bass	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Breakbeat	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Disco	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Funk	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Rock	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Pop	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Reggaeton	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Latin	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Afrobeat	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Amapiano	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	Jazz	# data: genre name in the random drum-pattern menu
+Nota.Application/Midi/DrumPatternGenerator.cs	UK Garage	# data: genre name in the random drum-pattern menu
 Nota.Application/Midi/MidiGenerators.cs	 deg	# data: unit of a parameter value
 Nota.Application/Midi/MidiGenerators.cs	 oct	# data: unit of a parameter value
 Nota.Application/Midi/MidiScales.cs	Chromatic	# data: device parameter and value names, scale names (FR-004); instrument tool text for MCP

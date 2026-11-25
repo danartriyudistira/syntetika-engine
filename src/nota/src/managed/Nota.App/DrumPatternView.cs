@@ -14,6 +14,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -21,6 +22,8 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Nota.Application;
+using Nota.Application.Midi;
+using Nota.Presentation;
 using static Nota.App.DeviceCardKit;
 using Nota.Application.Localization;
 
@@ -76,6 +79,9 @@ public sealed class DrumPatternView : UserControl
 
     /// <summary>The clip was rewritten — refresh the arrangement and any open piano roll.</summary>
     public event Action? Changed;
+
+    /// <summary>A message for the window's status line (a generated pattern, an empty role map).</summary>
+    public event Action<string>? Status;
 
     public int TrackId { get; }
 
@@ -226,6 +232,75 @@ public sealed class DrumPatternView : UserControl
         if (_notes.Count != before) Commit();
     }
 
+    // ---- random pattern ---------------------------------------------------
+
+    // Genre generation writes notes into the same clip as the grid, so it is one ordinary
+    // edit. The dialogue chooses the genre(s) and how busy/varied the result is; this view
+    // re-scans the pads, writes the notes and commits once (one undo step).
+    private async void OnRandom()
+    {
+        var before = DrumPads.Scan(_e, TrackId).ConvertAll(p => new DrumVoice(p.Note, p.Name, p.Chain));
+        var roles = DrumPatternGenerator.MapRoles(before);
+        if (roles.Count == 0)
+        {
+            Status?.Invoke(Loc.T("drum_pattern.no_matching_pads"));
+            return;
+        }
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        var picked = await new PatternGeneratorWindow(DrumPatternGenerator.Genres,
+                DrumPatternGenerator.RoleSummary(before))
+            .ShowDialog<PatternGeneratorOptions?>(owner);
+        if (picked is null) return;
+
+        // The genre sketches are 16th-note patterns; show them whole. Reload first so a pad
+        // or clip change made while the dialog was open is not overwritten with stale notes.
+        if (_res != 4) { _res = _resPersist = 4; _winStart = 0; Rebuild(); }
+        else Reload();
+
+        // Pads may have changed while the dialog was open; generate on the live set.
+        var voices = DrumPads.Scan(_e, TrackId).ConvertAll(p => new DrumVoice(p.Note, p.Name, p.Chain));
+        var generated = DrumPatternGenerator.Generate(voices, _getLength(), BeatsPerBar,
+            new DrumPatternOptions(picked.GenreA, picked.GenreB, picked.Mix, picked.AlternateBars,
+                                   picked.Density, picked.Variation), Random.Shared.Next());
+        if (generated.Count == 0)
+        {
+            Status?.Invoke(Loc.T("drum_pattern.no_notes_generated"));
+            return;
+        }
+
+        int added = 0;
+        if (picked.ReplaceExisting)
+        {
+            for (int i = _notes.Count - 1; i >= 0; i--)
+                if (_rowOfPitch.ContainsKey(_notes[i].Pitch)) _notes.RemoveAt(i);
+            _notes.AddRange(generated);
+            added = generated.Count;
+        }
+        else
+        {
+            // Fill mode: a step that already has that pad stays exactly as the user left it.
+            var occupied = new HashSet<(int Pitch, int Step)>();
+            foreach (var n in _notes) occupied.Add((n.Pitch, StepOf(n.StartBeat)));
+            foreach (var n in generated)
+                if (occupied.Add((n.Pitch, StepOf(n.StartBeat))))
+                {
+                    _notes.Add(n);
+                    added++;
+                }
+        }
+        if (added == 0)
+        {
+            Status?.Invoke(Loc.T("drum_pattern.nothing_added"));
+            return;
+        }
+
+        Commit();
+        string label = picked.GenreB is { Length: > 0 }
+            ? $"{DrumPatternGenerator.NameOf(picked.GenreA)} + {DrumPatternGenerator.NameOf(picked.GenreB)}"
+            : DrumPatternGenerator.NameOf(picked.GenreA);
+        Status?.Invoke(Loc.F("drum_pattern.generated_notes", added, label));
+    }
+
     // ---- build ------------------------------------------------------------
 
     // A held pad's cell is thrown away by a rebuild (a new meter, pads or length) before its
@@ -345,6 +420,7 @@ public sealed class DrumPatternView : UserControl
             right.Children.Add(Cap(Loc.T("drum_pattern.bars")));
             right.Children.Add(Seg(names, _winStart / MaxCells, p => { _winStart = p * MaxCells; Rebuild(); }));
         }
+        right.Children.Add(Chip(Loc.T("drum_pattern.random"), OnRandom));
         right.Children.Add(Chip(Loc.T("common.clear"), ClearPattern));
 
         var dp = new DockPanel { LastChildFill = false, Margin = new Thickness(12, 0), Children = { left, right } };

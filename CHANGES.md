@@ -23,6 +23,17 @@ diffs are in `patches/`.
 
 ## Nota fork
 
+- **Random drum patterns by genre**: Pattern ▸ **Random…** fills the open Drum Rack clip
+  from 20 genre sketches (House, Techno, Hip-Hop, Trap, Drum & Bass, Breakbeat, Disco, Funk,
+  Rock, Pop, Reggaeton, Latin, Afrobeat, Amapiano, Jazz, UK Garage, Lo-Fi and more). Pad roles
+  come from their names and the GM drum map; a kit with unrelated names still gets Kick,
+  Snare, Closed Hat and Open Hat from its lowest pads. Choose a second genre and either blend
+  it step by step or alternate bars, then set **Density** (signature hits only → busy) and
+  **Variation** (one repeated bar → re-rolled bars and four-bar fills). **Replace** overwrites
+  the pad notes in one undo step; off, it only fills empty steps. The grid switches to 1/16,
+  and open hats replace closed hats, ghost snares and phrase crashes are built in. Tests cover
+  role mapping, the signature of each genre, mixes, alternate bars, odd meters and every genre.
+
 - **One-file projects (`.syntetika`)**: a project can be a single ZIP container holding the
   bundle Nota already wrote — `project.json`, sidecars, samples, plugin states, visuals/media
   and the version history — plus a small `.package/manifest.json`. Opening extracts it to a

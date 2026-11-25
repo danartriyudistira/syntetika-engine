@@ -450,6 +450,7 @@ public partial class MainWindow
         // A step written here is a note written to the clip: show it on the timeline and in
         // the piano roll straight away, the same way a roll edit shows up in the grid.
         view.Changed += () => { Timeline.Refresh(rebuildHeaders: false); ReloadEditorNotes(); };
+        view.Status += msg => { if (_vm is not null) _vm.StatusText = msg; };
         _patternView = view;
         _patternTrackId = trackId;
         _patternClipIndex = clipIndex;

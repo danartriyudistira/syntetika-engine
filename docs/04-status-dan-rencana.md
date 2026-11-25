@@ -790,6 +790,27 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Belum**: belum ada konversi batch semua stem sekaligus, belum ada auto key/scale, dan
   fallback DSP (tanpa model) tidak berubah.
 
+## 7af. Random pattern per genre (25 Nov)
+
+- **Fitur**: tombol **Random…** di header tab Pattern membuka dialog genre. 20 sketsa genre:
+  House, Techno, Tech House, Deep House, Hip-Hop, Trap, Drill, Drum & Bass, Breakbeat, Disco,
+  Funk, Rock, Pop, Reggaeton, Latin, Afrobeat, Amapiano, Jazz, UK Garage, Lo-Fi.
+- **Role**: dari nama pad (Kick/Bass Drum/808, Snare, Clap, Rim, Closed/Open Hat, Tom, Perc,
+  Crash, plus singkatan BD/SD/CP/CH/OH) lalu GM drum map; kit dengan nama asing memakai pad
+  terendah sebagai Kick, Snare, Closed Hat, Open Hat.
+- **Mix**: dua genre; **Mix** 0–100% memadukan probabilitas per step, atau **Alternate bars**
+  memakai genre kedua di bar ganjil. **Density** menipiskan hit opsional; **Variation**
+  me-roll ulang bar, mengubah velocity, dan menambah fill tom/snare tiap 4 bar. Crash di awal
+  clip dan tiap 8 bar; open hat menggantikan closed hat pada step yang sama; ghost snare
+  velocity rendah.
+- **Tulis**: pola 16th; grid otomatis pindah ke 1/16. Replace = hapus note pad lalu tulis pola
+  baru dalam **satu undo step**; fill = hanya mengisi step kosong. Dialog punya **Surprise me**.
+- **Bukti**: mode `--drum-genre` lulus 27 cek: mapping nama/GM/fallback, house four-on-floor +
+  backbeat, trap 0/6/10, reggaeton dembow, jazz comp, mix 0/1, alternate bars, 3/4, clip < 1 bar,
+  density/variation, dan semua genre (tidak ada pitch asing/duplikat/di luar clip).
+- **Belum**: maksimal dua genre, belum ada triplet/swing grid di generator, belum ada preview
+  audio, dan belum ada tool MCP `generate_drum_pattern` (note tetap bisa diedit lewat tool MIDI).
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |
