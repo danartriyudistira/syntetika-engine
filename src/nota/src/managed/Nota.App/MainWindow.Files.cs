@@ -357,6 +357,13 @@ public partial class MainWindow
     {
         if (Program.StartupProject is not { Length: > 0 } path) return;
         Program.StartupProject = null;
+        OpenProjectPath(path);
+    }
+
+    /// <summary>Opens a path from the shell, a second launch or a file association. A
+    /// `.syntetika` file is a container; a legacy project is a folder. A bad path is ignored.</summary>
+    private void OpenProjectPath(string path)
+    {
         if (System.IO.File.Exists(path))
         {
             try { OpenContainerProject(path); } catch { /* a bad path must not stop startup */ }

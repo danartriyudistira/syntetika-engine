@@ -44,10 +44,7 @@ public partial class MainWindow
             string path = File.ReadAllText(file).Trim();
             File.Delete(file);
             if (path.Length == 0) return;
-            Dispatcher.UIThread.Post(() =>
-            {
-                try { OpenProject(path); } catch { /* a stale path must not break the app */ }
-            });
+            Dispatcher.UIThread.Post(() => OpenProjectPath(path));
         }
         catch { /* a half-written or held file is retried on the next event */ }
     }
