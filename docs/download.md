@@ -12,15 +12,15 @@ The latest installers are on GitHub:
 
 macOS SHA-256: `6f307c5e5f9007c950c0e4bede490d6c983577ff8ed76a44a81b397955b82143`
 
-Windows SHA-256: `e108e3a7265922ecb8cef97e759e2844d12d065abb57ac97d7d1afad7f06d8f5`
+Windows SHA-256: `e88cca792ffbd0bd9e3be9898ca04437fd0e808a415062f78dabb8a43a160ee5`
 
 ## Install on Windows
 
-1. Download `Syntetika-Engine-Setup-0.1.4-x64.exe` and its `.sha256` from the release.
+1. Download `Syntetika-Engine-Setup-0.1.6-x64.exe` and its `.sha256` from the release.
 2. Verify the download (PowerShell):
 
    ```powershell
-   Get-FileHash .\Syntetika-Engine-Setup-0.1.4-x64.exe -Algorithm SHA256
+   Get-FileHash .\Syntetika-Engine-Setup-0.1.6-x64.exe -Algorithm SHA256
    ```
 
 3. Run the installer. It installs **per user** (no administrator prompt) into

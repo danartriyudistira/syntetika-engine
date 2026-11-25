@@ -52,7 +52,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
-Name: "folderopen"; Description: "Add ""Open with {#AppName}"" to .nota folders"; GroupDescription: "Explorer:"
+Name: "associate"; Description: "Open .syntetika projects with {#AppName}"; GroupDescription: "Explorer:"
+Name: "folderopen"; Description: "Add ""Open with {#AppName}"" to legacy .nota folders"; GroupDescription: "Explorer:"
 
 [Files]
 Source: "{#PubDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -62,10 +63,17 @@ Name: "{autoprograms}\Syntetika Engine"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\Syntetika Engine"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
-; Nota projects are folders ending in .nota, and Windows opens a folder in Explorer no matter
-; what the extension is associated with. So instead of a (useless) .nota file association, the
-; folder's context menu gets "Open with Syntetika Engine", shown only for *.nota folders
-; (AppliesTo, Windows 10 1703+). HKA follows the install mode: HKCU or HKLM.
+; A project is one file (`.syntetika`, 0.1.6) or a legacy `.nota` folder. The file gets a real
+; association; the folder gets a context entry, because Windows always opens a folder in
+; Explorer whatever its extension is. HKA follows the install mode: HKCU or HKLM.
+Root: HKA; Subkey: "Software\Classes\.syntetika"; ValueType: string; ValueName: ""; ValueData: "SyntetikaEngine.Project"; Flags: uninsdeletevalue; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\SyntetikaEngine.Project"; ValueType: string; ValueName: ""; ValueData: "Syntetika Engine Project"; Flags: uninsdeletekey; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\SyntetikaEngine.Project"; ValueType: string; ValueName: "FriendlyTypeName"; ValueData: "Syntetika Engine Project"; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\SyntetikaEngine.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\SyntetikaEngine.Project\shell\open"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "{#AppName}"; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\SyntetikaEngine.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: associate
+Root: HKA; Subkey: "Software\Classes\.syntetika\OpenWithProgids"; ValueType: string; ValueName: "SyntetikaEngine.Project"; ValueData: ""; Flags: uninsdeletevalue; Tasks: associate
+
 Root: HKA; Subkey: "Software\Classes\Directory\shell\SyntetikaEngine"; ValueType: string; ValueName: ""; ValueData: "Open with {#AppName}"; Flags: uninsdeletekey; Tasks: folderopen
 Root: HKA; Subkey: "Software\Classes\Directory\shell\SyntetikaEngine"; ValueType: string; ValueName: "AppliesTo"; ValueData: "System.FileName:~=""*.nota"""; Tasks: folderopen
 Root: HKA; Subkey: "Software\Classes\Directory\shell\SyntetikaEngine"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: folderopen
