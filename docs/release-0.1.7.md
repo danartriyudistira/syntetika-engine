@@ -40,5 +40,5 @@ aset Windows. Syphon tetap menjadi jalur berbagi frame di macOS.
 ```
 e88cca792ffbd0bd9e3be9898ca04437fd0e808a415062f78dabb8a43a160ee5  Syntetika-Engine-Setup-0.1.6-x64.exe (build sebelumnya)
 f915885a2ce21f4796f7ca5009282dc163bee37a19180db09159ba0fcb256435  Syntetika-Engine-Setup-0.1.7-x64.exe
-6f307c5e5f9007c950c0e4bede490d6c983577ff8ed76a44a81b397955b82143  Syntetika-Engine-0.1.6-arm64.dmg
+bc16054b56441ba80edd52855ee4b985f535014dcbb7cb17b872a5c375b567c8  Syntetika-Engine-0.1.6-arm64.dmg
 ```
