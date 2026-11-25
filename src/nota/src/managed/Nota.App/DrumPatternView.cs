@@ -75,6 +75,7 @@ public sealed class DrumPatternView : UserControl
     private Border[] _nameCells = Array.Empty<Border>();
     private TextBlock[] _nameLabels = Array.Empty<TextBlock>();
     private TextBlock? _velLabel;
+    private PatternGeneratorWindow? _generator;
     private readonly List<Grid> _stepGrids = new();   // ruler + rows + velocity lane, all one width
 
     /// <summary>The clip was rewritten — refresh the arrangement and any open piano roll.</summary>
@@ -237,7 +238,7 @@ public sealed class DrumPatternView : UserControl
     // Genre generation writes notes into the same clip as the grid, so it is one ordinary
     // edit. The dialogue chooses the genre(s) and how busy/varied the result is; this view
     // re-scans the pads, writes the notes and commits once (one undo step).
-    private async void OnRandom()
+    private void OnRandom()
     {
         var before = DrumPads.Scan(_e, TrackId).ConvertAll(p => new DrumVoice(p.Note, p.Name, p.Chain));
         var roles = DrumPatternGenerator.MapRoles(before);
@@ -247,12 +248,31 @@ public sealed class DrumPatternView : UserControl
             return;
         }
         if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        if (_generator is { IsVisible: true } open)
+        {
+            open.Activate();
+            return;
+        }
+
         var dialog = new PatternGeneratorWindow(DrumPatternGenerator.Genres,
             DrumPatternGenerator.RoleSummary(before));
-        // Generate writes into the clip and reports back, but leaves the dialog open: the
-        // user rolls again or closes it with Close. Each write is its own undo step.
+        // Generate writes into the clip and reports back, but leaves the window open: the
+        // user rolls again, plays the transport, and closes it with Close. Each write is its
+        // own undo step. A non-modal tool window must not outlive the grid it writes into.
         dialog.GenerateRequested = ApplyGeneratedPattern;
-        await dialog.ShowDialog(owner);
+        void Detached(object? _, VisualTreeAttachmentEventArgs __)
+        {
+            DetachedFromVisualTree -= Detached;
+            if (dialog.IsVisible) dialog.Close();
+        }
+        DetachedFromVisualTree += Detached;
+        dialog.Closed += (_, _) =>
+        {
+            DetachedFromVisualTree -= Detached;
+            if (ReferenceEquals(_generator, dialog)) _generator = null;
+        };
+        _generator = dialog;
+        dialog.Show(owner);
     }
 
     private string ApplyGeneratedPattern(PatternGeneratorOptions picked)
