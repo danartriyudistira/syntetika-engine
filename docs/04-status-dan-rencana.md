@@ -876,6 +876,27 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Perbaikan lintas platform**: instans kedua membuka `.syntetika` lewat container (bukan
   folder), jendela yang berjalan dinaikkan, dan file asosiasi dibuka saat window siap.
 
+## 7aj. Tempo realtime untuk audio warped (25 Nov)
+
+- **Masalah**: BPM field memanggil `SetBpm` per pointer move; `setBpm` menjalankan
+  `reconfigureAllWarpStreams`, yang meng-clone track dan membangun ulang cache stretch setiap
+  clip warped secara sinkron di message/UI thread. Project stem 4 track bisa freeze detik per
+  perubahan; automation lane sudah defer, BPM field tidak.
+- **Solusi**: `setBpm` tidak rebuild cache lagi. Cache yang masih cocok tempo dipakai (jalur
+  sample-exact); setelah tempo berubah, playback memakai `ClipWarpStream` live yang membaca
+  `samplesPerBeat` tiap block. `ensureLiveWarps` menyiapkan/memisahkan voice per clip/track;
+  split/trim dalam satu track boleh berbagi stream agar seamless, duplicate track/clip dapat
+  voice sendiri. Perubahan sample rate device tetap reconfigure voice.
+- **UI**: refresh arrangement saat BPM berubah di-throttle ~30 Hz; perubahan BPM tidak lagi
+  memicu rebuild cache.
+- **Bukti**: `--tempo-live` — 4 track warped, 4 perubahan BPM (max <50 ms; hasil uji 0 ms),
+  cache lama sengaja stale, audio tetap berbunyi, duplicate track aman. Suite streaming warp,
+  split, range cut, 1/8, dan full smoke tidak regresi (kegagalan hanya phone/web build yang
+  sengaja di-skip).
+- **Belum**: tempo map/automation lane masih memakai cache `tempoWarp` (bukan live); export
+  dan device-rate change tetap membangun cache. CPU live untuk banyak stem belum diukur
+  di app; uji dengan 4–8 stem.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

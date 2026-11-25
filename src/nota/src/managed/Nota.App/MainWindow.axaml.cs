@@ -867,9 +867,16 @@ public partial class MainWindow : Window
     /// data + lanes, headers untouched) after the current batch.</summary>
     private void RequestTempoRefresh()
     {
+        // At most ~30 refreshes/s: a BPM drag raises one change per pointer move, and a
+        // full arrangement refresh on every move is its own cost. The last change keeps
+        // a final refresh scheduled, so releasing lands on the exact value.
         if (_tempoRefreshPosted) return;
         _tempoRefreshPosted = true;
-        Dispatcher.UIThread.Post(() => { _tempoRefreshPosted = false; Timeline.Refresh(rebuildHeaders: false); }, DispatcherPriority.Background);
+        DispatcherTimer.RunOnce(() =>
+        {
+            _tempoRefreshPosted = false;
+            Timeline.Refresh(rebuildHeaders: false);
+        }, TimeSpan.FromMilliseconds(33));
     }
 
     private void OnAddInstrumentClicked(object? sender, RoutedEventArgs e) => AddTrack(NewTrackKind.Instrument);

@@ -21,6 +21,7 @@
 #include <map>
 #include <set>
 #include <type_traits>
+#include <unordered_set>
 
 namespace nota {
 
@@ -359,8 +360,92 @@ void clampWarpPlay(AudioClip& c) {
 // project with hundreds of warped clips opens at once instead of freezing for ~a minute.
 // Editor edits defer too: the clip keeps its now-stale cache (played clipped to the new
 // length) until the background build replaces it, instead of the UI freezing on a long file.
+void Engine::configureLiveWarp(AudioClip& c, double devSR, bool force) {
+    if (!c.warpEnabled || !c.sample || devSR <= 0.0 || c.sample->sourceSampleRate <= 0.0) {
+        c.liveWarp.reset();
+        c.liveWarpKey = {};
+        return;
+    }
+    AudioClip::LiveWarpKey key;
+    key.sample = c.sample.get();
+    key.mode = c.warpMode;
+    key.pitch = c.pitchSemitones;
+    key.srcSR = c.sample->sourceSampleRate;
+    key.devSR = devSR;
+    key.reverse = c.reversed;
+    if (!force && c.liveWarp && c.liveWarpKey == key) return;
+    auto stream = std::make_shared<ClipWarpStream>();
+    stream->configure(c.sample->channels, c.warpMode, c.pitchSemitones, c.sample->sourceSampleRate, devSR,
+                      c.reversed);
+    c.liveWarp = std::move(stream);
+    c.liveWarpKey = key;
+}
+
+// A graph can hold two clips that play at once and share one AudioClip copy's stream
+// (duplicate track / clip, a session copy, a split). A ClipWarpStream carries playback
+// state, so each simultaneously playing clip needs its own. Unchanged shared tracks are
+// left alone; if one of those needs work it is cloned first, never mutated under the
+// audio thread.
+void Engine::ensureLiveWarps(Graph& g) {
+    const double devSR = transport_.sampleRate();
+    if (devSR <= 0.0) return;
+    auto key = [&](const AudioClip& c) {
+        AudioClip::LiveWarpKey k;
+        k.sample = c.sample.get();
+        k.mode = c.warpMode;
+        k.pitch = c.pitchSemitones;
+        k.srcSR = c.sample ? c.sample->sourceSampleRate : 0.0;
+        k.devSR = devSR;
+        k.reverse = c.reversed;
+        return k;
+    };
+    auto shared = [&](const Track& t) {
+        if (!authoring_) return false;
+        for (auto& old : authoring_->tracks) if (old.get() == &t) return true;
+        return authoring_->masterTrack.get() == &t;
+    };
+    std::unordered_set<ClipWarpStream*> seen;
+    auto each = [&](Track& t, auto&& fn) {
+        for (auto& c : t.clips) fn(c);
+        for (auto& s : t.sessionSlots) if (s.hasClip) fn(s.audio);
+    };
+    auto needs = [&](Track& t) {
+        bool need = false;
+        each(t, [&](AudioClip& c) {
+            if (!c.warpEnabled || !c.sample) return;
+            // A clip inside one track may share its voice: arrangement pieces never overlap
+            // (a split/trim keeps a continuous stream, which is also the seamless choice).
+            // Across tracks they can play together, so a repeated pointer there is detached.
+            if (!c.liveWarp || !(c.liveWarpKey == key(c)) || seen.count(c.liveWarp.get())) need = true;
+        });
+        return need;
+    };
+    auto fix = [&](Track& t) {
+        each(t, [&](AudioClip& c) {
+            if (!c.warpEnabled || !c.sample) return;
+            configureLiveWarp(c, devSR);
+            if (c.liveWarp && !seen.insert(c.liveWarp.get()).second) {
+                configureLiveWarp(c, devSR, true);
+                if (c.liveWarp) seen.insert(c.liveWarp.get());
+            }
+        });
+    };
+    for (auto& t : g.tracks) {
+        if (!t) continue;
+        if (needs(*t)) {
+            if (shared(*t)) t = cloneTrack(*t);
+            fix(*t);
+        } else {
+            each(*t, [&](AudioClip& c) {
+                if (c.warpEnabled && c.sample && c.liveWarp) seen.insert(c.liveWarp.get());
+            });
+        }
+    }
+}
+
 void Engine::configureClipWarp(AudioClip& c, double spb, double devSR) {
     if (c.tempoWarp) c.tempoWarp.reset();
+    configureLiveWarp(c, devSR);
     if (!c.warpEnabled) {
         c.warpCache = nullptr;
         return;

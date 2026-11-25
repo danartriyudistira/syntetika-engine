@@ -50,9 +50,27 @@ struct ClipAdsr {
     float gainAt(double t, double len) const;
 };
 
-// A placed audio clip. `startBeat` is the musical anchor on the timeline; the
-// audio itself plays at its natural rate (no time-stretch in MVP — AR/Non-Goal).
+class ClipWarpStream; // realtime stretcher for tempo changes (WarpStream.h)
+
+// A placed audio clip. `startBeat` is the musical anchor on the timeline.
 struct AudioClip {
+    // Realtime warp voice: configured on the message thread, rendered on the audio
+    // thread. It reads the live tempo, so a BPM change never rebuilds a cache. Shared
+    // with graph snapshots that keep this clip unchanged; duplicate clips get their own
+    // voice (Engine::ensureLiveWarps) so two voices never interleave one stretcher.
+    struct LiveWarpKey {
+        const SampleBuffer* sample = nullptr;
+        WarpMode mode = WarpMode::Complex;
+        float pitch = 0.0f;
+        double srcSR = 0.0, devSR = 0.0;
+        bool reverse = false;
+        bool operator==(const LiveWarpKey& o) const {
+            return sample == o.sample && mode == o.mode && pitch == o.pitch && srcSR == o.srcSR &&
+                   devSR == o.devSR && reverse == o.reverse;
+        }
+    };
+    std::shared_ptr<ClipWarpStream> liveWarp;
+    LiveWarpKey liveWarpKey;
     std::shared_ptr<SampleBuffer> sample;
     std::string name;                // user-facing clip name (empty = default)
     double startBeat = 0.0;          // timeline position (beats)

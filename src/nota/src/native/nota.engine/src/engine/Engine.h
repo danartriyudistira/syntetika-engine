@@ -1751,7 +1751,14 @@ class Engine {
     void configureTempoWarp(AudioClip& c, const std::shared_ptr<const TempoMap>& map, double devSR, bool force = false);
     const AudioClip* warpBuildTargetClip() const;             // in-progress build target, revalidated (null = abandon)
     void reconfigureAllWarpStreams();                         // rebuild warp caches for the current tempo + device SR
-    void reconfigureAllWarpStreams(double spb, double devSR); // …for an explicit tempo (tempo-change path)
+    void reconfigureAllWarpStreams(double spb, double devSR); // …for an explicit tempo (device-rate load path)
+    // A warped clip's realtime voice. Configured on the message thread; render reads the
+    // live tempo, so a BPM change needs no cache rebuild. A fresh ClipWarpStream replaces
+    // (never mutates) one a playing graph may hold.
+    void configureLiveWarp(AudioClip& c, double devSR, bool force = false);
+    // Ensure the graph has a configured, unshared voice per playing warped clip. Only
+    // new/cloned tracks are mutated; a shared track is cloned first when it needs work.
+    void ensureLiveWarps(Graph& g);
     void propagateSampleRate(double sr); // re-prepare every instrument/device/MIDI-FX (incl. master) at sr
     void republishWithTrack(int32_t trackId, std::shared_ptr<Track> nt);    // checkpoints
     void republishWithTrackRaw(int32_t trackId, std::shared_ptr<Track> nt); // no undo entry

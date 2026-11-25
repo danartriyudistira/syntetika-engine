@@ -2247,14 +2247,58 @@ void Engine::mixAudioClip(
         }
     };
 
-    // Warped clips: copy straight from the offline stretch cache.
-    // The cache holds the played window [warpPlayStart, warpPlayEndEff] pre-rendered
-    // at the device rate, so there is no realtime stretch here — just a memcpy-cheap
-    // read (no per-clip-start priming spike). The clip's on-timeline length is the
-    // cache's frame count (both are warpPlayLen×spb once rebuilt for the tempo).
+    // A current cache is the cheap, sample-exact path (and what a split/trim expects).
+    // A cache built for another tempo is stale: fall through to the live stretcher instead
+    // of rebuilding it on the UI thread. That is what makes a BPM change instantaneous.
     const WarpCache* readyCache;
     if constexpr (mapped) readyCache = clip.tempoWarpCache();
     else readyCache = clip.warpCache.get();
+    const bool cacheCurrent = readyCache && std::abs(readyCache->spb - spb) < 1e-9 &&
+                              std::abs(readyCache->devSR - sr) < 1e-9;
+
+    // Non-mapped warped clips after a tempo change: the live stretcher reads the tempo
+    // every block. Mapped tempo (the master Tempo lane) keeps the tempoWarp cache below
+    // because its map bends the clip, not just a constant ratio.
+    if constexpr (!mapped) {
+        if (!cacheCurrent && clip.warpEnabled && clip.sample && clip.liveWarp && clip.liveWarp->ready() &&
+            clip.warpMarkers.size() >= 2 && clip.warpPlayLen() > 0.0) {
+            const int64_t startF = std::llround(startSamples);
+            const int64_t endF = std::llround(startSamples + clip.warpPlayLen() * spb);
+            const double ovStart = std::max(blockStart, static_cast<double>(startF));
+            const double ovEnd = std::min(blockStart + frames, static_cast<double>(endF));
+            if (ovEnd > ovStart) {
+                const int32_t dstOff = static_cast<int32_t>(std::llround(ovStart - blockStart));
+                const int32_t segLen = static_cast<int32_t>(std::llround(ovEnd - ovStart));
+                if (segLen > 0 && dstOff >= 0 && dstOff + segLen <= frames &&
+                    static_cast<size_t>(segLen) * 2 <= clipEnvScratch_.size()) {
+                    const double outStart = (ovStart - startSamples) + clip.warpPlayStart * spb;
+                    const double warpBeats = clip.warpMarkers.back().beat;
+                    const float g = clip.gain * extraGain;
+                    lenBeats = clip.warpPlayLen();
+                    if (!hasEnv) {
+                        clip.liveWarp->render(dst + dstOff * 2, segLen, outStart, clip.warpMarkers, warpBeats,
+                                              *clip.sample, spb, sr, g);
+                    } else {
+                        float* tmp = clipEnvScratch_.data();
+                        std::fill_n(tmp, static_cast<size_t>(segLen) * 2, 0.0f);
+                        clip.liveWarp->render(tmp, segLen, outStart, clip.warpMarkers, warpBeats,
+                                              *clip.sample, spb, sr, 1.0f);
+                        for (int32_t j = 0; j < segLen; ++j) {
+                            float l = tmp[j * 2], r = tmp[j * 2 + 1];
+                            applyEnv(ovStart + j, l, r);
+                            dst[(dstOff + j) * 2] += l * g;
+                            dst[(dstOff + j) * 2 + 1] += r * g;
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    // Fallback for a mapped tempo map or a voice that is not configured yet: copy straight
+    // from the offline stretch cache. The cache holds the played window pre-rendered at
+    // the device rate, so the audio thread only reads it.
     if (clip.warpEnabled && readyCache && readyCache->frames > 0) {
         const WarpCache& wc = *readyCache;
         bool reverseRead = clip.reversed;

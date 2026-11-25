@@ -1166,6 +1166,15 @@ if (args.Length >= 1 && args[0] == "--remote")
     return failures == 0 ? 0 : 1;
 }
 
+// Live BPM changes with warped audio alone: `--tempo-live`. Also part of the full run.
+if (args.Length >= 1 && args[0] == "--tempo-live")
+{
+    Console.WriteLine("-- tempo: live warped audio --");
+    foreach (var (ok, label) in LiveTempoTests.Run()) Check(ok, label);
+    Console.WriteLine(failures == 0 ? "TEMPO LIVE PASSED" : $"TEMPO LIVE FAILED ({failures})");
+    return failures == 0 ? 0 : 1;
+}
+
 // Random drum patterns alone: `--drum-genre`. Also part of the full run.
 if (args.Length >= 1 && args[0] == "--drum-genre")
 {
@@ -16315,6 +16324,8 @@ foreach (var (ok, label) in ClipEditorTests.Run()) Check(ok, label);
 Console.WriteLine("-- project: content-addressed bundle --");
 foreach (var (ok, label) in BundleContentTests.Run()) Check(ok, label);
 foreach (var (ok, label) in LanguageProjectTests.Run()) Check(ok, label);
+Console.WriteLine("-- tempo: live warped audio --");
+foreach (var (ok, label) in LiveTempoTests.Run()) Check(ok, label);
 Console.WriteLine("-- drums: genre patterns --");
 foreach (var (ok, label) in DrumPatternTests.Run()) Check(ok, label);
 Console.WriteLine("-- ai: transcription notes --");

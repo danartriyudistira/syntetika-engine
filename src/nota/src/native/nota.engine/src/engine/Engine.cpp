@@ -741,12 +741,9 @@ bool Engine::setBpm(double bpm) {
     c.type = CommandType::SetBpm;
     c.d0 = bpm;
     commands_.push(c);
-    // Warped clips play from an offline cache stretched to the tempo,
-    // so a tempo change must rebuild them. Do it on this (authoring) thread with the new
-    // spb computed directly — the SetBpm command above only reaches the transport on the
-    // audio thread later, so reading transport_.samplesPerBeat() here would be stale.
-    const double devSR = transport_.sampleRate();
-    if (bpm > 0.0 && devSR > 0.0) reconfigureAllWarpStreams(devSR * 60.0 / bpm, devSR);
+    // Warped clips play through their live ClipWarpStream, which reads samplesPerBeat in
+    // render(): a tempo change is just the queued SetBpm above and a new authoring rate.
+    // No cache rebuild here — that is what made a BPM drag freeze on a stem project.
     if (bpm > 0.0) {
         authoringBpm_ = bpm;
         placeTakesForTempo(); // take lanes + their comp keep one mapping (specs/067)
@@ -970,6 +967,7 @@ void Engine::releaseVanishedClipNotes(const Graph& before, const Graph& after) {
 
 void Engine::publishRaw(std::shared_ptr<Graph> g, bool restored) {
     if (g && !restored) deriveTempoMap(*g); // specs/099: the master Tempo lane is the tempo
+    if (g) ensureLiveWarps(*g);             // configure/unique realtime warp voice per clip
     // Fade flags are derived, not stored. A track this graph shares with the one still
     // playing is the audio thread's — leave it. Any other one an edit just cloned is
     // settled in place. A restored track (undo, redo, take retry) was published before and

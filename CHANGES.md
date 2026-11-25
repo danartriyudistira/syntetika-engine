@@ -3,6 +3,21 @@
 Base revisions are listed in [ATTRIBUTION.md](ATTRIBUTION.md). This is a summary; the exact
 diffs are in `patches/`.
 
+## Realtime tempo
+
+- **BPM changes no longer freeze on warped audio**: changing the tempo used to rebuild every
+  warped clip's offline stretch cache synchronously on the message thread. A BPM drag fires
+  many changes, so a stem project could stall for seconds per move. `SetBpm` now only updates
+  the transport; a current cache still plays the cheap, sample-exact path, and once the cache
+  is stale the clip renders through its live `ClipWarpStream`, which reads the new tempo every
+  block. No cache rebuild happens on a tempo change. The BPM field's arrangement refresh is
+  throttled to ~30 Hz while dragging.
+- `Engine::ensureLiveWarps` gives every playing warped clip a configured, unshared live voice;
+  split/trim pieces on one track may share the same continuous stream (seamless), while
+  duplicate tracks/clips get their own. A device sample-rate change reconfigures the voices.
+- Tests: `--tempo-live` (four warped tracks, four BPM changes under 50 ms, audio after the
+  change, duplicate track) and the existing streaming-warp/split/range-cut/1/8-meter suites.
+
 ## Branding and packaging
 
 - Product is **Syntetika Engine** (`studio.syntetika.engine`); the app menu, window title,
