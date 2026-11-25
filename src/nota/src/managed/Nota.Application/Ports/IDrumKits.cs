@@ -8,7 +8,8 @@ public readonly record struct DrumKitInfo(
     string Id,           // stable; the browser row's Path is "kit:" + Id
     string Name,
     string Blurb,        // one-line description for the row
-    int PadCount);
+    int PadCount,
+    string Category = ""); // browser folder: "" = loose at the device, "Genres" = its folder
 
 /// <summary>The factory drum kits. Their samples are synthesized on the user's machine
 /// rather than shipped as audio, so a kit may need rendering before it can be loaded —

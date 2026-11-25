@@ -409,15 +409,35 @@ public sealed partial class BrowserViewModel : ObservableObject
                 var dev = _instrTree.Find(d => d.Kind == BrowserItemKind.BuiltinInstrument && d.BuiltinKind == kind);
                 if (dev is null) continue;
                 foreach (var kit in _kits.All())
-                    dev.Children.Add(new BrowserItem
+                {
+                    BrowserItem parentItem = dev;
+                    if (kit.Category.Length > 0)
+                    {
+                        string folderPath = $"category:{dev.LibraryKey}/{kit.Category}";
+                        var folder = dev.Children.Find(c => c.Kind == BrowserItemKind.Folder && c.Path == folderPath);
+                        if (folder is null)
+                        {
+                            folder = new BrowserItem
+                            {
+                                Name = kit.Category,
+                                Kind = BrowserItemKind.Folder,
+                                Path = folderPath,
+                                Depth = 1,
+                            };
+                            dev.Children.Add(folder);
+                        }
+                        parentItem = folder;
+                    }
+                    parentItem.Children.Add(new BrowserItem
                     {
                         Name = kit.Name,
                         Kind = BrowserItemKind.Preset,
                         Sub = "kit",
                         Tip = rhythm ? Loc.F("browser.pads_8_on_the_voices", kit.Blurb, kit.PadCount) : Loc.F("browser.pads", kit.Blurb, kit.PadCount),
                         Path = prefix + kit.Id,
-                        Depth = 1,
+                        Depth = parentItem == dev ? 1 : 2,
                     });
+                }
             }
 
         // Nota Mosaic's pack presets (installed sample packs, "Create multisample"): Packs → a pack.

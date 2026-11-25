@@ -30,41 +30,36 @@ public sealed class DrumKitService : IDrumKits
 
     public IReadOnlyList<DrumKitInfo> All()
     {
-        var list = new List<DrumKitInfo>(KitCatalog.All.Count);
+        var list = new List<DrumKitInfo>(KitCatalog.All.Count + KitCatalog.Presets.Count);
         foreach (var k in KitCatalog.All) list.Add(new DrumKitInfo(k.Id, k.Name, k.Blurb, k.Pads.Count));
+        foreach (var p in KitCatalog.Presets)
+            if (KitCatalog.ById(p.BaseKitId) is { } baseKit)
+                list.Add(new DrumKitInfo(p.Id, p.Name, p.Blurb, baseKit.Pads.Count, "Genres"));
         return list;
     }
 
     public string FolderOf(string id)
-    {
-        var kit = KitCatalog.ById(id);
-        return kit is null ? "" : KitLibrary.DirOf(kit);
-    }
+        => KitCatalog.Resolve(id) is { } r ? KitLibrary.DirOf(r.Kit) : "";
 
     public bool IsRendered(string id)
-    {
-        var kit = KitCatalog.ById(id);
-        return kit is not null && KitLibrary.IsRendered(kit);
-    }
+        => KitCatalog.Resolve(id) is { } r && KitLibrary.IsRendered(r.Kit);
 
     public int EnsureRendered(string id = "")
     {
         if (string.IsNullOrEmpty(id)) return KitLibrary.EnsureAll();
-        var kit = KitCatalog.ById(id);
-        return kit is null ? 0 : KitLibrary.Ensure(kit);
+        return KitCatalog.Resolve(id) is { } r ? KitLibrary.Ensure(r.Kit) : 0;
     }
 
     public int CreateTrack(IAudioEngine engine, string id, out string warning)
     {
-        var kit = KitCatalog.ById(id);
-        if (kit is null) { warning = Loc.T("kits.drum_kit.unknown_drum_kit"); return -1; }
+        if (KitCatalog.Resolve(id) is not { } r) { warning = Loc.T("kits.drum_kit.unknown_drum_kit"); return -1; }
         // One undo step: the new track with its whole kit.
         engine.BeginUndoGroup();
         try
         {
             int track = engine.AddDrumRackTrack();
             if (track <= 0) { warning = Loc.T("kits.drum_kit.couldnt_create_a_drum_rack"); return -1; }
-            Fill(engine, track, kit, out warning);
+            Fill(engine, track, r.Kit, r.Preset, out warning);
             return track;
         }
         finally { engine.EndUndoGroup(); }
@@ -72,26 +67,28 @@ public sealed class DrumKitService : IDrumKits
 
     public int CreateRhythmTrack(IAudioEngine engine, string id, out string warning)
     {
-        var kit = KitCatalog.ById(id);
-        if (kit is null) { warning = Loc.T("kits.drum_kit.unknown_drum_kit"); return -1; }
+        if (KitCatalog.Resolve(id) is not { } r) { warning = Loc.T("kits.drum_kit.unknown_drum_kit"); return -1; }
         int track = engine.AddRhythmTrack();
         if (track <= 0) { warning = Loc.T("kits.drum_kit.couldnt_create_a_nota_rhythm"); return -1; }
-        FillRhythm(engine, track, kit, out warning);
+        FillRhythm(engine, track, r.Kit, r.Preset, out warning);
         return track;
     }
 
     public bool LoadInto(IAudioEngine engine, int trackId, string id, out string warning)
     {
-        var kit = KitCatalog.ById(id);
-        if (kit is null) { warning = Loc.T("kits.drum_kit.unknown_drum_kit"); return false; }
-        if (engine.TrackInstrumentKind(trackId) == RhythmModel.Kind) { FillRhythm(engine, trackId, kit, out warning); return true; }
+        if (KitCatalog.Resolve(id) is not { } r) { warning = Loc.T("kits.drum_kit.unknown_drum_kit"); return false; }
+        if (engine.TrackInstrumentKind(trackId) == RhythmModel.Kind)
+        {
+            FillRhythm(engine, trackId, r.Kit, r.Preset, out warning);
+            return true;
+        }
         // Clear the existing pads first — a kit replaces the rack's contents rather than
         // layering onto whatever was there. One undo step brings the old pads back.
         engine.BeginUndoGroup();
         try
         {
             for (int c = engine.RackChainCount(trackId) - 1; c >= 0; c--) engine.RackRemoveChain(trackId, c);
-            Fill(engine, trackId, kit, out warning);
+            Fill(engine, trackId, r.Kit, r.Preset, out warning);
         }
         finally { engine.EndUndoGroup(); }
         return true;
@@ -99,9 +96,9 @@ public sealed class DrumKitService : IDrumKits
 
     public string Identify(IAudioEngine engine, int trackId)
     {
-        // A Rhythm remembers the kit it was loaded from.
+        // A Rhythm remembers the kit it was loaded from (a base kit or a genre preset).
         if (engine.TrackInstrumentKind(trackId) == RhythmModel.Kind)
-            return KitCatalog.ById(engine.RhythmKitName(trackId)) is { } rk ? rk.Id : "";
+            return KitCatalog.Resolve(engine.RhythmKitName(trackId)) is { } rr ? (rr.Preset?.Id ?? rr.Kit.Id) : "";
         int chains = engine.RackChainCount(trackId);
         if (chains <= 0) return "";
         var pads = new HashSet<(int Note, string Name)>();
@@ -124,12 +121,33 @@ public sealed class DrumKitService : IDrumKits
             else if (score > runnerUp) runnerUp = score;
         }
         var winner = KitCatalog.ById(best);
-        return winner is not null && bestScore * 4 >= winner.Pads.Count * 3 && bestScore > runnerUp ? best : "";
+        if (winner is null || bestScore * 4 < winner.Pads.Count * 3 || bestScore <= runnerUp) return "";
+
+        // The pads say which base kit it is; the rack timing says which genre preset loaded
+        // it. A user who changes the swing falls back to the base kit's name.
+        float swing = engine.RackSwing(trackId), humanize = engine.RackHumanize(trackId);
+        foreach (var p in KitCatalog.Presets)
+            if (p.BaseKitId == best && Math.Abs(p.Swing - swing) < .006f && Math.Abs(p.Humanize - humanize) < .006f)
+                return p.Id;
+        return best;
     }
 
-    private static void Fill(IAudioEngine engine, int track, KitDefinition kit, out string warning)
+    /// <summary>The base kit with the genre preset's rack settings; the pads (and therefore
+    /// the rendered sample files) stay the base kit's own.</summary>
+    private static KitDefinition RackSettings(KitDefinition kit, KitPreset? preset)
+        => preset is null ? kit : kit with
+        {
+            Swing = preset.Swing,
+            Humanize = preset.Humanize,
+            FxSpace = preset.FxSpace ?? kit.FxSpace,
+            FxDrive = preset.FxDrive ?? kit.FxDrive,
+            FxTape = preset.FxTape ?? kit.FxTape,
+        };
+
+    private static void Fill(IAudioEngine engine, int track, KitDefinition kit, KitPreset? preset, out string warning)
     {
         KitLibrary.Ensure(kit);
+        var def = RackSettings(kit, preset);
 
         var missing = new List<string>();
         var loaded = new List<(int Slot, KitPad Pad)>();
@@ -149,19 +167,19 @@ public sealed class DrumKitService : IDrumKits
             if (pad.Pan != 0f) engine.RackSetChainPan(track, chain, pad.Pan);
             if (Math.Abs(pad.Gain - 1f) > 1e-3f) engine.RackSetChainGain(track, chain, pad.Gain);
             int c = chain;
-            KitFx.Apply(KitFx.For(kit, pad), k => engine.RackAddChainDevice(track, c, k),
+            KitFx.Apply(KitFx.For(def, pad), k => engine.RackAddChainDevice(track, c, k),
                 d => engine.RackChainDeviceParamCount(track, c, d), (d, p) => engine.RackChainDeviceParamName(track, c, d, p),
                 (d, p, v) => engine.RackChainDeviceParamSet(track, c, d, p, v));
             loaded.Add((chain, pad));
         }
 
-        engine.RackSetSwing(track, kit.Swing);
-        engine.RackSetHumanize(track, kit.Humanize);
-        ApplyRackMacros(engine, track, kit, loaded);
+        engine.RackSetSwing(track, def.Swing);
+        engine.RackSetHumanize(track, def.Humanize);
+        ApplyRackMacros(engine, track, def, loaded);
 
         warning = missing.Count == 0
             ? ""
-            : $"{kit.Name}: {missing.Count} pad(s) couldn't be loaded ({string.Join(", ", missing)}).";
+            : $"{preset?.Name ?? kit.Name}: {missing.Count} pad(s) couldn't be loaded ({string.Join(", ", missing)}).";
     }
 
     /// <summary>The kit's pad for each Rhythm voice (null = the kit has none for it).</summary>
@@ -181,9 +199,10 @@ public sealed class DrumKitService : IDrumKits
     // Loads the kit's samples, levels and effects onto a Rhythm's voices. A voice's sample
     // plays as recorded — tune centred, the full file, no decay shortening, the tone open and
     // no drive (the kit's own effects do the colouring) — and the steps are left alone.
-    private static void FillRhythm(IAudioEngine engine, int track, KitDefinition kit, out string warning)
+    private static void FillRhythm(IAudioEngine engine, int track, KitDefinition kit, KitPreset? preset, out string warning)
     {
         KitLibrary.Ensure(kit);
+        var def = RackSettings(kit, preset);
         int pc = engine.PluginParamCount(track, -1);
         var idx = new Dictionary<string, int>(StringComparer.Ordinal);
         for (int i = 0; i < pc; i++) idx[engine.PluginParamId(track, -1, i)] = i;
@@ -209,19 +228,19 @@ public sealed class DrumKitService : IDrumKits
             Set(RhythmModel.Id(v, "level"), Math.Clamp(RhythmLevel * pad.Gain, 0f, 1f));
             Set(RhythmModel.Id(v, "pan"), Math.Clamp(0.5f + pad.Pan * 0.5f, 0f, 1f));
             int vv = v;
-            KitFx.Apply(KitFx.For(kit, pad), k => engine.RhythmAddVoiceDevice(track, vv, k),
+            KitFx.Apply(KitFx.For(def, pad), k => engine.RhythmAddVoiceDevice(track, vv, k),
                 d => engine.RhythmVoiceDeviceParamCount(track, vv, d), (d, p) => engine.RhythmVoiceDeviceParamName(track, vv, d, p),
                 (d, p, x) => engine.RhythmVoiceDeviceParamSet(track, vv, d, p, x));
             loaded.Add((v, pad));
         }
-        Set("swing", kit.Swing);
-        Set("humanize", kit.Humanize);
-        engine.RhythmSetKitName(track, kit.Id);
-        ApplyRhythmMacros(engine, track, kit, loaded, idx);
+        Set("swing", def.Swing);
+        Set("humanize", def.Humanize);
+        engine.RhythmSetKitName(track, preset?.Id ?? kit.Id);
+        ApplyRhythmMacros(engine, track, def, loaded, idx);
 
         warning = missing.Count == 0
             ? ""
-            : $"{kit.Name}: {missing.Count} voice(s) couldn't be loaded ({string.Join(", ", missing)}).";
+            : $"{preset?.Name ?? kit.Name}: {missing.Count} voice(s) couldn't be loaded ({string.Join(", ", missing)}).";
     }
 
     // ---- macros -----------------------------------------------------------------------------

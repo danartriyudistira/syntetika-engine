@@ -833,6 +833,23 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **DMG**: `Syntetika-Engine-0.1.5-arm64.dmg` 112 MB, ad-hoc signed.
   SHA-256 `81083b6799be00b828c8a4bf40cddd334578752523971657226cad1ebf19d55c`.
 
+## 7ah. Preset Drum Rack per genre (25 Nov)
+
+- **20 preset genre**: House, Techno, Tech House, Deep House, Hip-Hop, Trap, Drill, Drum & Bass,
+  Breakbeat, Disco, Funk, Rock, Pop, Reggaeton, Latin, Afrobeat, Amapiano, Jazz, UK Garage,
+  Lo-Fi. Muncul di **Instruments → Drum Rack → Genres** dan juga di Nota Rhythm.
+- **Cara kerja**: preset meminjam pad dari kit factory yang cocok (mis. House → Kompakt,
+  Techno → Bunker, Trap/Drill → Neon, DnB/Breakbeat → Breakline, Jazz → Velvet), lalu memberi
+  swing/humanize/FX space genre itu. Sampel dirender sekali dari kit base, tidak diduplikasi;
+  nama/urutan pad tetap, jadi identifikasi kit tetap bekerja.
+- **Identifikasi**: Drum Rack dikenali dari pad + pasangan swing/humanize; Nota Rhythm menyimpan
+  ID preset langsung. Base kit tetap memakai namanya sendiri (tidak tertukar dengan preset).
+- **Bukti**: tes kit lulus — 45 entri (25 base + 20 genre), preset House memuat 16 pad dengan
+  timing sendiri, setiap base kit dan setiap genre preset dikenali kembali, Rhythm mengingat
+  preset-nya; full smoke tetap lulus di bagian kit.
+- **Belum**: preset belum otomatis membuat MIDI clip atau pattern; setelah kit dimuat, pakai
+  **Pattern → Random…** dengan genre yang sama untuk langsung mendapat pola.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |

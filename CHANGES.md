@@ -37,6 +37,14 @@ diffs are in `patches/`.
   ghost snares and phrase crashes are built in. Tests cover role mapping, the signature of each
   genre, mixes, alternate bars, odd meters and every genre.
 
+- **Genre Drum Rack presets**: 20 one-click presets (House, Techno, Tech House, Deep House,
+  Hip-Hop, Trap, Drill, Drum & Bass, Breakbeat, Disco, Funk, Rock, Pop, Reggaeton, Latin,
+  Afrobeat, Amapiano, Jazz, UK Garage, Lo-Fi) under **Instruments → Drum Rack → Genres**.
+  Each borrows a matching factory kit's pads — the samples are rendered once and shared — and
+  gives the rack that genre's swing, humanize and FX space. The same presets appear under Nota
+  Rhythm, which remembers the preset it was loaded from. The base kits stay exactly as they
+  were; the rack's timing names the preset again after loading.
+
 - **One-file projects (`.syntetika`)**: a project can be a single ZIP container holding the
   bundle Nota already wrote — `project.json`, sidecars, samples, plugin states, visuals/media
   and the version history — plus a small `.package/manifest.json`. Opening extracts it to a

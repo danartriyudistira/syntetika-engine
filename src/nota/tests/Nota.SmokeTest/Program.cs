@@ -11072,7 +11072,8 @@ Console.WriteLine("-- Factory drum kits --");
 
     // Building a rack from a kit: every pad loaded, named, choked and audible.
     var svc = new DrumKitService();
-    Check(svc.All().Count == kits.Count, "the kit service lists the catalog");
+    Check(svc.All().Count == kits.Count + Nota.Infrastructure.Kits.KitCatalog.Presets.Count,
+          "the kit service lists the catalog and the genre presets");
     using var ke = new NotaEngine();
     int kt = svc.CreateTrack(ke, kits[0].Id, out string kitWarn);
     Check(kt > 0 && kitWarn.Length == 0, $"kit loaded onto a new Drum Rack track ({(kitWarn.Length == 0 ? "no warnings" : kitWarn)})");
@@ -11105,6 +11106,39 @@ Console.WriteLine("-- Factory drum kits --");
     Check(svc.Identify(ke, kt) == "", "a rack stripped to three pads is no kit");
     Check(svc.LoadInto(ke, kt, kits[24].Id, out string lastWarn) && svc.Identify(ke, kt) == kits[24].Id,
           $"the last kit loads and is recognised ({(lastWarn.Length == 0 ? "no warnings" : lastWarn)})");
+
+    // Genre presets: one per Pattern genre, same pads as a base kit, the genre's timing.
+    Check(Nota.Infrastructure.Kits.KitCatalog.Presets.Count == 20, "20 genre drum-rack presets");
+    var genre = Nota.Infrastructure.Kits.KitCatalog.PresetById("genre-house")!;
+    var gr = Nota.Infrastructure.Kits.KitCatalog.Resolve(genre.Id);
+    Check(gr is { } grv && grv.Kit.Id == "kompakt" && grv.Preset is not null,
+          "a genre preset resolves to its base kit");
+    int gt = svc.CreateTrack(ke, genre.Id, out string gw);
+    Check(gt > 0 && gw.Length == 0 && ke.RackChainCount(gt) == 16, "a genre preset loads its base pads");
+    Check(Math.Abs(ke.RackSwing(gt) - genre.Swing) < 1e-4f && Math.Abs(ke.RackHumanize(gt) - genre.Humanize) < 1e-4f,
+          "a genre preset loads its own swing and humanize");
+    Check(svc.Identify(ke, gt) == genre.Id, $"the loaded genre preset is recognised ('{svc.Identify(ke, gt)}')");
+    int baseKt = svc.CreateTrack(ke, "kompakt", out _);
+    Check(svc.Identify(ke, baseKt) == "kompakt", "the base kit keeps its own name beside a genre preset");
+    int gRhythm = svc.CreateRhythmTrack(ke, genre.Id, out _);
+    Check(svc.Identify(ke, gRhythm) == genre.Id, "a Rhythm remembers its genre preset");
+
+    // Every base keeps its own name, and every genre preset names itself, not its base.
+    var wrongBase = new List<string>();
+    foreach (var b in Nota.Infrastructure.Kits.KitCatalog.All)
+    {
+        int bt2 = svc.CreateTrack(ke, b.Id, out _);
+        string got = svc.Identify(ke, bt2);
+        if (got != b.Id) wrongBase.Add($"{b.Id}->{got}");
+    }
+    Check(wrongBase.Count == 0, "every base kit keeps its own name" + (wrongBase.Count > 0 ? ": " + string.Join(", ", wrongBase) : ""));
+    var wrongGenre = new List<string>();
+    foreach (var p in Nota.Infrastructure.Kits.KitCatalog.Presets)
+    {
+        int pt2 = svc.CreateTrack(ke, p.Id, out _);
+        if (svc.Identify(ke, pt2) != p.Id) wrongGenre.Add(p.Id);
+    }
+    Check(wrongGenre.Count == 0, "every genre preset is recognised" + (wrongGenre.Count > 0 ? ": " + string.Join(", ", wrongGenre) : ""));
 }
 
 // ===================== M9-D: automation segment curves =====================
@@ -14659,7 +14693,7 @@ Console.WriteLine("-- Nota Rhythm --");
         Check(!cat.All().Any(p => p.IsInstrument && p.BuiltinKind == 12), "Nota Rhythm ships no synth presets of its own");
         var kitSvc = new DrumKitService();
         var quiet = new List<string>();
-        foreach (var k in kitSvc.All())
+        foreach (var k in kitSvc.All().Where(k => k.Category.Length == 0))
         {
             using var ep = new NotaEngine();
             ep.SetBpm(120); ep.SetTimeSignature(4, 4);
@@ -14970,7 +15004,7 @@ Console.WriteLine("-- Kit macros --");
     int neon = svc.CreateTrack(e, "neon", out _);
     Check(e.RackMacroName(neon, 6) == "808", "a kit with an 808 gets a macro for it");
     bool allKits = true;
-    foreach (var k in svc.All())
+    foreach (var k in svc.All().Where(k => k.Category.Length == 0))
     {
         int kt = svc.CreateTrack(e, k.Id, out _);
         int mc = e.RackMappingCount(kt);
