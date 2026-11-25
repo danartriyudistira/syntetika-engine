@@ -6,8 +6,18 @@ through Follow Actions, plus one ink-kaleido visual per section on three openVJ 
 
 ## Rebuild it
 
+The bundle in this folder is complete: `project.json` (music) plus
+`visuals/composition.json` (the 15 ink-kaleido clips), so opening `demo/` shows both sound
+and picture. Regenerate the visuals only when the recipes change:
+
 ```sh
 scripts/make-demo.sh
+```
+
+On Windows:
+
+```powershell
+powershell -File scripts/make-demo-win.ps1
 ```
 
 Default destination: `~/Documents/Nota Projects/Syntetika Demo.nota`. Pass a path to put it

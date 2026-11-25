@@ -25,14 +25,14 @@ const IN_FLIGHT: usize = 2;
 /// Smoothed frame time above which thumbnails pause, so a show never stutters for them.
 pub const THUMB_FRAME_BUDGET: Duration = Duration::from_millis(22);
 
-/// openVJ's cache folder: `~/Library/Caches/openVJ` on macOS, `%LOCALAPPDATA%\openVJ\Cache`
-/// on Windows, `$XDG_CACHE_HOME/openvj` elsewhere.
+/// openVJ's cache folder: `~/Library/Caches/openVJ` on macOS,
+/// `%LOCALAPPDATA%\Syntetika Engine\Cache` on Windows, `$XDG_CACHE_HOME/openvj` elsewhere.
 pub fn cache_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
         Some(home?.join("Library/Caches/openVJ"))
     } else if cfg!(windows) {
-        Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("openVJ").join("Cache"))
+        Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Syntetika Engine").join("Cache"))
     } else {
         Some(
             std::env::var_os("XDG_CACHE_HOME")

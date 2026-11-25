@@ -70,13 +70,26 @@ internal static class AppUpdaterTests
         var tmp = Directory.CreateTempSubdirectory("nota-updater-test-").FullName;
         try
         {
-            foreach (var r in CheckOutcomes(tmp)) yield return r;
+            // The fork ships with the in-app updater disabled (Branding.UpdatesEnabled = false):
+            // CheckAsync returns before it touches a feed, so the feed, download and install
+            // flows cannot run in this build. The pure helpers (targets, schedule) still run.
+            if (Branding.UpdatesEnabled)
+            {
+                foreach (var r in CheckOutcomes(tmp)) yield return r;
+            }
             foreach (var r in Targets(tmp)) yield return r;
-            foreach (var r in LinuxFlow(tmp)) yield return r;
-            if (!OperatingSystem.IsWindows())
-                foreach (var r in MacSwap(tmp)) yield return r;
-            if (OperatingSystem.IsMacOS())
-                foreach (var r in MacFlow(tmp)) yield return r;
+            if (Branding.UpdatesEnabled)
+            {
+                foreach (var r in LinuxFlow(tmp)) yield return r;
+                if (!OperatingSystem.IsWindows())
+                    foreach (var r in MacSwap(tmp)) yield return r;
+                if (OperatingSystem.IsMacOS())
+                    foreach (var r in MacFlow(tmp)) yield return r;
+            }
+            else
+            {
+                Console.WriteLine("  (updates are disabled in this build: feed, download and install flows are not run)");
+            }
         }
         finally
         {

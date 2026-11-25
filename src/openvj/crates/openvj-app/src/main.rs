@@ -91,12 +91,45 @@ fn restore_output_geometry(
 
 /// Creates the GPU device shared by the engine and the UI renderer.
 fn init_gpu() -> Result<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    // Windows: Intel's Vulkan driver (igvk64.dll) access-violates while the first surface is
+    // created on some machines, which killed the engine right after startup. DX12 is the
+    // safe default there; WGPU_BACKEND still overrides it (e.g. `WGPU_BACKEND=vulkan`).
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        descriptor.backends = wgpu::Backends::DX12;
+    }
+    let instance = wgpu::Instance::new(descriptor);
+    let options = || wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         ..Default::default()
-    }))
-    .context("no GPU adapter found")?;
+    };
+    match pollster::block_on(instance.request_adapter(&options())) {
+        Ok(adapter) => open_device(instance, adapter),
+        Err(first) => {
+            // Some machines (old GPUs, remote sessions, bare VMs) have no Direct3D 12
+            // adapter at all: fall back to Vulkan/OpenGL instead of leaving the user with
+            // no visuals and only a log line.
+            #[cfg(target_os = "windows")]
+            if std::env::var_os("WGPU_BACKEND").is_none() {
+                eprintln!("openVJ: no Direct3D 12 adapter ({first}); trying Vulkan/OpenGL");
+                let mut fallback = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+                fallback.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
+                let instance = wgpu::Instance::new(fallback);
+                if let Ok(adapter) = pollster::block_on(instance.request_adapter(&options())) {
+                    return open_device(instance, adapter);
+                }
+            }
+            Err(anyhow::anyhow!("{first}")).context("no GPU adapter found")
+        }
+    }
+}
+
+/// Opens the device on an adapter, with the features and limits the engine relies on.
+fn open_device(
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+) -> Result<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
     let info = adapter.get_info();
     eprintln!("openVJ: GPU {} ({:?})", info.name, info.backend);
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

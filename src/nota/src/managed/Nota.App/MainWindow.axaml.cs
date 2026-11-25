@@ -98,7 +98,12 @@ public partial class MainWindow : Window
         InitMenuShortcuts();   // Ctrl instead of Win on Windows / Linux, and bound there
         InitRecentMenu();      // File → Open recent (#443)
         InitMenuButton();      // the Menu key in place of the menu row on Windows / Linux (#518)
-        UpdateWindowTitle();   // "Nota — Untitled" until a project is opened/saved
+        UpdateWindowTitle();   // "Nota - Untitled" until a project is opened/saved
+        // A project folder passed on the command line (file association) opens once the
+        // window is up, so the shell's "Open with" works.
+        Opened += (_, _) => OpenStartupProject();
+        // A second launch hands its project over through the profile instead of failing.
+        StartOpenRequestWatcher();
         // Custom frameless title bar (Phase 2): extend the client area under the
         // decorations on macOS/Windows (traffic lights / caption buttons overlay it).
         // Linux desktops (GNOME/KDE) draw their own title bar and their client-side
@@ -135,7 +140,7 @@ public partial class MainWindow : Window
         // uses the .icns produced by scripts/bundle-mac.sh for the dock/Finder.
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            Icon = new WindowIcon(Avalonia.Platform.AssetLoader.Open(new Uri("avares://Nota.App/Assets/nota.ico")));
+            Icon = new WindowIcon(Avalonia.Platform.AssetLoader.Open(new Uri("avares://Nota.App/Assets/syntetika.ico")));
         }
     }
 

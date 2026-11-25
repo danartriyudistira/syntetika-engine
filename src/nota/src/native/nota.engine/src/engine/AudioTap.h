@@ -55,7 +55,11 @@ class AudioTap {
     void write(const float* interleaved, int32_t frames) noexcept;
 
   private:
+#if defined(_WIN32)
+    void* file_ = nullptr; // HANDLE, kept open while the view is mapped
+#else
     int fd_ = -1;
+#endif
     void* map_ = nullptr;
     size_t mapSize_ = 0;
     std::string path_;

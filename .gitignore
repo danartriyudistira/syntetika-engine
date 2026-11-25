@@ -11,3 +11,9 @@ src/nota/src/managed/**/bin/
 src/nota/src/managed/**/obj/
 src/nota/src/native/nota.engine/build/
 src/openvj/target/
+
+# Release artifacts (installer / portable ZIP / self-contained publish)
+dist/
+
+# The demo project writes its visual layout sidecar when opened (the composition is shipped)
+demo/visuals/layout.json

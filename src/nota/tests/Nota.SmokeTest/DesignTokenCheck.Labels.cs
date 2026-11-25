@@ -29,13 +29,23 @@ internal static partial class DesignTokenCheck
 {
     // Capitalised mid-label because they name a thing, not because of Title Case: the views
     // and panels, the product and its themes, plug-in formats, keys.
-    private static readonly HashSet<string> ProperNouns = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> ProperNouns = BuildProperNouns();
+
+    private static HashSet<string> BuildProperNouns()
     {
-        "Arrangement", "Session", "Modular", "Mixer", "Assistant", "Finder", "Nota", "Studio", "Ember",
-        "Graphite", "Paper", "MIDI", "VST3", "AU", "CLAP",
-        // Keys, named as the keyboard and Settings → Shortcuts spell them: "Play (Space)".
-        "Space", "Return", "Enter", "Esc", "Tab", "Delete", "Shift", "Ctrl", "Alt",
-    };
+        var nouns = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Arrangement", "Session", "Modular", "Mixer", "Assistant", "Finder", "Nota", "Studio", "Ember",
+            "Graphite", "Paper", "MIDI", "VST3", "AU", "CLAP",
+            // Keys, named as the keyboard and Settings → Shortcuts spell them: "Play (Space)".
+            "Space", "Return", "Enter", "Esc", "Tab", "Delete", "Shift", "Ctrl", "Alt",
+        };
+        // The fork's product name ("Syntetika Engine") is a proper noun too, exactly as
+        // "Nota" was before the rebrand: labels such as "About Syntetika Engine" are names.
+        foreach (var word in Nota.Application.Branding.ProductName.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            nouns.Add(word);
+        return nouns;
+    }
 
     // Local helpers that build a label from their first argument.
     private const string Builders = "Mono|SectionHead|Field|Caps|DrumCap|Header|SectionLabel";

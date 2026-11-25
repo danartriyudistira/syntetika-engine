@@ -6,10 +6,14 @@
 //! master chain — instead of openVJ's own input device.
 
 use std::fs::File;
-use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 
 const MAGIC: u32 = 0x3141_544E; // "NTA1"
 const VERSION: u32 = 1;
@@ -19,14 +23,51 @@ const INDEX_OFFSET: usize = 24;
 const DATA_OFFSET: usize = 64;
 const RETRY: Duration = Duration::from_secs(1);
 
+/// Windows' `CreateFileMapping`/`MapViewOfFile`, declared here so the tap needs no extra crate.
+#[cfg(windows)]
+mod win {
+    use std::ffi::c_void;
+
+    pub type Handle = *mut c_void;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        pub fn CreateFileMappingW(
+            file: Handle,
+            attributes: *mut c_void,
+            protect: u32,
+            max_high: u32,
+            max_low: u32,
+            name: *const u16,
+        ) -> Handle;
+        pub fn MapViewOfFile(mapping: Handle, access: u32, high: u32, low: u32, count: usize) -> *mut c_void;
+        pub fn UnmapViewOfFile(base: *const c_void) -> i32;
+        pub fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    pub const PAGE_READONLY: u32 = 0x02;
+    pub const FILE_MAP_READ: u32 = 0x0004;
+}
+
 struct Mapping {
     base: *mut u8,
     len: usize,
+    /// The mapping object, while the view is alive (Windows).
+    #[cfg(windows)]
+    handle: win::Handle,
 }
 
 impl Drop for Mapping {
     fn drop(&mut self) {
-        unsafe { libc::munmap(self.base as *mut libc::c_void, self.len) };
+        #[cfg(unix)]
+        unsafe {
+            libc::munmap(self.base as *mut libc::c_void, self.len)
+        };
+        #[cfg(windows)]
+        unsafe {
+            win::UnmapViewOfFile(self.base as *const std::ffi::c_void);
+            win::CloseHandle(self.handle);
+        };
     }
 }
 
@@ -101,12 +142,39 @@ impl NotaTap {
         if len < DATA_OFFSET + CHANNELS * 4 {
             return false;
         }
-        let base =
-            unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
-        if base == libc::MAP_FAILED {
-            return false;
+        #[cfg(unix)]
+        {
+            let base =
+                unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
+            if base == libc::MAP_FAILED {
+                return false;
+            }
+            self.map = Some(Mapping { base: base as *mut u8, len });
         }
-        self.map = Some(Mapping { base: base as *mut u8, len });
+        #[cfg(windows)]
+        {
+            // Nota maps the same file read-write; a second, read-only mapping object sees the
+            // same pages, so no shared mapping *name* has to travel between the processes.
+            let handle = unsafe {
+                win::CreateFileMappingW(
+                    file.as_raw_handle() as win::Handle,
+                    std::ptr::null_mut(),
+                    win::PAGE_READONLY,
+                    0,
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if handle.is_null() {
+                return false;
+            }
+            let base = unsafe { win::MapViewOfFile(handle, win::FILE_MAP_READ, 0, 0, 0) };
+            if base.is_null() {
+                unsafe { win::CloseHandle(handle) };
+                return false;
+            }
+            self.map = Some(Mapping { base: base as *mut u8, len, handle });
+        }
         self.last_total = 0;
         true
     }

@@ -21,6 +21,13 @@ Ini adalah proyek **integrasi**, bukan DAW atau VJ engine baru:
 
 Tidak berafiliasi dengan/endorse oleh kedua proyek upstream. Detail di `ATTRIBUTION.md`.
 
+### Status platform (25 November 2026)
+
+- **macOS Apple Silicon** — target awal, build `.app`/DMG.
+- **Windows x64** — build penuh sejak 0.1.4: engine native (`nota_engine.dll`), aplikasi,
+  `syntetika-visual.exe` (DX12), audio tap, installer per-user. Syphon tidak ada di Windows
+  (tetap macOS-only); detail dan batasan di [`05-windows.md`](05-windows.md).
+
 ---
 
 ## 2. Yang sudah selesai

@@ -18,6 +18,9 @@ namespace Nota.Infrastructure.Visuals;
 public sealed class VisualEngineProcess : IDisposable
 {
     public const string BinaryName = "syntetika-visual";
+    /// <summary>The executable as it is named on this platform (<c>.exe</c> on Windows).</summary>
+    public static string BinaryFile { get; } =
+        OperatingSystem.IsWindows() ? BinaryName + ".exe" : BinaryName;
     private const int MaxRestarts = 3;
     /// A run this long is not part of a startup crash loop, so the restart budget refills.
     private static readonly TimeSpan HealthyRun = TimeSpan.FromSeconds(15);
@@ -55,9 +58,9 @@ public sealed class VisualEngineProcess : IDisposable
         string baseDir = AppContext.BaseDirectory;
         foreach (var candidate in new[]
         {
-            Path.Combine(baseDir, BinaryName),
-            Path.Combine(baseDir, "..", "Helpers", BinaryName),
-            Path.Combine(baseDir, "..", "Resources", BinaryName),
+            Path.Combine(baseDir, BinaryFile),
+            Path.Combine(baseDir, "..", "Helpers", BinaryFile),
+            Path.Combine(baseDir, "..", "Resources", BinaryFile),
         })
         {
             string full = Path.GetFullPath(candidate);
@@ -68,7 +71,7 @@ public sealed class VisualEngineProcess : IDisposable
         var dir = new DirectoryInfo(baseDir);
         for (int i = 0; i < 10 && dir is not null; i++, dir = dir.Parent)
         {
-            string dev = Path.Combine(dir.FullName, "src", "openvj", "target", "release", BinaryName);
+            string dev = Path.Combine(dir.FullName, "src", "openvj", "target", "release", BinaryFile);
             if (File.Exists(dev)) return dev;
         }
         return null;
@@ -96,6 +99,9 @@ public sealed class VisualEngineProcess : IDisposable
     {
         try
         {
+            // A previous writer may still hold the log (the engine crashed and the same
+            // process is starting it again): close it first, or the new StreamWriter fails.
+            CloseLog();
             var psi = new ProcessStartInfo(path)
             {
                 UseShellExecute = false,
@@ -152,6 +158,13 @@ public sealed class VisualEngineProcess : IDisposable
         try { _log?.WriteLine($"{DateTime.UtcNow:O} {line}"); } catch { }
     }
 
+    /// <summary>Closes the engine log so a restart can open it again.</summary>
+    private void CloseLog()
+    {
+        try { _log?.Dispose(); } catch { }
+        _log = null;
+    }
+
     private void OnExited()
     {
         Process? dead;
@@ -171,8 +184,11 @@ public sealed class VisualEngineProcess : IDisposable
         if (Interlocked.Increment(ref _restarts) > MaxRestarts)
         {
             WriteLog($"visual engine exited {MaxRestarts + 1} times without a healthy run; staying down");
+            CloseLog();
             return;
         }
+        WriteLog($"visual engine exited; restarting ({_restarts}/{MaxRestarts}) in 1.5 s");
+        CloseLog();
         _restartTimer?.Dispose();
         _restartTimer = new Timer(_ =>
         {
@@ -202,8 +218,7 @@ public sealed class VisualEngineProcess : IDisposable
         try { p?.WaitForExit(2000); } catch { }
         p?.Dispose();
         WriteLog("stopped");
-        try { _log?.Dispose(); } catch { }
-        _log = null;
+        CloseLog();
     }
 
     public void Dispose() => Stop();

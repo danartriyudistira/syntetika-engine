@@ -1,0 +1,5659 @@
+{
+  "composition": {
+    "bpm": 105.0,
+    "columns": [
+      {
+        "name": "Intro 0:00"
+      },
+      {
+        "name": "Drop 1 0:35"
+      },
+      {
+        "name": "Break 1:12"
+      },
+      {
+        "name": "Drop 2 2:05"
+      },
+      {
+        "name": "Outro 2:45"
+      },
+      {
+        "name": ""
+      },
+      {
+        "name": ""
+      },
+      {
+        "name": ""
+      }
+    ],
+    "crossfader": {
+      "curve": "linear",
+      "position": 0.5,
+      "position_mod": {
+        "amount": 1.0,
+        "beats": 1.0,
+        "phase": 0.0,
+        "restart": false,
+        "seed": 0,
+        "source": "off"
+      }
+    },
+    "current_deck": 0,
+    "decks": [
+      {
+        "clips": [],
+        "columns": [],
+        "name": "Deck 1"
+      }
+    ],
+    "effects": [],
+    "groups": [],
+    "height": 720,
+    "layers": [
+      {
+        "blend": "normal",
+        "bypass": false,
+        "clips": [
+          {
+            "duration": null,
+            "effects": [],
+            "id": 1,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.30000001192092896,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass_hits"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "DrumBrute Intro 0:00",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5699999332427979
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3799999952316284
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.07999999821186066
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.05000000074505806
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.18000000715255737
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.07999999821186066
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.800000011920929
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.10000000149011612
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.05999999865889549
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6700000166893005
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.149999976158142
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.0499999523162842
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 2,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.30000001192092896,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass_hits"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "DrumBrute Drop 1 0:35",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.1499998569488525
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.2199999988079071
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.800000011920929
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.15000000596046448
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 6.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.2000000476837158
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.699999988079071
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3499999940395355
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6000000238418579
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3199999928474426
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6700000166893005
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8500000238418579
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.7000000476837158
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 3,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.30000001192092896,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass_hits"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "DrumBrute Break 1:12",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5499999523162842
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3199999928474426
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.20000000298023224
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3499999940395355
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 3.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.5
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.15000000596046448
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.7200000286102295
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.10000000149011612
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8199999928474426
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.100000023841858
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8999999761581421
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 4,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.30000001192092896,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass_hits"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "DrumBrute Drop 2 2:05",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.3499999046325684
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.20000000298023224
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8999999761581421
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6000000238418579
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 5.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8999999761581421
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.30000001192092896
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3499999940395355
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.4000000059604645
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.5699999928474426
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.800000011920929
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.4500000476837158
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 5,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.30000001192092896,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass_hits"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "DrumBrute Outro 2:45",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.41999998688697815
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.029999999329447746
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.800000011920929
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.05000000074505806
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.019999999552965164
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8999999761581421
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.029999999329447746
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.03999999910593033
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8199999928474426
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5499999523162842
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.7200000286102295
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          null,
+          null,
+          null
+        ],
+        "crossfade": "none",
+        "effects": [],
+        "group": null,
+        "name": "DrumBrute",
+        "opacity": 0.949999988079071,
+        "opacity_mod": {
+          "amount": 1.0,
+          "beats": 1.0,
+          "phase": 0.0,
+          "restart": false,
+          "seed": 0,
+          "source": "off"
+        },
+        "solo": false,
+        "transform": {
+          "enabled": true,
+          "kind": "clip_transform",
+          "mix": {
+            "modulation": {
+              "amount": 1.0,
+              "beats": 1.0,
+              "phase": 0.0,
+              "restart": false,
+              "seed": 0,
+              "source": "off"
+            },
+            "value": 1.0
+          },
+          "params": {
+            "anchor_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "anchor_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "position_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "position_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_z": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "scale": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            },
+            "scale_h": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            },
+            "scale_w": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            }
+          }
+        },
+        "transition_secs": 0.0
+      },
+      {
+        "blend": "normal",
+        "bypass": false,
+        "clips": [
+          {
+            "duration": null,
+            "effects": [],
+            "id": 6,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.20000000298023224,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Model D Intro 0:00",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.4700000286102295
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3799999952316284
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.09999999403953552
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.07000000029802322
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.18000000715255737
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.06400000303983688
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8799999952316284
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.10499999672174454
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.05999999865889549
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6499999761581421
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.149999976158142
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.965999960899353
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 7,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.20000000298023224,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Model D Drop 1 0:35",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.049999952316284
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.2199999988079071
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8199999928474426
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.17000000178813934
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 6.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.2000000476837158
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.5600000023841858
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.4300000071525574
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6299999952316284
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3199999928474426
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6499999761581421
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8500000238418579
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.564000129699707
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 8,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.20000000298023224,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Model D Break 1:12",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.4500000476837158
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3199999928474426
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.2199999988079071
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3700000047683716
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 3.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.5
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.12000000476837158
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.800000011920929
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.10000000149011612
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.7999999523162842
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.100000023841858
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.828000009059906
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 9,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.20000000298023224,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Model D Drop 2 2:05",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.25
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.20000000298023224
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.9199999570846558
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6200000047683716
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 5.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8999999761581421
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.3600000143051147
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3799999952316284
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.367499977350235
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.4000000059604645
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.5499999523162842
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.800000011920929
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.3340001106262207
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 10,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.20000000298023224,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "bass"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Model D Outro 2:45",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.4000000953674316
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.41999998688697815
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.04999999701976776
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8199999928474426
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.05000000074505806
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.01600000075995922
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.9799999594688416
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.03149999678134918
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.03999999910593033
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.7999999523162842
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5499999523162842
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6624000668525696
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          null,
+          null,
+          null
+        ],
+        "crossfade": "none",
+        "effects": [],
+        "group": null,
+        "name": "Model D",
+        "opacity": 0.25,
+        "opacity_mod": {
+          "amount": 1.0,
+          "beats": 1.0,
+          "phase": 0.0,
+          "restart": false,
+          "seed": 0,
+          "source": "off"
+        },
+        "solo": false,
+        "transform": {
+          "enabled": true,
+          "kind": "clip_transform",
+          "mix": {
+            "modulation": {
+              "amount": 1.0,
+              "beats": 1.0,
+              "phase": 0.0,
+              "restart": false,
+              "seed": 0,
+              "source": "off"
+            },
+            "value": 1.0
+          },
+          "params": {
+            "anchor_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "anchor_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "position_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "position_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_z": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "scale": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            },
+            "scale_h": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            },
+            "scale_w": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            }
+          }
+        },
+        "transition_secs": 0.0
+      },
+      {
+        "blend": "normal",
+        "bypass": false,
+        "clips": [
+          {
+            "duration": null,
+            "effects": [],
+            "id": 11,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.25,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "high_mid"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Kobol Intro 0:00",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3799999952316284
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.10999999940395355
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.09000000357627869
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.18000000715255737
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.07999999821186066
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.800000011920929
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.11000000685453415
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.05999999865889549
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8700000047683716
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.2074998617172241
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.1339999437332153
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 12,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.25,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "high_mid"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Kobol Drop 1 0:35",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.0799999237060547
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.2199999988079071
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8299999833106995
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.1899999976158142
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 6.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.2000000476837158
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.699999988079071
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3499999940395355
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.6600000262260437
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3199999928474426
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8700000047683716
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8924999833106995
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.8360000848770142
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 13,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.25,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "high_mid"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Kobol Break 1:12",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.4800000190734863
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.3199999928474426
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.23000000417232513
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.38999998569488525
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 3.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.5
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.15000000596046448
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.7200000286102295
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.10000000149011612
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.0
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.1549999713897705
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.972000002861023
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 14,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.25,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "high_mid"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Kobol Drop 2 2:05",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 2.2799999713897705
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.20000000298023224
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.9299999475479126
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.64000004529953
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 5.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8999999761581421
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.30000001192092896
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.38499999046325684
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.4000000059604645
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.7699999809265137
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8399999737739563
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.5660001039505005
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          {
+            "duration": null,
+            "effects": [],
+            "id": 15,
+            "media_secs": null,
+            "mods": [
+              {
+                "amount": 0.25,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "high_mid"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              }
+            ],
+            "name": "Kobol Outro 2:45",
+            "params": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "play_mode": "loop",
+            "source": {
+              "generator": {
+                "enabled": true,
+                "kind": "ink-kaleido",
+                "mix": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 1.0
+                },
+                "params": {
+                  "contrast": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.4300000667572021
+                  },
+                  "grain": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.41999998688697815
+                  },
+                  "hatch": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.05999999865889549
+                  },
+                  "phase": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8400000333786011
+                  },
+                  "ringCount": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.0
+                  },
+                  "rings": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.05000000074505806
+                  },
+                  "shards": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.019999999552965164
+                  },
+                  "smoke": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.8999999761581421
+                  },
+                  "snakes": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.032999999821186066
+                  },
+                  "speed": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.03999999910593033
+                  },
+                  "star": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.0
+                  },
+                  "starSize": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 1.600000023841858
+                  },
+                  "zoom": {
+                    "modulation": {
+                      "amount": 1.0,
+                      "beats": 1.0,
+                      "phase": 0.0,
+                      "restart": false,
+                      "seed": 0,
+                      "source": "off"
+                    },
+                    "value": 0.7776000499725342
+                  }
+                }
+              },
+              "type": "isf"
+            },
+            "speed": 1.0,
+            "sync_beats": 8.0,
+            "sync_secs": null,
+            "sync_start": null,
+            "transform": {
+              "enabled": true,
+              "kind": "clip_transform",
+              "mix": {
+                "modulation": {
+                  "amount": 1.0,
+                  "beats": 1.0,
+                  "phase": 0.0,
+                  "restart": false,
+                  "seed": 0,
+                  "source": "off"
+                },
+                "value": 1.0
+              },
+              "params": {
+                "anchor_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "anchor_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "position_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_x": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_y": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "rotation_z": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.5
+                },
+                "scale": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_h": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                },
+                "scale_w": {
+                  "modulation": {
+                    "amount": 1.0,
+                    "beats": 1.0,
+                    "phase": 0.0,
+                    "restart": false,
+                    "seed": 0,
+                    "source": "off"
+                  },
+                  "value": 0.10000000149011612
+                }
+              }
+            }
+          },
+          null,
+          null,
+          null
+        ],
+        "crossfade": "none",
+        "effects": [],
+        "group": null,
+        "name": "Kobol",
+        "opacity": 0.2199999988079071,
+        "opacity_mod": {
+          "amount": 1.0,
+          "beats": 1.0,
+          "phase": 0.0,
+          "restart": false,
+          "seed": 0,
+          "source": "off"
+        },
+        "solo": false,
+        "transform": {
+          "enabled": true,
+          "kind": "clip_transform",
+          "mix": {
+            "modulation": {
+              "amount": 1.0,
+              "beats": 1.0,
+              "phase": 0.0,
+              "restart": false,
+              "seed": 0,
+              "source": "off"
+            },
+            "value": 1.0
+          },
+          "params": {
+            "anchor_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "anchor_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "position_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "position_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_x": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_y": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "rotation_z": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.5
+            },
+            "scale": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            },
+            "scale_h": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            },
+            "scale_w": {
+              "modulation": {
+                "amount": 1.0,
+                "beats": 1.0,
+                "phase": 0.0,
+                "restart": false,
+                "seed": 0,
+                "source": "off"
+              },
+              "value": 0.10000000149011612
+            }
+          }
+        },
+        "transition_secs": 0.0
+      }
+    ],
+    "master": 1.0,
+    "master_mod": {
+      "amount": 1.0,
+      "beats": 1.0,
+      "phase": 0.0,
+      "restart": false,
+      "seed": 0,
+      "source": "off"
+    },
+    "name": "Syntetika Demo — Ink Industrial 2:59",
+    "next_id": 16,
+    "reactivity": 1.0,
+    "version": 1,
+    "width": 1280
+  },
+  "layout_uids": [
+    "3ad75caa37104fd29310f9a2ee737962",
+    "bd14039716454fae8450426125ddec78",
+    "21f236927e354efeacb2acf112573412"
+  ],
+  "version": 1
+}

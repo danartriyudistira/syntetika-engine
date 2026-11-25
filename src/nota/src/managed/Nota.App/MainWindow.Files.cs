@@ -352,6 +352,21 @@ public partial class MainWindow
         return trimmed.Length == 0 ? dir : trimmed;
     }
 
+    /// <summary>Opens the project the shell passed: a `.syntetika` file or a legacy folder.</summary>
+    private void OpenStartupProject()
+    {
+        if (Program.StartupProject is not { Length: > 0 } path) return;
+        Program.StartupProject = null;
+        if (System.IO.File.Exists(path))
+        {
+            try { OpenContainerProject(path); } catch { /* a bad path must not stop startup */ }
+        }
+        else if (System.IO.Directory.Exists(path))
+        {
+            try { OpenProject(path); } catch { /* a bad path must not stop startup */ }
+        }
+    }
+
     /// <summary>Loads a bundle folder into the engine. <paramref name="containerFile"/> is the
     /// `.syntetika` file when <paramref name="dir"/> is its extracted working folder.
     /// <paramref name="recentPath"/> is what Recent Projects lists (defaults to the folder).</summary>

@@ -25,7 +25,7 @@ public static class VideoAudio
 
     private static string? Resolve(string tool)
     {
-        string exe = tool;
+        string exe = OperatingSystem.IsWindows() ? tool + ".exe" : tool;
         var dirs = new System.Collections.Generic.List<string>();
         if (Environment.GetEnvironmentVariable("SYNTETIKA_FFMPEG") is { Length: > 0 } env) dirs.Add(env);
         if (Environment.GetEnvironmentVariable("OPENVJ_FFMPEG_DIR") is { Length: > 0 } ov) dirs.Add(ov);
@@ -40,9 +40,19 @@ public static class VideoAudio
         }
         dirs.Add(AppContext.BaseDirectory);
         dirs.Add(Path.Combine(AppContext.BaseDirectory, "..", "Helpers"));
-        dirs.Add("/opt/homebrew/bin");
-        dirs.Add("/usr/local/bin");
-        dirs.Add("/usr/bin");
+        if (OperatingSystem.IsWindows())
+        {
+            // A winget/scoop/chocolatey FFmpeg, so "extract audio from a video clip" works even
+            // without the bundled copy.
+            dirs.Add(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WinGet", "Links"));
+        }
+        else
+        {
+            dirs.Add("/opt/homebrew/bin");
+            dirs.Add("/usr/local/bin");
+            dirs.Add("/usr/bin");
+        }
         foreach (string dir in dirs)
         {
             string candidate = Path.GetFullPath(Path.Combine(dir, exe));

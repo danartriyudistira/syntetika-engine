@@ -6,7 +6,7 @@ Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an 
 
 ![Syntetika Engine: the Session grid and OpenVJ tab driving a monochrome ink kaleidoscope in the always-on-top visual output](docs/images/syntetika-engine.png)
 
-> Status: **alpha (0.1.6)**. macOS Apple Silicon first. Expect rough edges.
+> Status: **alpha (0.1.6)**. macOS Apple Silicon and Windows x64. Expect rough edges.
 > What works, known limits and the roadmap: [docs/04-status-dan-rencana.md](docs/04-status-dan-rencana.md).
 
 ## Built on two excellent open-source projects
@@ -74,18 +74,33 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 
 ## Run it
 
+**macOS** (Apple Silicon):
+
 ```bash
 open "./src/nota/dist/Syntetika Engine.app"
 ```
+
+**Windows** (x64): run the installer from the
+[releases page](https://github.com/danartriyudistira/syntetika-engine/releases/latest), or
+build it yourself:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1
+& src/nota/src/managed/Nota.App/bin/Release/net10.0/Nota.App.exe
+```
+
+The Windows installer is self-contained (no .NET needed) and installs per user by default.
+Build/packaging details: [docs/05-windows.md](docs/05-windows.md).
 
 Prebuilt macOS installers (Apple Silicon) are on the
 [releases page](https://github.com/danartriyudistira/syntetika-engine/releases/latest); see
 [docs/download.md](docs/download.md) for install, Gatekeeper and checksums.
 
-The app starts its bundled visual engine (`Contents/Helpers/syntetika-visual`), restarts it if
-it crashes, and stops it on quit. Then open **Session View**, select a clip, and use the
-**OpenVJ** tab to assign a visual. Build instructions live in
-[docs/02-m0-setup.md](docs/02-m0-setup.md).
+The app starts its bundled visual engine (`Contents/Helpers/syntetika-visual` on macOS,
+`syntetika-visual.exe` beside the app on Windows), restarts it if it crashes, and stops it
+on quit. Then open **Session View**, select a clip, and use the **OpenVJ** tab to assign a
+visual. Build instructions live in [docs/02-m0-setup.md](docs/02-m0-setup.md) and
+[docs/05-windows.md](docs/05-windows.md).
 
 Package a DMG (the bundle must be built first):
 
@@ -110,8 +125,9 @@ scripts/       build environment
 
 ## Data & migration
 
-This build keeps its profile in `~/Library/Application Support/Syntetika Engine`. On first
-launch it copies an existing `NotAopenVJ` profile once and leaves the old folder untouched.
+This build keeps its profile in `~/Library/Application Support/Syntetika Engine` on macOS and
+`%APPDATA%\Syntetika Engine` on Windows. On first launch it copies an existing `NotAopenVJ`
+profile once (macOS) and leaves the old folder untouched.
 
 ## Credits & licences
 

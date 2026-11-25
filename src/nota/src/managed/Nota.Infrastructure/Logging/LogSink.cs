@@ -23,7 +23,7 @@ public sealed class LogSink : ILogSink
     {
         _dir = NotaPaths.SubDir("logs");
 
-        Write(LogLevel.Info, $"--- session start · Nota · {Environment.OSVersion} ---");
+        Write(LogLevel.Info, $"--- session start · {Branding.ProductName} · {Environment.OSVersion} ---");
     }
 
     public void Write(LogLevel level, string message)

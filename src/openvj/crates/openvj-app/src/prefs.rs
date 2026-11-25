@@ -3,13 +3,17 @@
 use std::path::PathBuf;
 
 /// openVJ's settings folder: `~/Library/Application Support/openVJ` on macOS,
-/// `%APPDATA%\openVJ` on Windows, `$XDG_CONFIG_HOME/openvj` elsewhere.
+/// `%APPDATA%\Syntetika Engine\visual` on Windows (so a stock openVJ install and this fork
+/// do not share preferences), `$XDG_CONFIG_HOME/openvj` elsewhere.
 pub fn settings_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
         Some(home?.join("Library/Application Support/openVJ"))
     } else if cfg!(windows) {
-        Some(PathBuf::from(std::env::var_os("APPDATA")?).join("openVJ"))
+        let dir = PathBuf::from(std::env::var_os("APPDATA")?).join("Syntetika Engine").join("visual");
+        let old = PathBuf::from(std::env::var_os("APPDATA")?).join("openVJ");
+        migrate_from_openvj(&old, &dir);
+        Some(dir)
     } else {
         Some(
             std::env::var_os("XDG_CONFIG_HOME")
@@ -19,6 +23,25 @@ pub fn settings_dir() -> Option<PathBuf> {
         )
     }
 }
+
+/// Brings an openVJ installation's settings across once, so the fork starts with the same
+/// layout and library. The old folder is left untouched.
+#[cfg(windows)]
+fn migrate_from_openvj(old: &std::path::Path, new: &std::path::Path) {
+    if new.exists() || !old.is_dir() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(new);
+    for name in ["preferences.json", "library.json", "output-mapping.json"] {
+        let from = old.join(name);
+        if from.is_file() {
+            let _ = std::fs::copy(&from, new.join(name));
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn migrate_from_openvj(_old: &std::path::Path, _new: &std::path::Path) {}
 
 /// The layouts in the LAYOUT menu, in menu order (see ui/layouts.slint).
 const LAYOUTS: [&str; 4] = ["mixer", "player", "synthesis", "discover"];

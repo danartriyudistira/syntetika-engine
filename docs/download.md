@@ -1,17 +1,54 @@
 # Download Syntetika Engine
 
-The latest installer is on GitHub:
+The latest installers are on GitHub:
 
 **[Syntetika Engine releases](https://github.com/danartriyudistira/syntetika-engine/releases/latest)**
 
 | | |
 |---|---|
 | Latest release | **0.1.6** |
-| File | `Syntetika-Engine-0.1.6-arm64.dmg` (112 MB) |
-| Requires | macOS 12 or newer, Apple Silicon (arm64) |
-| SHA-256 | `6f307c5e5f9007c950c0e4bede490d6c983577ff8ed76a44a81b397955b82143` |
+| macOS | `Syntetika-Engine-0.1.6-arm64.dmg` (112 MB) — macOS 12+, Apple Silicon |
+| Windows | `Syntetika-Engine-Setup-0.1.6-x64.exe` (110 MB) — Windows 10/11 x64 |
 
-## Install
+macOS SHA-256: `6f307c5e5f9007c950c0e4bede490d6c983577ff8ed76a44a81b397955b82143`
+
+Windows SHA-256: `e108e3a7265922ecb8cef97e759e2844d12d065abb57ac97d7d1afad7f06d8f5`
+
+## Install on Windows
+
+1. Download `Syntetika-Engine-Setup-0.1.4-x64.exe` and its `.sha256` from the release.
+2. Verify the download (PowerShell):
+
+   ```powershell
+   Get-FileHash .\Syntetika-Engine-Setup-0.1.4-x64.exe -Algorithm SHA256
+   ```
+
+3. Run the installer. It installs **per user** (no administrator prompt) into
+   `%LOCALAPPDATA%\Programs\Syntetika Engine` and adds Start Menu and desktop shortcuts.
+   Choosing "install for all users" on the privileges page uses `Program Files` instead.
+4. Launch **Syntetika Engine** from the Start Menu.
+
+The package is self-contained: .NET, the Visual C++ runtime and FFmpeg are bundled, so the
+PC needs nothing installed beforehand.
+
+### SmartScreen
+
+The installer is **not code-signed yet** (no certificate on the build machine). Windows may
+say "Windows protected your PC". Choose **More info → Run anyway**. A new build installed
+over an old one keeps projects and settings.
+
+### Open a project
+
+Nota projects are folders ending in `.nota`. Windows always opens a folder in Explorer, so
+right-click the project folder and choose **Open with Syntetika Engine** (added by the
+installer), or use **File → Open** in the app.
+
+### Uninstall
+
+Settings → Apps → **Syntetika Engine** → Uninstall (or the Start Menu entry). Projects and
+settings in `%APPDATA%\Syntetika Engine` are kept.
+
+## Install on macOS
 
 1. Download the `.dmg` and its `.sha256` from the release.
 2. Verify the download:
@@ -37,18 +74,25 @@ kept in [release.md](release.md) for when a Developer ID becomes available.
 
 ## What's inside
 
-One app bundle: Nota is the DAW host and `syntetika-visual` (openVJ) runs from
-`Contents/Helpers`, together with FFmpeg and Syphon. Session clips carry visuals; the DAW's
-transport, launches and master audio drive the picture.
+Nota is the DAW host; `syntetika-visual` (openVJ) runs beside it — in
+`Contents/Helpers` on macOS, in the app folder as `syntetika-visual.exe` on Windows.
+FFmpeg ships with both, so video clips carry their sound. Session clips carry visuals; the
+DAW's transport, launches and master audio drive the picture.
 
-First launch creates `~/Library/Application Support/Syntetika Engine`. An older
-`NotAopenVJ` profile is copied once, without deleting the original.
+Syphon is macOS-only; the Windows build cannot send video to other apps yet (Spout is not
+integrated). Everything else in the Windows build — audio, visuals, mapping, projection
+output, audio-reactive parameters — is the same.
+
+First launch creates the profile:
+
+- macOS: `~/Library/Application Support/Syntetika Engine` (an older `NotAopenVJ` profile is
+  copied once, without deleting the original).
+- Windows: `%APPDATA%\Syntetika Engine`.
 
 ## Staying up to date
 
 The self-updater is disabled on purpose: it would replace this fork with a stock Nota release.
-Install a new DMG over the old app; projects and settings stay in the application-support
-folder.
+Install a new build over the old one; projects and settings stay in the profile folder.
 
 ## Older builds
 

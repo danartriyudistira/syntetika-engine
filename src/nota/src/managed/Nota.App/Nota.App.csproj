@@ -9,7 +9,7 @@
     <!-- Windows .exe icon (Explorer / taskbar / alt-tab). The WinExe output embeds
          this .ico as the Win32 icon resource. macOS uses the .icns produced by
          scripts/bundle-mac.sh for the .app bundle, so we only set this on Windows. -->
-    <ApplicationIcon Condition="$([MSBuild]::IsOSPlatform('Windows')) or $(RuntimeIdentifier.StartsWith('win'))">..\..\..\assets\icons\windows\nota.ico</ApplicationIcon>
+    <ApplicationIcon Condition="$([MSBuild]::IsOSPlatform('Windows')) or $(RuntimeIdentifier.StartsWith('win'))">..\..\..\assets\icons\windows\syntetika.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -38,7 +38,7 @@
     <AvaloniaResource Include="..\..\..\assets\icons\logo.png" Link="Assets/logo.png" />
     <!-- Windows/Linux window icon (.ico with multiple resolutions). macOS uses the
          .icns produced by scripts/bundle-mac.sh for the dock/Finder icon. -->
-    <AvaloniaResource Include="..\..\..\assets\icons\windows\nota.ico" Link="Assets/nota.ico" />
+    <AvaloniaResource Include="..\..\..\assets\icons\windows\syntetika.ico" Link="Assets/syntetika.ico" />
     <!-- Ship the changelog inside the app so the "What's New" window can parse the
          entries for the current version at runtime (avares://Nota.App/Assets/CHANGELOG.md). -->
     <AvaloniaResource Include="..\..\..\CHANGELOG.md" Link="Assets/CHANGELOG.md" />
