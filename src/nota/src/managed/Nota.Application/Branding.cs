@@ -30,7 +30,7 @@ public static class Branding
     public const bool UpdatesEnabled = false;
 
     /// <summary>Product version (the app), independent of the Nota engine version.</summary>
-    public const string ProductVersion = "0.1.5";
+    public const string ProductVersion = "0.1.6";
 
     /// <summary>Loopback port for the MCP server; 3900 is taken by a stock Nota install.</summary>
     public const int DefaultMcpPort = 3910;

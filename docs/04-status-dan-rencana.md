@@ -850,6 +850,20 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Belum**: preset belum otomatis membuat MIDI clip atau pattern; setelah kit dimuat, pakai
   **Pattern → Random…** dengan genre yang sama untuk langsung mendapat pola.
 
+## 7ai. Rilis 0.1.6 (25 Nov)
+
+- Produk **0.1.6**; Nota 0.60.4, openVJ 0.1.0. Isi: 20 preset Drum Rack per genre di
+  **Instruments → Drum Rack → Genres** (House, Techno, Hip-Hop, Trap, DnB, Reggaeton, Jazz,
+  Lo-Fi, dst.), juga di Nota Rhythm.
+- Preset meminjam pad kit factory yang cocok dan mengatur swing/humanize/FX space; sampel
+  dirender sekali dan dipakai bersama, kit dasar tidak berubah. Drum Rack mengenali preset
+  dari pad + timing; Rhythm menyimpan ID preset.
+- **Bukti**: 45 entri kit (25 base + 20 genre), preset House memuat 16 pad dengan timing sendiri,
+  setiap base kit dan setiap genre preset dikenali kembali, Rhythm mengingat preset; full
+  smoke lulus di bagian kit.
+- **DMG**: `Syntetika-Engine-0.1.6-arm64.dmg` 112 MB, ad-hoc signed.
+  SHA-256 `6f307c5e5f9007c950c0e4bede490d6c983577ff8ed76a44a81b397955b82143`.
+
 ## 8. Risiko
 
 | Risiko | Mitigasi |
