@@ -804,7 +804,9 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
   clip dan tiap 8 bar; open hat menggantikan closed hat pada step yang sama; ghost snare
   velocity rendah.
 - **Tulis**: pola 16th; grid otomatis pindah ke 1/16. Replace = hapus note pad lalu tulis pola
-  baru dalam **satu undo step**; fill = hanya mengisi step kosong. Dialog punya **Surprise me**.
+  baru dalam **satu undo step**; fill = hanya mengisi step kosong. **Generate tidak menutup
+  dialog** — status di dialog menunjukkan hasil, bisa roll lagi, dan **Close** menutup manual.
+  Dialog punya **Surprise me** (acak + langsung generate).
 - **Bukti**: mode `--drum-genre` lulus 27 cek: mapping nama/GM/fallback, house four-on-floor +
   backbeat, trap 0/6/10, reggaeton dembow, jazz comp, mix 0/1, alternate bars, 3/4, clip < 1 bar,
   density/variation, dan semua genre (tidak ada pitch asing/duplikat/di luar clip).

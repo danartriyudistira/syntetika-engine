@@ -30,9 +30,11 @@ diffs are in `patches/`.
   Snare, Closed Hat and Open Hat from its lowest pads. Choose a second genre and either blend
   it step by step or alternate bars, then set **Density** (signature hits only → busy) and
   **Variation** (one repeated bar → re-rolled bars and four-bar fills). **Replace** overwrites
-  the pad notes in one undo step; off, it only fills empty steps. The grid switches to 1/16,
-  and open hats replace closed hats, ghost snares and phrase crashes are built in. Tests cover
-  role mapping, the signature of each genre, mixes, alternate bars, odd meters and every genre.
+  the pad notes in one undo step; off, it only fills empty steps. **Generate** keeps the dialog
+  open for another roll, with the result in its status line; **Close** ends the session. The
+  grid switches to 1/16, and open hats replace closed hats, ghost snares and phrase crashes are
+  built in. Tests cover role mapping, the signature of each genre, mixes, alternate bars, odd
+  meters and every genre.
 
 - **One-file projects (`.syntetika`)**: a project can be a single ZIP container holding the
   bundle Nota already wrote — `project.json`, sidecars, samples, plugin states, visuals/media

@@ -247,11 +247,16 @@ public sealed class DrumPatternView : UserControl
             return;
         }
         if (TopLevel.GetTopLevel(this) is not Window owner) return;
-        var picked = await new PatternGeneratorWindow(DrumPatternGenerator.Genres,
-                DrumPatternGenerator.RoleSummary(before))
-            .ShowDialog<PatternGeneratorOptions?>(owner);
-        if (picked is null) return;
+        var dialog = new PatternGeneratorWindow(DrumPatternGenerator.Genres,
+            DrumPatternGenerator.RoleSummary(before));
+        // Generate writes into the clip and reports back, but leaves the dialog open: the
+        // user rolls again or closes it with Close. Each write is its own undo step.
+        dialog.GenerateRequested = ApplyGeneratedPattern;
+        await dialog.ShowDialog(owner);
+    }
 
+    private string ApplyGeneratedPattern(PatternGeneratorOptions picked)
+    {
         // The genre sketches are 16th-note patterns; show them whole. Reload first so a pad
         // or clip change made while the dialog was open is not overwritten with stale notes.
         if (_res != 4) { _res = _resPersist = 4; _winStart = 0; Rebuild(); }
@@ -264,8 +269,9 @@ public sealed class DrumPatternView : UserControl
                                    picked.Density, picked.Variation), Random.Shared.Next());
         if (generated.Count == 0)
         {
-            Status?.Invoke(Loc.T("drum_pattern.no_notes_generated"));
-            return;
+            string empty = Loc.T("drum_pattern.no_notes_generated");
+            Status?.Invoke(empty);
+            return empty;
         }
 
         int added = 0;
@@ -290,15 +296,18 @@ public sealed class DrumPatternView : UserControl
         }
         if (added == 0)
         {
-            Status?.Invoke(Loc.T("drum_pattern.nothing_added"));
-            return;
+            string nothing = Loc.T("drum_pattern.nothing_added");
+            Status?.Invoke(nothing);
+            return nothing;
         }
 
         Commit();
         string label = picked.GenreB is { Length: > 0 }
             ? $"{DrumPatternGenerator.NameOf(picked.GenreA)} + {DrumPatternGenerator.NameOf(picked.GenreB)}"
             : DrumPatternGenerator.NameOf(picked.GenreA);
-        Status?.Invoke(Loc.F("drum_pattern.generated_notes", added, label));
+        string message = Loc.F("drum_pattern.generated_notes", added, label);
+        Status?.Invoke(message);
+        return message;
     }
 
     // ---- build ------------------------------------------------------------

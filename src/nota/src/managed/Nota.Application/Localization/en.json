@@ -2314,6 +2314,7 @@
     "drum_pattern.density": "Density",
     "drum_pattern.drop_samples_on_the_drum": "Drop samples on the Drum Rack pads in Devices, then step them here.",
     "drum_pattern.generate": "Generate",
+    "drum_pattern.generate_keeps_this_window": "Generate keeps this window open; close it when you're done.",
     "drum_pattern.generated_notes": "Generated {0} notes · {1}",
     "drum_pattern.genre": "Genre",
     "drum_pattern.mix": "Mix",

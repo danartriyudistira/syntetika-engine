@@ -42,6 +42,11 @@ public sealed class PatternGeneratorWindow : NotaWindow
     private readonly Slider _mix, _density, _variation;
     private readonly TextBlock _mixValue, _densityValue, _variationValue;
     private readonly CheckBox _alternate, _replace;
+    private readonly TextBlock _status;
+
+    /// <summary>Raised for every Generate press while the window stays open. The return value
+    /// is the dialog's status line (e.g. how many notes were written).</summary>
+    public Func<PatternGeneratorOptions, string>? GenerateRequested { get; set; }
 
     public PatternGeneratorWindow(IReadOnlyList<DrumGenre> genres, string roles)
     {
@@ -54,7 +59,7 @@ public sealed class PatternGeneratorWindow : NotaWindow
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = Panel;
-        KeyDown += (_, e) => { if (e.Key == Key.Escape && !e.Handled) { e.Handled = true; Close(null); } };
+        KeyDown += (_, e) => { if (e.Key == Key.Escape && !e.Handled) { e.Handled = true; Close(); } };
 
         var body = new StackPanel { Margin = new Thickness(18, 16), Spacing = 14 };
         body.Children.Add(new TextBlock
@@ -155,16 +160,25 @@ public sealed class PatternGeneratorWindow : NotaWindow
             },
         });
 
-        // Footer: surprise, cancel, generate.
+        // A status line: Generate writes into the clip but leaves this window open, so the
+        // user can keep rolling and listening; Close is the only way out.
+        _status = new TextBlock
+        {
+            Text = Loc.T("drum_pattern.generate_keeps_this_window"),
+            FontSize = 9, Foreground = TextTertiary, TextWrapping = TextWrapping.Wrap,
+        };
+        body.Children.Add(_status);
+
+        // Footer: surprise, close, generate.
         var surprise = new Button { Content = Loc.T("drum_pattern.surprise_me"), Classes = { "ghost" } };
         surprise.Click += (_, _) => { Surprise(); Generate(); };   // one-click: roll and go
-        var cancel = new Button { Content = Loc.T("common.cancel"), Classes = { "ghost" } };
-        cancel.Click += (_, _) => Close(null);
+        var close = new Button { Content = Loc.T("common.close"), Classes = { "ghost" } };
+        close.Click += (_, _) => Close();
         var generate = new Button { Content = Loc.T("drum_pattern.generate"), Classes = { "primary" } };
         generate.Click += (_, _) => Generate();
         var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), ColumnSpacing = 8 };
         footer.Children.Add(surprise);
-        Grid.SetColumn(cancel, 2); footer.Children.Add(cancel);
+        Grid.SetColumn(close, 2); footer.Children.Add(close);
         Grid.SetColumn(generate, 3); footer.Children.Add(generate);
         body.Children.Add(footer);
 
@@ -188,7 +202,7 @@ public sealed class PatternGeneratorWindow : NotaWindow
             _genres[ai].Id, bId, _mix.Value, _alternate.IsChecked == true,
             _density.Value, _variation.Value, _replace.IsChecked == true);
         s_last = opts;
-        Close(opts);
+        if (GenerateRequested is { } write) _status.Text = write(opts);
     }
 
     private void UpdateMixEnabled()
