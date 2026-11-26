@@ -102,6 +102,7 @@ langkah itu dilewati dan SmartScreen tetap menampilkan "Unknown publisher".
 |---|---|---|
 | GPU | Metal | **DX12** (default), Vulkan bisa dipaksa `WGPU_BACKEND=vulkan` |
 | Berbagi frame | Syphon | **Spout** (Settings → Output, default mati; nama pengirim "Syntetika Engine") |
+| Gamepad | GameController (macOS) | **XInput** (Xbox-compatible; 4 pad) |
 | MIDI out ke synth eksternal | MIDI out per track (RtMidi) | sama: track menu → **MIDI out** (port + channel) |
 | Audio tap Nota → openVJ | `mmap` POSIX | `CreateFileMapping`/`MapViewOfFile` (`AudioTap.cpp`, `nota_tap.rs`) |
 | FFmpeg | dibundel di `Helpers/` | dibundel di folder app (LGPL, `scripts/get-ffmpeg-win.ps1`) |

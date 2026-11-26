@@ -236,9 +236,16 @@ elseif(WIN32 OR (UNIX AND NOT APPLE))
         src/audio_io/desktop/MidiInput_rtmidi.cpp
         src/audio_io/desktop/MidiOutput_rtmidi.cpp
         src/audio_io/desktop/MidiConfig_rtmidi.cpp
-        src/audio_io/desktop/GamepadInput_stub.cpp     # v1: macOS-only; reports zero pads
         ${rtmidi_SOURCE_DIR}/RtMidi.cpp
     )
+    if(WIN32)
+        # XInput pads (the macOS build uses GameController; Linux still reports none).
+        list(APPEND NOTA_ENGINE_SOURCES
+            src/audio_io/windows/GamepadInput_xinput.cpp
+        )
+    else()
+        list(APPEND NOTA_ENGINE_SOURCES src/audio_io/desktop/GamepadInput_stub.cpp)
+    endif()
     if(WIN32)
         # ASIO beside WASAPI (specs/049): registry list, IASIO adapter, the two facades.
         list(APPEND NOTA_ENGINE_SOURCES
@@ -310,7 +317,7 @@ elseif(WIN32)
     # clobbering std::min/max and bloating the DSP TUs; _USE_MATH_DEFINES gives M_PI.
     target_compile_definitions(nota_engine PRIVATE
         __WINDOWS_MM__ NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES)
-    target_link_libraries(nota_engine PRIVATE winmm ole32)
+    target_link_libraries(nota_engine PRIVATE winmm ole32 xinput)
     # ASIO (specs/049): SDK headers only, from the CPM zip (cmake/dependencies.cmake).
     target_include_directories(nota_engine SYSTEM PRIVATE ${asiosdk_SOURCE_DIR}/common)
     target_compile_definitions(nota_engine PRIVATE NOTA_HAS_ASIO=1)

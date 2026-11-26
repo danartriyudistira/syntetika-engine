@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Egor Khindikaynen (Nota). See LICENSES/ for license terms.
 //
-// Gamepad input (macOS, GameController framework). GCController decodes the
+// Gamepad input (macOS GameController, Windows XInput). GCController decodes the
 // pad (Xbox / PlayStation / Switch Pro / 8BitDo …) into named inputs and calls
 // our value handler on a serial queue; each button edge is pushed into a
 // lock-free ring buffer. The UI polls it via nota_gamepad_poll_events() on its
@@ -23,7 +23,8 @@
 // latest position anyway. They live in a small latest-value table the UI reads
 // on its tick (axisValues), which coalesces by construction and cannot overflow.
 //
-// v1 is macOS-only; Win (XInput/RawInput) and Linux (evdev) come next.
+// macOS uses GameController; Windows uses XInput (GamepadInput_xinput.cpp). Linux (evdev)
+// still reports no pads.
 
 #pragma once
 
