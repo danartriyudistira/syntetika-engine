@@ -424,6 +424,18 @@ internal static partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "nota_track_get_monitor")]
     internal static partial int TrackGetMonitor(IntPtr engine, int trackId);
 
+    [LibraryImport(Lib, EntryPoint = "nota_track_set_monitor_mode")]
+    internal static partial NotaResult TrackSetMonitorMode(IntPtr engine, int trackId, int mode);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_get_monitor_mode")]
+    internal static partial int TrackGetMonitorMode(IntPtr engine, int trackId);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_set_midi_monitor")]
+    internal static partial NotaResult TrackSetMidiMonitor(IntPtr engine, int trackId, int mode);
+
+    [LibraryImport(Lib, EntryPoint = "nota_track_get_midi_monitor")]
+    internal static partial int TrackGetMidiMonitor(IntPtr engine, int trackId);
+
     [LibraryImport(Lib, EntryPoint = "nota_engine_push_monitor_frames")]
     internal static partial void EnginePushMonitorFrames(IntPtr engine, float[] interleavedStereo, int frames);
 

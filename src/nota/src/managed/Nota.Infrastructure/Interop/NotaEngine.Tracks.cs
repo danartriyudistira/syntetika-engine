@@ -694,6 +694,20 @@ public sealed partial class NotaEngine
     public bool GetTrackMonitor(int trackId)
     { ThrowIfDisposed(); return NativeMethods.TrackGetMonitor(_handle, trackId) != 0; }
 
+    /// <summary>Monitor mode, Ableton-style: 0 In, 1 Auto (while armed), 2 Off.</summary>
+    public void SetTrackMonitorMode(int trackId, int mode)
+    { ThrowIfDisposed(); NativeMethods.TrackSetMonitorMode(_handle, trackId, Math.Clamp(mode, 0, 2)); }
+
+    public int GetTrackMonitorMode(int trackId)
+    { ThrowIfDisposed(); return NativeMethods.TrackGetMonitorMode(_handle, trackId); }
+
+    /// <summary>Instrument-track MIDI monitor: 0 In, 1 Auto (default), 2 Off.</summary>
+    public void SetTrackMidiMonitor(int trackId, int mode)
+    { ThrowIfDisposed(); NativeMethods.TrackSetMidiMonitor(_handle, trackId, Math.Clamp(mode, 0, 2)); }
+
+    public int GetTrackMidiMonitor(int trackId)
+    { ThrowIfDisposed(); return NativeMethods.TrackGetMidiMonitor(_handle, trackId); }
+
     /// <summary>Test hook: feed the hardware-monitor ring without opening a capture device.</summary>
     public void PushMonitorFramesForTest(float[] interleavedStereo, int frames)
     { ThrowIfDisposed(); NativeMethods.EnginePushMonitorFrames(_handle, interleavedStereo, frames); }

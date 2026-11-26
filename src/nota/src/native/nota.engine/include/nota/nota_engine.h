@@ -1879,6 +1879,14 @@ NOTA_API int32_t    nota_audio_scatter_test(const NotaEngine* engine, const floa
  * silent (it would feed back). push_monitor_frames feeds the hardware-monitor ring without
  * opening a capture device (tests only). */
 NOTA_API NotaResult nota_track_set_monitor(NotaEngine* engine, int32_t track_id, int32_t on);
+/* Monitor mode, Ableton-style: 0 In (always), 1 Auto (while armed), 2 Off. Audio tracks;
+ * MIDI monitor has its own pair for instrument tracks below. */
+NOTA_API NotaResult nota_track_set_monitor_mode(NotaEngine* engine, int32_t track_id, int32_t mode);
+NOTA_API int32_t    nota_track_get_monitor_mode(NotaEngine* engine, int32_t track_id);
+/* Instrument-track MIDI monitor: 0 In (live input always plays), 1 Auto (while armed, the
+ * default), 2 Off. Clip playback is unaffected. */
+NOTA_API NotaResult nota_track_set_midi_monitor(NotaEngine* engine, int32_t track_id, int32_t mode);
+NOTA_API int32_t    nota_track_get_midi_monitor(NotaEngine* engine, int32_t track_id);
 NOTA_API int32_t    nota_track_get_monitor(NotaEngine* engine, int32_t track_id);
 NOTA_API void       nota_engine_push_monitor_frames(NotaEngine* engine, const float* interleaved_stereo, int32_t frames);
 /* Tests only: the rate the pushed monitor frames were "captured" at (0 = the engine's), as a

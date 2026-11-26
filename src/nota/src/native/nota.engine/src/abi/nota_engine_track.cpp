@@ -882,6 +882,23 @@ NotaResult nota_track_set_monitor(NotaEngine* e, int32_t track_id, int32_t on) {
 int32_t nota_track_get_monitor(NotaEngine* e, int32_t track_id) {
     return (e && CENG(e)->trackMonitor(track_id)) ? 1 : 0;
 }
+// Monitor mode (In/Auto/Off) for audio tracks; MIDI monitor is its own pair for instruments.
+NotaResult nota_track_set_monitor_mode(NotaEngine* e, int32_t track_id, int32_t mode) {
+    if (!e) return NOTA_ERR_INVALID_ARG;
+    ENG(e)->setTrackMonitorMode(track_id, mode);
+    return NOTA_OK;
+}
+int32_t nota_track_get_monitor_mode(NotaEngine* e, int32_t track_id) {
+    return e ? CENG(e)->trackMonitorMode(track_id) : 2;
+}
+NotaResult nota_track_set_midi_monitor(NotaEngine* e, int32_t track_id, int32_t mode) {
+    if (!e) return NOTA_ERR_INVALID_ARG;
+    ENG(e)->setTrackMidiMonitor(track_id, mode);
+    return NOTA_OK;
+}
+int32_t nota_track_get_midi_monitor(NotaEngine* e, int32_t track_id) {
+    return e ? CENG(e)->trackMidiMonitor(track_id) : 1;
+}
 void nota_engine_push_monitor_frames(NotaEngine* e, const float* interleaved_stereo, int32_t frames) {
     if (e && interleaved_stereo && frames > 0) ENG(e)->pushMonitorFramesForTest(interleaved_stereo, frames);
 }

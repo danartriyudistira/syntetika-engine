@@ -595,8 +595,11 @@ public sealed partial class MixerView : UserControl
         string io2 = isReturn ? Loc.T("mixer.master")
                    : ti.IsGroup ? "→ " + (ti.GroupId >= 0 ? TrackNames.Of(_engine, ti.GroupId) : Loc.T("common.master"))
                    : ti.IsInstrument ? Loc.T("mixer.monitor_auto") : Loc.T("mixer.monitor_in");
-        // Instrument tracks get a live "MIDI To" selector in place of the static I/O text.
-        var ioRow = ti.IsInstrument ? MidiIoRow(id) : IoRow(io1, io2);
+        // Instrument tracks get an Ableton-style I/O block (MIDI From/Monitor/MIDI To and the
+        // audio destination); audio tracks get Audio From/Monitor/Audio To.
+        var ioRow = ti.IsInstrument ? MidiIoRow(id)
+            : ti.IsGroup || ti.IsReturn ? IoRow(io1, io2)
+            : AudioIoRow(id);
         ioRow.IsVisible = IoShown;
         _ioSections.Add(ioRow);
         col.Children.Add(ioRow);
@@ -942,9 +945,28 @@ public sealed partial class MixerView : UserControl
         return d;
     }
 
+    private const double IoBlockH = 156;   // one height for every strip, so the faders line up
+    private static TextBlock IoLabel(string text) => new() { Text = text, FontSize = 8, Foreground = TextTertiary };
+    private static ComboBox IoCombo()
+    {
+        var cb = new ComboBox
+        {
+            FontSize = 8, Height = 17, MinHeight = 0, Padding = new Thickness(4, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        };
+        return cb;
+    }
+
+    private Border IoWrap(Control body) => new()
+    {
+        Height = IoBlockH, BorderBrush = BorderInner, BorderThickness = new Thickness(0, 0, 0, 1),
+        Padding = new Thickness(7, 4), Child = body,
+    };
+
     private Control IoRow(string io1, string io2) => new Border
     {
-        Height = 34, BorderBrush = BorderInner, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(7, 4),
+        Height = IoBlockH, BorderBrush = BorderInner, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(7, 4),
+        VerticalAlignment = VerticalAlignment.Top,
         Child = new StackPanel
         {
             Spacing = 2,
@@ -958,83 +980,122 @@ public sealed partial class MixerView : UserControl
 
     // Instrument-track I/O row: a "MIDI In" selector (None, or another instrument track whose
     // MIDI this one receives) over the label. Writes/reads via the engine.
+    // Instrument strip I/O, Ableton-style: MIDI From (device + channel), Monitor (In/Auto/Off),
+    // MIDI To (port + channel) and Audio To (Master/group).
     private Control MidiIoRow(int id, bool compact = false)
     {
-        var cb = new ComboBox
-        {
-            FontSize = 8, Height = 16, MinHeight = 0, Padding = new Thickness(5, 0),
-            HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-        };
-        if (compact)
-        {
-            // Plain strings drawn by a template, so the closed box builds a live TextBlock that
-            // trims with "…". A TextBlock handed over as the item's Content is shown there as a
-            // picture of itself, centred, and a name wider than the box lost both ends (#550).
-            // No recycling: the closed box would keep the first TextBlock, whose Text is set once, and
-            // go on showing the previous name after another source is picked.
-            cb.ItemTemplate = new FuncDataTemplate<string>((label, _) => new TextBlock { Text = label, FontSize = 8, TextTrimming = TextTrimming.CharacterEllipsis }, supportsRecycling: false);
-            var item = new Style(x => x.OfType<ComboBoxItem>());
-            item.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(5, 1)));
-            item.Setters.Add(new Setter(Layoutable.MinHeightProperty, 0.0));
-            cb.Styles.Add(item);
-        }
-        // The live input (All inputs / a device) or the track it takes MIDI from (specs/086).
+        var body = new StackPanel { Spacing = 3 };
         var instruments = new List<(int, string)>();
         for (int i = 0; i < _engine.TrackCount; i++)
-            if (_engine.TryGetTrackInfo(i, out var ti) && ti.IsInstrument) instruments.Add((ti.Id, TrackNames.Of(_engine, ti)));
-        var (entries, cur) = MidiInputPick.Compact(_engine, id, instruments);
-        foreach (var en in entries)
-            if (compact) cb.Items.Add(en.Label);
-            else cb.Items.Add(new ComboBoxItem { Content = new TextBlock { Text = en.Label, FontSize = 8, TextTrimming = TextTrimming.CharacterEllipsis }, Padding = new Thickness(5, 1), MinHeight = 0 });
-        cb.SelectedIndex = cur;
-        cb.SelectionChanged += (_, _) =>
+            if (_engine.TryGetTrackInfo(i, out var t) && t.IsInstrument) instruments.Add((t.Id, TrackNames.Of(_engine, t)));
+
+        // MIDI From: the device (or "From" another track) and the input channel.
+        body.Children.Add(IoLabel(Loc.T("mixer.midi_from")));
+        var curIn = _engine.GetTrackMidiInput(id);
+        var (inEntries, inCur) = MidiInputPick.Compact(_engine, id, instruments);
+        var dev = IoCombo();
+        foreach (var en in inEntries) dev.Items.Add(en.Label);
+        dev.SelectedIndex = inCur;
+        dev.SelectionChanged += (_, _) =>
         {
-            if (cb.SelectedIndex >= 0 && cb.SelectedIndex < entries.Count)
-                MidiInputPick.Apply(_engine, id, entries[cb.SelectedIndex]);
+            if (dev.SelectedIndex >= 0 && dev.SelectedIndex < inEntries.Count)
+                MidiInputPick.Apply(_engine, id, inEntries[dev.SelectedIndex]);
         };
-        if (compact)   // one line: the selector alone, its label in the tooltip (specs/070)
+        body.Children.Add(dev);
+        var chan = IoCombo();
+        var channels = MidiInputPick.Channels();
+        foreach (var (_, label) in channels) chan.Items.Add(label);
+        chan.SelectedIndex = Math.Clamp(curIn.Channel, 0, 16);
+        chan.SelectionChanged += (_, _) =>
         {
-            cb.Height = 14;
-            cb.Padding = new Thickness(1, 0);   // the arrow column keeps 32 px of the 62; leave the text what is left
-            ToolTip.SetTip(cb, Loc.T("mixer.midi_in"));
-            // MIDI out beside it, so a track's external synth is visible without the menu.
-            var (outEntries, outCur) = MidiOutputPick.Compact(_engine, id);
-            var outCb = new ComboBox
-            {
-                Height = 14, FontSize = 8, Padding = new Thickness(1, 0), MinHeight = 0,
-                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            };
-            outCb.ItemTemplate = new FuncDataTemplate<string>((label, _) =>
-                new TextBlock { Text = label, FontSize = 8, TextTrimming = TextTrimming.CharacterEllipsis }, supportsRecycling: false);
-            foreach (var en in outEntries) outCb.Items.Add(en.Label);
-            outCb.SelectedIndex = outCur;
-            outCb.SelectionChanged += (_, _) =>
-            {
-                if (outCb.SelectedIndex >= 0 && outCb.SelectedIndex < outEntries.Count)
-                    MidiOutputPick.Apply(_engine, id, outEntries[outCb.SelectedIndex].Uid);
-            };
-            ToolTip.SetTip(outCb, Loc.T("midi_output.menu"));
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 2 };
-            row.Children.Add(cb);
-            Grid.SetColumn(outCb, 1);
-            row.Children.Add(outCb);
-            return new Border { Height = IoH, BorderBrush = BorderInner, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(4, 2), Child = row };
-        }
-        return new Border
-        {
-            Height = 34, BorderBrush = BorderInner, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(7, 4),
-            Child = new StackPanel
-            {
-                Spacing = 2,
-                Children =
-                {
-                    new TextBlock { Text = Loc.T("mixer.midi_in"), FontSize = 8, Foreground = TextTertiary },
-                    cb,
-                },
-            },
+            int c = Math.Clamp(chan.SelectedIndex, 0, 16);
+            _engine.SetTrackMidiInput(id, _engine.GetTrackMidiInput(id).Uid, c);
         };
+        body.Children.Add(chan);
+
+        // Monitor: In always plays live input, Auto only while armed, Off never.
+        body.Children.Add(IoLabel(Loc.T("common.monitor")));
+        body.Children.Add(SessionView.Segmented(new[] { "In", Loc.T("common.auto"), "Off" },
+            _engine.GetTrackMidiMonitor(id), i => _engine.SetTrackMidiMonitor(id, i), compact: true));
+
+        // MIDI To: the external synth port and its channel.
+        body.Children.Add(IoLabel(Loc.T("midi_output.menu")));
+        var (outEntries, outCur) = MidiOutputPick.Compact(_engine, id);
+        var port = IoCombo();
+        foreach (var en in outEntries) port.Items.Add(en.Label);
+        port.SelectedIndex = outCur;
+        port.SelectionChanged += (_, _) =>
+        {
+            if (port.SelectedIndex >= 0 && port.SelectedIndex < outEntries.Count)
+                MidiOutputPick.Apply(_engine, id, outEntries[port.SelectedIndex].Uid);
+        };
+        body.Children.Add(port);
+        var outCh = IoCombo();
+        for (int c = 1; c <= 16; c++) outCh.Items.Add("Ch " + c);
+        outCh.SelectedIndex = Math.Clamp(_engine.GetTrackMidiOutputChannel(id), 1, 16) - 1;
+        outCh.SelectionChanged += (_, _) =>
+        {
+            int c = Math.Clamp(outCh.SelectedIndex + 1, 1, 16);
+            _engine.SetTrackMidiOutput(id, _engine.GetTrackMidiOutputUid(id), c);
+        };
+        body.Children.Add(outCh);
+
+        // Audio To: where the instrument's sound goes (Master or a group).
+        body.Children.Add(IoLabel(Loc.T("mixer.audio_to")));
+        body.Children.Add(DestinationCombo(id));
+        return IoWrap(body);
     }
 
+    // Audio strip I/O: Audio From (input), Monitor (In/Auto/Off) and Audio To.
+    private Control AudioIoRow(int id)
+    {
+        var body = new StackPanel { Spacing = 3 };
+        body.Children.Add(IoLabel(Loc.T("mixer.audio_from")));
+        var items = new List<(RecordInputPick Value, string Label)>();
+        foreach (var (pick, _, shortName) in RecordInputPick.HardwareEntries(_engine, id)) items.Add((pick, shortName));
+        items.Add((RecordInputPick.Track(-1), Loc.T("common.master")));
+        for (int i = 0; i < _engine.TrackCount; i++)
+            if (_engine.TryGetTrackInfo(i, out var t) && t.Id != id && !t.IsGroup)
+                items.Add((RecordInputPick.Track(t.Id), TrackNames.Of(_engine, t)));
+        var cur = RecordInputPick.Of(_engine, id);
+        var input = IoCombo();
+        foreach (var it in items) input.Items.Add(it.Label);
+        input.SelectedIndex = Math.Max(0, items.FindIndex(it => it.Value.Matches(cur)));
+        input.SelectionChanged += (_, _) =>
+        {
+            if (input.SelectedIndex >= 0 && input.SelectedIndex < items.Count)
+                _engine.SetTrackRecordInput(id, items[input.SelectedIndex].Value.Source);
+        };
+        body.Children.Add(input);
+
+        body.Children.Add(IoLabel(Loc.T("common.monitor")));
+        body.Children.Add(SessionView.Segmented(new[] { "In", Loc.T("common.auto"), "Off" },
+            _engine.GetTrackMonitorMode(id), i => _engine.SetTrackMonitorMode(id, i), compact: true));
+
+        body.Children.Add(IoLabel(Loc.T("mixer.audio_to")));
+        body.Children.Add(DestinationCombo(id));
+        return IoWrap(body);
+    }
+
+    // Audio destination: Master or a group (SetTrackGroup; -1 = top level).
+    private Control DestinationCombo(int id)
+    {
+        var groups = new List<(int Id, string Name)> { (-1, Loc.T("common.master")) };
+        for (int i = 0; i < _engine.TrackCount; i++)
+            if (_engine.TryGetTrackInfo(i, out var g) && g.IsGroup) groups.Add((g.Id, TrackNames.Of(_engine, g)));
+        int curGroup = -1;
+        for (int i = 0; i < _engine.TrackCount; i++)
+            if (_engine.TryGetTrackInfo(i, out var t) && t.Id == id) { curGroup = t.GroupId; break; }
+        var cb = IoCombo();
+        foreach (var g in groups) cb.Items.Add(g.Name);
+        cb.SelectedIndex = Math.Max(0, groups.FindIndex(g => g.Id == curGroup));
+        cb.SelectionChanged += (_, _) =>
+        {
+            if (cb.SelectedIndex >= 0 && cb.SelectedIndex < groups.Count)
+                _engine.SetTrackGroup(id, groups[cb.SelectedIndex].Id);
+        };
+        return cb;
+    }
     private Control SendsRow(int id, int returns)
     {
         var body = new StackPanel { Spacing = 5, VerticalAlignment = VerticalAlignment.Center };

@@ -433,6 +433,12 @@ public interface IAudioEngine : IDisposable
     bool SetTrackMidiOutput(int trackId, string? uid, int channel);
     string? GetTrackMidiOutputUid(int trackId);
     int GetTrackMidiOutputChannel(int trackId);
+    /// <summary>Monitor mode, Ableton-style: 0 In (always), 1 Auto (while armed), 2 Off.</summary>
+    void SetTrackMonitorMode(int trackId, int mode);
+    int GetTrackMonitorMode(int trackId);
+    /// <summary>Instrument-track MIDI monitor: 0 In (live input always), 1 Auto (armed, default), 2 Off.</summary>
+    void SetTrackMidiMonitor(int trackId, int mode);
+    int GetTrackMidiMonitor(int trackId);
     /// <summary>The capture device's input channels (0 when none is open) and their names
     /// ("" where the device gives none).</summary>
     int AudioInputChannelCount();

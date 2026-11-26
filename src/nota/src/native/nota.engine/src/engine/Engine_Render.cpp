@@ -1682,7 +1682,10 @@ int Engine::gatherInstrumentNotes(
     // Live notes reach a track when it's armed, or when it's the audition target
     // (so clicking a rack/drum pad plays it without arming/recording).
     // A track-addressed event (Nota Remote) plays only its own track.
-    const bool takesUntargeted = t.armed() || t.id() == auditionTrackId_.load(std::memory_order_relaxed);
+    const bool armed = t.armed() || t.id() == auditionTrackId_.load(std::memory_order_relaxed);
+    // Monitor mode (Ableton-style): In always plays live input, Auto only while armed, Off never.
+    const int32_t mm = t.midiMonitor();
+    const bool takesUntargeted = mm == 0 || (mm == 1 && armed);
     return liveNotesFor(t, takesUntargeted, true, takesUntargeted, evs, n);
 }
 
@@ -3314,7 +3317,7 @@ void Engine::mixGraph(Graph* g, float* out, int32_t frames, double blockStart, d
             // Input monitoring (Monitor "In"): the track plays its record-input source live
             // in place of its clips — hardware input this segment, or the source track's
             // post-fader tap from the previous one. Master (-1) would feed back: silent.
-            const bool monitoring = !frozenActive && !capturing && t.type() == TrackType::Audio && t.monitor();
+            const bool monitoring = !frozenActive && !capturing && t.type() == TrackType::Audio && t.monitorsInput();
             // Cue (specs/089): a cued track is heard in Cue before its fader, mute and solo, so a
             // muted or solo-gated one still renders — for the Cue tap only.
             const bool cueing = cueOn && t.cue();
@@ -3854,7 +3857,7 @@ void Engine::mixGraph(Graph* g, float* out, int32_t frames, double blockStart, d
         for (auto& tptr : g->tracks) {
             Track& t = *tptr;
             if (t.type() != TrackType::Audio || !t.armed() || (t.frozen() && t.frozenBuf)) continue;
-            if (t.monitor() && t.id() != capTrackId) continue;
+            if (t.monitorsInput() && t.id() != capTrackId) continue;
             const int32_t src = t.recordInputSource();
             if (src == -1) {
                 t.setMeter(masterPeakL_.load(std::memory_order_relaxed), masterPeakR_.load(std::memory_order_relaxed),

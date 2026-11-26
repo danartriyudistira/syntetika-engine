@@ -1436,6 +1436,12 @@ class Engine {
     int32_t trackMidiInputChannel(int32_t trackId) const;
     // Input monitoring (audio tracks): hear the record-input source live through the track.
     void setTrackMonitor(int32_t trackId, bool on);
+    // Monitor mode: 0 In (always), 1 Auto (while armed), 2 Off — audio tracks.
+    void setTrackMonitorMode(int32_t trackId, int32_t mode);
+    int32_t trackMonitorMode(int32_t trackId) const;
+    // MIDI monitor for instrument tracks: 0 In, 1 Auto (armed, the default), 2 Off.
+    void setTrackMidiMonitor(int32_t trackId, int32_t mode);
+    int32_t trackMidiMonitor(int32_t trackId) const;
     bool trackMonitor(int32_t trackId) const;
     void pushMonitorFramesForTest(const float* interleavedStereo, int32_t frames); // feed the hw monitor ring
     void setMonitorInputForTest(double sampleRate, int32_t blockFrames); // the pushed frames' rate + callback size, #563

@@ -149,6 +149,10 @@ public sealed class TrackDto
     // output (encoded so it survives id reassignment across save/load).
     public int RecordInput { get; set; }
     public bool Monitor { get; set; }   // live input monitoring (audio tracks)
+    // Monitor mode, Ableton-style: 0 In, 1 Auto (while armed), 2 Off. Absent = from Monitor.
+    public int? MonitorMode { get; set; }
+    // Instrument-track MIDI monitor: 0 In, 1 Auto, 2 Off. Absent = Auto (armed).
+    public int? MidiMonitor { get; set; }
     // Hardware input channels (audio tracks): 0 stereo pair, 1 input 1, 2 input 2. Absent in
     // files saved before 0.58, which recorded the stereo pair.
     public int? InputChannels { get; set; }

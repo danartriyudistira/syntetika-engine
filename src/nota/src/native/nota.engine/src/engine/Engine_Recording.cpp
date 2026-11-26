@@ -197,6 +197,29 @@ bool Engine::trackMonitor(int32_t trackId) const {
     auto t = findTrackAuthoring(trackId);
     return t && t->monitor();
 }
+void Engine::setTrackMonitorMode(int32_t trackId, int32_t mode) {
+    auto t = findTrackAuthoring(trackId);
+    if (!t || t->type() != TrackType::Audio) return;
+    mode = std::clamp(mode, 0, 2);
+    t->setMonitor(mode != 2);
+    t->setMonitorAuto(mode == 1);
+    recomputeRouting();
+    updateMonitorInput();
+}
+int32_t Engine::trackMonitorMode(int32_t trackId) const {
+    auto t = findTrackAuthoring(trackId);
+    if (!t) return 2;
+    return !t->monitor() ? 2 : t->monitorAuto() ? 1 : 0;
+}
+void Engine::setTrackMidiMonitor(int32_t trackId, int32_t mode) {
+    auto t = findTrackAuthoring(trackId);
+    if (!t || t->type() != TrackType::Instrument) return;
+    t->setMidiMonitor(mode);
+}
+int32_t Engine::trackMidiMonitor(int32_t trackId) const {
+    auto t = findTrackAuthoring(trackId);
+    return t ? t->midiMonitor() : 1;
+}
 
 // Open the capture device once; recording and monitoring share it, each gated by its own
 // tap flag, so starting a take while monitoring doesn't reopen (or drop) the stream.

@@ -392,6 +392,14 @@ class Track {
     // output — through its own devices + fader instead of its clips, transport rolling or not.
     bool monitor() const { return monitor_.load(std::memory_order_relaxed); }
     void setMonitor(bool m) { monitor_.store(m, std::memory_order_relaxed); }
+    // Monitor mode: 0 In (always), 1 Auto (while armed), 2 Off. `monitor_` stays the on/off
+    // switch so old callers and projects keep working.
+    bool monitorAuto() const { return monitorAuto_.load(std::memory_order_relaxed); }
+    void setMonitorAuto(bool a) { monitorAuto_.store(a, std::memory_order_relaxed); }
+    bool monitorsInput() const { return monitor() && (!monitorAuto() || armed()); }
+    // MIDI monitor for instrument tracks: 0 In, 1 Auto (armed, the old behaviour), 2 Off.
+    int32_t midiMonitor() const { return midiMonitor_.load(std::memory_order_relaxed); }
+    void setMidiMonitor(int32_t mode) { midiMonitor_.store(mode < 0 ? 0 : (mode > 2 ? 2 : mode), std::memory_order_relaxed); }
 
     // MIDI routing: send this instrument track's note events (clips + live input) to
     // another instrument track's instrument as well. -1 = off. The destination reads
@@ -524,6 +532,8 @@ class Track {
     std::atomic<int32_t> inputFirst_{0};                                // hardware input (#340, specs/086)
     std::atomic<int32_t> inputWidth_{2};
     std::atomic<bool> monitor_{false};                                  // live input monitoring (audio tracks)
+    std::atomic<bool> monitorAuto_{false};                              // Auto: monitor only while armed
+    std::atomic<int32_t> midiMonitor_{1};                               // instrument live input: 0 In, 1 Auto, 2 Off
     std::atomic<double> midiOffsetMs_{0.0};                             // track MIDI playback offset (ms)
     static_assert(std::atomic<double>::is_always_lock_free, "the audio thread reads midiOffsetMs_: it must not take a lock");
     std::atomic<int32_t> midiFromTrackId_{-1};                          // -1 off, >0 forward MIDI to this track id

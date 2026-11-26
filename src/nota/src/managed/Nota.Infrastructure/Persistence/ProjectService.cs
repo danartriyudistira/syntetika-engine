@@ -124,6 +124,8 @@ public sealed class ProjectService
                     ? (idToIndex.TryGetValue(rin, out var rix) ? rix + 2 : 0)   // track source → doc index + 2
                     : rin,                                                       // 0 hardware / -1 master
                 Monitor = engine.GetTrackMonitor(ti.Id),
+                MonitorMode = engine.GetTrackMonitorMode(ti.Id),
+                MidiMonitor = ti.IsInstrument ? engine.GetTrackMidiMonitor(ti.Id) : null,
                 InputChannels = engine.GetTrackInput(ti.Id).AsChannels is { } oldPick ? (int)oldPick : null,
                 InputFirst = engine.GetTrackInput(ti.Id).First + 1,
                 InputWidth = engine.GetTrackInput(ti.Id).Width,
@@ -842,6 +844,8 @@ public sealed class ProjectService
             if (t.RecordInput != 0) recInputDeferred.Add((id, t.RecordInput));   // resolve after all tracks exist
             if (t.Monitor) monitorDeferred.Add((id, true));                        // after record inputs resolve
             engine.SetTrackInput(id, TrackInputOf(t));
+            if (t.MonitorMode is int monitorMode) engine.SetTrackMonitorMode(id, monitorMode);
+            if (t.MidiMonitor is int midiMonitor && t.Type == 1) engine.SetTrackMidiMonitor(id, midiMonitor);
             if (t.MidiFrom >= 0) midiFromDeferred.Add((id, t.MidiFrom));           // resolve after all tracks exist
             if (t.MidiInputUid is { Length: > 0 } || t.MidiInputChannel is > 0)    // MIDI input (specs/086)
                 engine.SetTrackMidiInput(id, t.MidiInputUid, t.MidiInputChannel ?? 0);
