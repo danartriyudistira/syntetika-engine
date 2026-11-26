@@ -3999,9 +3999,14 @@ std::shared_ptr<Track> Engine::deepCloneTrack(const Track& src, int32_t newId, b
     nt->setRecordInputSource(src.recordInputSource());
     nt->setInput(src.inputFirst(), src.inputWidth());
     nt->setMonitor(src.monitor());
+    nt->setMonitorAuto(src.monitorAuto());
+    nt->setMidiMonitor(src.midiMonitor());
     nt->setMidiFromTrackId(src.midiFromTrackId());
     nt->setMidiInput(src.midiInputSource(), src.midiInputChannel());
     nt->midiInputUid = src.midiInputUid;
+    nt->setMidiOutPort(src.midiOutPort());
+    nt->setMidiOutChannel(src.midiOutChannel());
+    nt->midiOutUid = src.midiOutUid;
     nt->setMidiOffsetMs(src.midiOffsetMs());
     nt->articulationTable = src.articulationTable;   // the map goes with the instrument, content or not
     nt->articulationMapJson = src.articulationMapJson;

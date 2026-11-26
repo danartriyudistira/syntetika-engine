@@ -63,6 +63,32 @@ internal static class MidiOutTests
         Thread.Sleep(200);
         var off = e.TakeTestMidiSent(port);
         yield return (!HasNote(off), "an off route sends no notes");
+
+        // Session clips render on their own path (renderSessionSlotRaw): they must play the
+        // external output too, not just arrangement clips.
+        using var es = new NotaEngine();
+        int ts = es.AddConsortTrack();
+        int sport = es.AddTestMidiPort("midiout-session");
+        yield return (sport >= 0, "a session test MIDI port is available");
+        if (sport < 0) yield break;
+        bool sroute = es.SetTrackMidiOutput(ts, "test:midiout-session", 2);
+        yield return (sroute, "a session track routes to the output port");
+        es.AddSessionMidiClip(ts, 0, 4);
+        es.SetSessionNotes(ts, 0, new[] { new NotaNote(65, 0, 0.5, 1f) });
+        es.SetLaunchQuant(0);
+        es.StopTransport();
+        es.Seek(0);
+        es.Play();
+        es.LaunchSlot(ts, 0);
+        for (int i = 0; i < 100; i++)
+        {
+            es.RenderOffline(blk, 512);
+            if (i % 10 == 0) Thread.Sleep(5);
+        }
+        Thread.Sleep(200);
+        var sessionSent = es.TakeTestMidiSent(sport);
+        yield return (Contains(sessionSent, 0x91, 65, _ => true),
+            "a Session clip's note reaches the output port");
     }
 
     private static bool Contains(byte[] data, byte status, byte d1, byte d2)

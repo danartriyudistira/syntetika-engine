@@ -1875,6 +1875,8 @@ class Engine {
     int32_t registerMidiOutPort(const std::string& uid);
     std::string midiOutPortUid(int32_t index) const;
     void queueAllNotesOff(int32_t port, int32_t channel) noexcept;
+    // Queues a track's notes / controllers for its external output (no-op when off). Audio thread.
+    void sendExternalMidi(const Track& t, const MidiEv* evs, int32_t n, const ExprEv* xev, int32_t xn);
     struct TestMidiPort {
         std::string name;
         int32_t source = 0;
