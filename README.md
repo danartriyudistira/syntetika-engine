@@ -8,6 +8,7 @@ Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an 
 
 > Status: **alpha (0.1.13)**. macOS Apple Silicon and Windows x64. Expect rough edges.
 > What works, known limits and the roadmap: [docs/04-status-dan-rencana.md](docs/04-status-dan-rencana.md).
+> Prioritas build macOS berikutnya (MIDI out, Session clips, mixer I/O): [docs/07-macos-prioritas.md](docs/07-macos-prioritas.md).
 
 ## Built on two excellent open-source projects
 
