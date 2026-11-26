@@ -361,7 +361,22 @@ public sealed partial class SessionView
                 if (mcb.SelectedIndex >= 0 && mcb.SelectedIndex < entries.Count) MidiInputPick.Apply(_engine, tid, entries[mcb.SelectedIndex]);
             };
             ToolTip.SetTip(mcb, Loc.T("session.mixer.midi_input_every_input_or"));
-            return mcb;
+            // MIDI out beside it: the track's external synth, Off when unset.
+            var (outEntries, outCur) = MidiOutputPick.Compact(_engine, tid);
+            var ocb = new ComboBox { Height = IoRowH, FontSize = 10, Padding = new Thickness(6, 0), HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(4, 0) };
+            foreach (var en in outEntries) ocb.Items.Add(new ComboBoxItem { Content = en.Label, FontSize = 10 });
+            ocb.SelectedIndex = outCur;
+            ocb.SelectionChanged += (_, _) =>
+            {
+                if (ocb.SelectedIndex >= 0 && ocb.SelectedIndex < outEntries.Count)
+                    MidiOutputPick.Apply(_engine, tid, outEntries[ocb.SelectedIndex].Uid);
+            };
+            ToolTip.SetTip(ocb, Loc.T("midi_output.menu"));
+            var midiRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+            midiRow.Children.Add(mcb);
+            Grid.SetColumn(ocb, 1);
+            midiRow.Children.Add(ocb);
+            return midiRow;
         }
         else
         {

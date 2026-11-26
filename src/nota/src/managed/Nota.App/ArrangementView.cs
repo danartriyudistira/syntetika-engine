@@ -3097,26 +3097,39 @@ public sealed partial class ArrangementView : UserControl
         var (entries, cur) = MidiInputPick.Compact(engine, trackId,
             _tracks.Where(v => v.IsInstrument).Select(v => (v.Id, v.Name.Length > 0 ? v.Name : Loc.F("common.track_n", v.Id))));
         var sources = entries.Select((en, i) => (en.Label, i)).ToList();
+        // One MIDI chip per track: it opens both directions (In and Out) and shows the output
+        // when the track plays an external synth, so routing is visible without the menu.
+        string label = MidiOutputPick.Active(engine, trackId)
+            ? "→ " + MidiOutputPick.ShortLabel(engine, trackId)
+            : null!;
         return InPicker(sources, cur, i =>
         {
             if (i >= 0 && i < entries.Count) MidiInputPick.Apply(engine, trackId, entries[i]);
+        }, Loc.T("arrangement.midi"), label, box =>
+        {
+            var fly = new MenuFlyout();
+            fly.FlyoutPresenterClasses.Add("rows");
+            fly.Items.Add(MidiInputPick.Menu(engine, trackId));
+            fly.Items.Add(MidiOutputPick.Menu(engine, trackId));
+            fly.ShowAt(box);
         });
     }
 
     // The input picker on a track header (style guide): "In" in ink 3, the source in ink 1 and
     // a chevron, on the well, 18 high, corner 5, no border; a click opens the sources with the
     // current one ticked. It handles its own press, so a click never reselects the track.
-    private Control InPicker(List<(string name, int src)> sources, int current, Action<int> set)
+    private Control InPicker(List<(string name, int src)> sources, int current, Action<int> set,
+        string? label = null, string? overrideText = null, Action<Control>? customClick = null)
     {
         var value = new TextBlock
         {
             FontSize = NotaType.Caption, Foreground = Brush("Brush.TextPrimary"),
             VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        void Show() => value.Text = sources.Find(x => x.src == current).name ?? sources[0].name;
+        void Show() => value.Text = overrideText ?? sources.Find(x => x.src == current).name ?? sources[0].name;
         Show();
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 4 };
-        grid.Children.Add(new TextBlock { Text = Loc.T("arrangement.in"), FontSize = NotaType.Caption, Foreground = Brush("Brush.TextTertiary"), VerticalAlignment = VerticalAlignment.Center });
+        grid.Children.Add(new TextBlock { Text = label ?? Loc.T("arrangement.in"), FontSize = NotaType.Caption, Foreground = Brush("Brush.TextTertiary"), VerticalAlignment = VerticalAlignment.Center });
         Grid.SetColumn(value, 1);
         grid.Children.Add(value);
         var chev = new Glyph(GlyphKind.ChevronDown, 7) { Foreground = Brush("Brush.TextTertiary"), VerticalAlignment = VerticalAlignment.Center };
@@ -3133,6 +3146,7 @@ public sealed partial class ArrangementView : UserControl
         {
             if (!e.GetCurrentPoint(box).Properties.IsLeftButtonPressed) return;
             e.Handled = true;
+            if (customClick is not null) { customClick(box); return; }
             var fly = new MenuFlyout();
             foreach (var (name, src) in sources)
             {

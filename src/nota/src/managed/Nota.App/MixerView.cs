@@ -997,7 +997,28 @@ public sealed partial class MixerView : UserControl
             cb.Height = 14;
             cb.Padding = new Thickness(1, 0);   // the arrow column keeps 32 px of the 62; leave the text what is left
             ToolTip.SetTip(cb, Loc.T("mixer.midi_in"));
-            return new Border { Height = IoH, BorderBrush = BorderInner, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(4, 2), Child = cb };
+            // MIDI out beside it, so a track's external synth is visible without the menu.
+            var (outEntries, outCur) = MidiOutputPick.Compact(_engine, id);
+            var outCb = new ComboBox
+            {
+                Height = 14, FontSize = 8, Padding = new Thickness(1, 0), MinHeight = 0,
+                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            };
+            outCb.ItemTemplate = new FuncDataTemplate<string>((label, _) =>
+                new TextBlock { Text = label, FontSize = 8, TextTrimming = TextTrimming.CharacterEllipsis }, supportsRecycling: false);
+            foreach (var en in outEntries) outCb.Items.Add(en.Label);
+            outCb.SelectedIndex = outCur;
+            outCb.SelectionChanged += (_, _) =>
+            {
+                if (outCb.SelectedIndex >= 0 && outCb.SelectedIndex < outEntries.Count)
+                    MidiOutputPick.Apply(_engine, id, outEntries[outCb.SelectedIndex].Uid);
+            };
+            ToolTip.SetTip(outCb, Loc.T("midi_output.menu"));
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 2 };
+            row.Children.Add(cb);
+            Grid.SetColumn(outCb, 1);
+            row.Children.Add(outCb);
+            return new Border { Height = IoH, BorderBrush = BorderInner, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(4, 2), Child = row };
         }
         return new Border
         {

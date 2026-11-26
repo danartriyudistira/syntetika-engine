@@ -166,6 +166,33 @@ internal static class MidiOutputPick
         return Loc.F("midi_input.device_channel", name, engine.GetTrackMidiOutputChannel(trackId));
     }
 
+    /// <summary>True when the track sends MIDI somewhere.</summary>
+    public static bool Active(IAudioEngine engine, int trackId)
+        => !string.IsNullOrEmpty(engine.GetTrackMidiOutputUid(trackId));
+
+    /// <summary>Entries for a compact picker: Off, the output ports (a removed one stays listed).</summary>
+    public static (List<(string? Uid, string Label)> Items, int Current) Compact(IAudioEngine engine, int trackId)
+    {
+        string? curUid = engine.GetTrackMidiOutputUid(trackId);
+        var items = new List<(string?, string)> { (null, Loc.T("midi_output.off")) };
+        int current = string.IsNullOrEmpty(curUid) ? 0 : -1;
+        foreach (var (uid, name) in Outputs(engine))
+        {
+            if (uid == curUid) current = items.Count;
+            items.Add((uid, name));
+        }
+        if (current < 0)
+        {
+            current = items.Count;
+            items.Add((curUid, Loc.F("midi_input.not_connected", curUid)));
+        }
+        return (items, current);
+    }
+
+    /// <summary>Picks a port, keeping the track's channel.</summary>
+    public static void Apply(IAudioEngine engine, int trackId, string? uid)
+        => engine.SetTrackMidiOutput(trackId, uid, engine.GetTrackMidiOutputChannel(trackId));
+
     /// <summary>MIDI out ▸, for the track menu: Off, the output ports, Channel ▸ 1–16.</summary>
     public static MenuItem Menu(IAudioEngine engine, int trackId, Action? edited = null)
     {

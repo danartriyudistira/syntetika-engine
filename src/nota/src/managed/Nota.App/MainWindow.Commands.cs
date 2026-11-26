@@ -114,6 +114,7 @@ public partial class MainWindow
         });
         B("view.history", () => Browser.ShowHistory());
         B("view.midiLearn", ToggleMidiLearn);
+        B("track.midiOut", ShowMidiOutMenu, c => Need(c.HasTrack, Loc.T("main.commands.select_a_track_first")));
         B("view.fullscreen", ToggleFullscreen);
         r.Bind(CommandCatalog.Palette, (c, _) => TogglePalette(c.Window as Avalonia.Controls.Window));
 

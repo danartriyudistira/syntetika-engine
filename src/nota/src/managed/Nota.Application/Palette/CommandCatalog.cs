@@ -116,6 +116,7 @@ public static class CommandCatalog
         C("track.group", Loc.T("commands.group_tracks"), Loc.T("common.track"), Shortcut.Cmd('G'), "folder bus", view: "Arrangement"),
         C("track.ungroup", Loc.T("commands.ungroup_tracks"), Loc.T("common.track"), Shortcut.CmdShift('G'), "", view: "Arrangement"),
         C("track.freeze", Loc.T("commands.freeze_track"), Loc.T("common.track"), "", "render bounce cpu"),
+        C("track.midiOut", Loc.T("commands.midi_out"), Loc.T("common.track"), "", "external synth hardware midi output port channel ableton"),
 
         // ---- Session ----------------------------------------------------------------------
         C("session.launchScene", Loc.T("commands.launch_scene"), Loc.T("commands.session"), "", "play row", view: "Session"),

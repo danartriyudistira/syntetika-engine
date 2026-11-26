@@ -1260,6 +1260,18 @@ public partial class MainWindow : Window
         OnToggleMidiLearn(MidiLearnBtn, new RoutedEventArgs());
     }
 
+    /// <summary>Palette: the selected track's MIDI-out port and channel, at the pointer.</summary>
+    private void ShowMidiOutMenu()
+    {
+        if (_vm is null) return;
+        int id = Timeline.SelectedTrackId;
+        if (id <= 0) return;
+        var fly = new MenuFlyout { FlyoutPresenterClasses = { "rows" } };
+        var menu = MidiOutputPick.Menu(Engine, id, () => { });
+        foreach (var item in menu.Items) fly.Items.Add(item);
+        fly.ShowAt(Timeline);
+    }
+
     // MIDI Learn: arm/disarm the overlay and reveal the mappings tab so the user
     // can see what they're binding.
     private void OnToggleMidiLearn(object? sender, RoutedEventArgs e)

@@ -196,7 +196,8 @@ internal sealed class TrackInspectorView : UserControl
         s.Children.Add(state);
 
         if (audio) s.Children.Add(Section(Loc.T("common.input"), InputRows(id)));
-        if (ti.IsInstrument) s.Children.Add(Section(Loc.T("common.input"), MidiInputRows(id)));
+        if (ti.IsInstrument) s.Children.Add(Section(Loc.T("midi_input.menu"), MidiInputRows(id)));
+        if (ti.IsInstrument) s.Children.Add(Section(Loc.T("midi_output.menu"), MidiOutputRows(id)));
         if (ti.IsInstrument) s.Children.Add(Section(Loc.T("articulations.inspector.head"), ArticulationsBody(id)));
 
         s.Children.Add(Section(Loc.T("track_inspector.color"), Swatches(id)));
@@ -286,25 +287,32 @@ internal sealed class TrackInspectorView : UserControl
         if (MidiInputPick.MpeWarning(_engine, id))
             rows.Children.Add(Note(Loc.T("midi_input.mpe_warning")));
         rows.Children.Add(MidiFromRow(id));
+        return rows;
+    }
 
-        // External MIDI output: the same notes go to a hardware or virtual synth.
+    // External MIDI output: plays a hardware/virtual synth from this track.
+    private Control MidiOutputRows(int id)
+    {
+        var ports = MidiOutputPick.Outputs(_engine);
         string? outUid = _engine.GetTrackMidiOutputUid(id);
-        var outPorts = MidiOutputPick.Outputs(_engine);
-        int outAt = outPorts.FindIndex(p => p.Uid == outUid);
-        string outLabel = string.IsNullOrEmpty(outUid) ? Loc.T("midi_output.off")
-            : outAt >= 0 ? outPorts[outAt].Name : outUid;
-        var outChip = SessionView.Chip(outLabel, false, a =>
+        int at = ports.FindIndex(p => p.Uid == outUid);
+        string label = string.IsNullOrEmpty(outUid) ? Loc.T("midi_output.off")
+            : at >= 0 ? ports[at].Name : outUid;
+        var rows = new StackPanel { Spacing = 8 };
+        var chip = SessionView.Chip(label, false, a =>
             SessionView.Pick(a,
                 new (string?, string)[] { (null, Loc.T("midi_output.off")) }
-                    .Concat(outPorts.Select(p => ((string?)p.Uid, p.Name))),
+                    .Concat(ports.Select(p => ((string?)p.Uid, p.Name))),
                 u => u == outUid,
                 u => { _engine.SetTrackMidiOutput(id, u, _engine.GetTrackMidiOutputChannel(id)); Edited(); }));
-        ToolTip.SetTip(outChip, Loc.T("midi_output.tooltip"));
-        rows.Children.Add(SessionView.Row(Loc.T("midi_output.menu"), outChip));
-        int outCh = _engine.GetTrackMidiOutputChannel(id);
-        rows.Children.Add(SessionView.Row(Loc.T("midi_input.channel"), SessionView.Chip(outCh.ToString(), false, a =>
-            SessionView.Pick(a, Enumerable.Range(1, 16).Select(c => (c, Loc.F("midi_input.channel_n", c))), c => c == outCh,
+        ToolTip.SetTip(chip, Loc.T("midi_output.tooltip"));
+        rows.Children.Add(SessionView.Row(Loc.T("midi_output.port"), chip));
+        int ch = _engine.GetTrackMidiOutputChannel(id);
+        rows.Children.Add(SessionView.Row(Loc.T("midi_input.channel"), SessionView.Chip(ch.ToString(), false, a =>
+            SessionView.Pick(a, Enumerable.Range(1, 16).Select(c => (c, Loc.F("midi_input.channel_n", c))), c => c == ch,
                 c => { _engine.SetTrackMidiOutput(id, _engine.GetTrackMidiOutputUid(id), c); Edited(); }))));
+        if (ports.Count == 0)
+            rows.Children.Add(Note(Loc.T("midi_output.none")));
         return rows;
     }
 
