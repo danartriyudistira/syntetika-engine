@@ -146,12 +146,17 @@ internal static class MidiOutputPick
     public static List<(string Uid, string Name)> Outputs(IAudioEngine engine)
     {
         var list = new List<(string, string)>();
-        foreach (var p in engine.MidiPorts())
+        void Add(string uid, string name)
         {
-            if (string.IsNullOrEmpty(p.OutputUid)) continue;
-            if (list.Exists(x => x.Item1 == p.OutputUid)) continue;
-            list.Add((p.OutputUid, p.Name.Length > 0 ? p.Name : p.OutputUid));
+            if (string.IsNullOrEmpty(uid)) return;
+            if (list.Exists(x => x.Item1 == uid)) return;
+            list.Add((uid, name.Length > 0 ? name : uid));
         }
+        // The backend's own destination list: an output-only device (a hardware synth, a
+        // loopMIDI port) appears here even when no input shares its name.
+        foreach (var o in engine.MidiOutputs()) Add(o.Uid, o.Name);
+        // Then each connected input's paired output, for backends that only pair by entity.
+        foreach (var p in engine.MidiPorts()) Add(p.OutputUid, p.Name);
         return list;
     }
 

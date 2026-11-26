@@ -26,6 +26,10 @@ internal static class MidiOutTests
         yield return (port >= 0, "a test MIDI port is available");
         if (port < 0) yield break;
 
+        var outs = e.MidiOutputs();
+        yield return (outs.Any(o => o.Uid == "test:midiout" && o.Name == "midiout"),
+            "the output port is listed by the output enumeration");
+
         yield return (e.SetTrackMidiOutput(ta, "test:midiout", 3), "routing a track to an output port");
         yield return (e.GetTrackMidiOutputUid(ta) == "test:midiout" && e.GetTrackMidiOutputChannel(ta) == 3,
             "the output route and channel read back");

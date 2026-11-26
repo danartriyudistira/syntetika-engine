@@ -3101,6 +3101,14 @@ NOTA_API const char* nota_midi_port_name(const NotaEngine* engine, int32_t index
 /* The output of the same device (CoreMIDI: same entity; RtMidi: same name). "" when none. */
 NOTA_API const char* nota_midi_port_output_uid(const NotaEngine* engine, int32_t index);
 
+/* Every MIDI destination the backend exposes, independent of the inputs — an output-only
+ * device (hardware synth, loopMIDI) is listed even when no input shares its name. Then the
+ * test ports. count re-reads the list; the strings are engine-owned and valid until the next
+ * count call. NULL / -1 if out of range. uid is the string nota_track_set_midi_output takes. */
+NOTA_API int32_t     nota_midi_output_count(NotaEngine* engine);
+NOTA_API const char* nota_midi_output_uid(const NotaEngine* engine, int32_t index);
+NOTA_API const char* nota_midi_output_name(const NotaEngine* engine, int32_t index);
+
 /* Claim table. whole_port = 1 claims every channel message of that source (MCU / HUI / the
  * setup wizard's capture) and ignores status/channel/data1. status: 0x80 note (on and off),
  * 0xB0 CC, 0xD0 channel pressure, 0xE0 pitch bend; data1 = note / CC number (ignored for

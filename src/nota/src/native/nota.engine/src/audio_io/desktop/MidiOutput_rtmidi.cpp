@@ -19,6 +19,21 @@ struct MidiOutput::Impl {
     std::unique_ptr<RtMidiOut> out;
 };
 
+std::vector<MidiOutput::PortEntry> MidiOutput::availablePorts() {
+    std::vector<PortEntry> ports;
+    try {
+        RtMidiOut scanner(RtMidi::UNSPECIFIED, "Nota-scan");
+        for (unsigned int i = 0, n = scanner.getPortCount(); i < n; ++i) {
+            const std::string name = scanner.getPortName(i);
+            if (name.empty()) continue;
+            ports.push_back({name, name}); // uid == port name, like the inputs
+        }
+    } catch (...) {
+        // no backend / no ports: an empty list is the honest answer
+    }
+    return ports;
+}
+
 MidiOutput::MidiOutput() : impl_(new Impl()) {}
 MidiOutput::~MidiOutput() {
     close();

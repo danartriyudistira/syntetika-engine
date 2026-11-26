@@ -255,6 +255,20 @@ public sealed partial class NotaEngine
         return list;
     }
 
+    /// <summary>Every MIDI destination the backend exposes, independent of the inputs (an
+    /// output-only synth or loopMIDI is listed here). Uid is what SetTrackMidiOutput takes.</summary>
+    public IReadOnlyList<MidiOutputInfo> MidiOutputs()
+    {
+        ThrowIfDisposed();
+        int n = NativeMethods.MidiOutputCount(_handle);
+        var list = new List<MidiOutputInfo>(n);
+        for (int i = 0; i < n; i++)
+            list.Add(new MidiOutputInfo(
+                Marshal.PtrToStringUTF8(NativeMethods.MidiOutputUid(_handle, i)) ?? "",
+                Marshal.PtrToStringUTF8(NativeMethods.MidiOutputName(_handle, i)) ?? ""));
+        return list;
+    }
+
     public unsafe bool SetMidiClaims(ReadOnlySpan<MidiClaim> claims)
     {
         ThrowIfDisposed();

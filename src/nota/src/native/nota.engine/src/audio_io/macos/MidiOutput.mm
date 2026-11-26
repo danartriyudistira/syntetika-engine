@@ -26,6 +26,20 @@ struct MidiOutput::Impl {
     MIDIEndpointRef dest = 0;
 };
 
+std::vector<MidiOutput::PortEntry> MidiOutput::availablePorts() {
+    std::vector<PortEntry> ports;
+    for (ItemCount i = 0, n = MIDIGetNumberOfDestinations(); i < n; ++i) {
+        MIDIEndpointRef d = MIDIGetDestination(i);
+        if (!d) continue;
+        const std::string uid = midiUidForEndpoint(d);
+        if (uid.empty()) continue;
+        std::string name = midiEndpointName(d);
+        if (name.empty()) name = "MIDI output " + uid;
+        ports.push_back({uid, name});
+    }
+    return ports;
+}
+
 namespace {
 struct SysexJob {
     MIDISysexSendRequest req{};

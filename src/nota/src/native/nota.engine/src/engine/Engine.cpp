@@ -207,6 +207,21 @@ const std::vector<MidiInput::PortInfo>& Engine::midiPorts() {
     return midiPortRows_;
 }
 
+const std::vector<MidiOutput::PortEntry>& Engine::midiOutputs() {
+    midiOutputRows_ = MidiOutput::availablePorts();
+    for (const auto& t : testMidiPorts_) {
+        const std::string uid = "test:" + t->name;
+        bool present = false;
+        for (const auto& row : midiOutputRows_)
+            if (row.uid == uid) {
+                present = true;
+                break;
+            }
+        if (!present) midiOutputRows_.push_back({uid, t->name});
+    }
+    return midiOutputRows_;
+}
+
 bool Engine::midiSend(const std::string& outputUid, const uint8_t* data, int32_t len) {
     std::lock_guard<std::mutex> sendLock(midiSendMutex_);
     if (!data || len <= 0) return false;

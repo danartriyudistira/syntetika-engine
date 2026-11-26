@@ -597,6 +597,10 @@ public readonly record struct MidiDevice(string Uid, string Name);
 /// device ("" when it has none). Test ports have uids "test:&lt;name&gt;".</summary>
 public readonly record struct MidiPortInfo(string Uid, string Name, int Source, string OutputUid);
 
+/// <summary>One MIDI destination port (uid + display name), independent of the inputs.
+/// The uid is what <see cref="IAudioEngine.SetTrackMidiOutput"/> takes.</summary>
+public readonly record struct MidiOutputInfo(string Uid, string Name);
+
 /// <summary>One claimed message (specs/051), blittable and matching NotaMidiClaim. A claimed
 /// message goes to the surface queue instead of the instruments. Status 0x80 note (on and
 /// off), 0xB0 CC, 0xD0 channel pressure, 0xE0 pitch bend; WholePort = 1 claims every channel

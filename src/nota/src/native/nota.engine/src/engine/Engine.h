@@ -150,6 +150,10 @@ class Engine {
     // call; the strings stay valid until the next one. Message thread.
     const std::vector<MidiInput::PortInfo>& midiPorts();
     const std::vector<MidiInput::PortInfo>& midiPortRows() const { return midiPortRows_; } // last midiPorts()
+    // Every MIDI destination the backend exposes (output-only devices included), then test
+    // ports. Rebuilt on every call; the strings stay valid until the next one. Message thread.
+    const std::vector<MidiOutput::PortEntry>& midiOutputs();
+    const std::vector<MidiOutput::PortEntry>& midiOutputRows() const { return midiOutputRows_; } // last midiOutputs()
     bool setMidiClaims(const MidiClaimEntry* claims, int32_t count) { return midiSurface_.setClaims(claims, count); }
     void setMidiLearnListening(bool on) { midiSurface_.setLearnListening(on); }
     int32_t pollSurfaceEvents(SurfaceEvent* out, int32_t max) { return midiSurface_.pollEvents(out, max); }
@@ -1879,6 +1883,8 @@ class Engine {
     };
     std::vector<std::unique_ptr<TestMidiPort>> testMidiPorts_;
     std::vector<MidiInput::PortInfo> midiPortRows_;
+    std::vector<MidiOutput::PortEntry> midiOutputRows_;
+
     void renderPreview(float* out, int32_t numFrames); // mix the audition voice
 
     std::unique_ptr<AudioBackend> backend_;

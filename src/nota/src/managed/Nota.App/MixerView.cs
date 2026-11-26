@@ -1015,7 +1015,7 @@ public sealed partial class MixerView : UserControl
 
         // Monitor: In always plays live input, Auto only while armed, Off never.
         body.Children.Add(IoLabel(Loc.T("common.monitor")));
-        body.Children.Add(SessionView.Segmented(new[] { "In", Loc.T("common.auto"), "Off" },
+        body.Children.Add(SessionView.Segmented(new[] { "In", Loc.T("common.auto"), Loc.T("common.off") },
             _engine.GetTrackMidiMonitor(id), i => _engine.SetTrackMidiMonitor(id, i), compact: true));
 
         // MIDI To: the external synth port and its channel.
@@ -1031,7 +1031,7 @@ public sealed partial class MixerView : UserControl
         };
         body.Children.Add(port);
         var outCh = IoCombo();
-        for (int c = 1; c <= 16; c++) outCh.Items.Add("Ch " + c);
+        for (int c = 1; c <= 16; c++) outCh.Items.Add(Loc.F("midi_input.channel_n", c));
         outCh.SelectedIndex = Math.Clamp(_engine.GetTrackMidiOutputChannel(id), 1, 16) - 1;
         outCh.SelectionChanged += (_, _) =>
         {
@@ -1069,7 +1069,7 @@ public sealed partial class MixerView : UserControl
         body.Children.Add(input);
 
         body.Children.Add(IoLabel(Loc.T("common.monitor")));
-        body.Children.Add(SessionView.Segmented(new[] { "In", Loc.T("common.auto"), "Off" },
+        body.Children.Add(SessionView.Segmented(new[] { "In", Loc.T("common.auto"), Loc.T("common.off") },
             _engine.GetTrackMonitorMode(id), i => _engine.SetTrackMonitorMode(id, i), compact: true));
 
         body.Children.Add(IoLabel(Loc.T("mixer.audio_to")));

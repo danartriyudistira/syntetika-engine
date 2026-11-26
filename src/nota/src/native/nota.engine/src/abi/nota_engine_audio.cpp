@@ -857,6 +857,11 @@ const nota::MidiInput::PortInfo* portRow(const NotaEngine* e, int32_t i) {
     const auto& rows = CENG(e)->midiPortRows();
     return (i >= 0 && i < static_cast<int32_t>(rows.size())) ? &rows[static_cast<size_t>(i)] : nullptr;
 }
+const nota::MidiOutput::PortEntry* outputRow(const NotaEngine* e, int32_t i) {
+    if (!e) return nullptr;
+    const auto& rows = CENG(e)->midiOutputRows();
+    return (i >= 0 && i < static_cast<int32_t>(rows.size())) ? &rows[static_cast<size_t>(i)] : nullptr;
+}
 } // namespace
 
 uint32_t nota_midi_ports_generation(void) {
@@ -881,6 +886,18 @@ const char* nota_midi_port_name(const NotaEngine* e, int32_t i) {
 const char* nota_midi_port_output_uid(const NotaEngine* e, int32_t i) {
     const auto* p = portRow(e, i);
     return p ? p->outputUid.c_str() : nullptr;
+}
+
+int32_t nota_midi_output_count(NotaEngine* e) {
+    return e ? static_cast<int32_t>(ENG(e)->midiOutputs().size()) : 0;
+}
+const char* nota_midi_output_uid(const NotaEngine* e, int32_t i) {
+    const auto* p = outputRow(e, i);
+    return p ? p->uid.c_str() : nullptr;
+}
+const char* nota_midi_output_name(const NotaEngine* e, int32_t i) {
+    const auto* p = outputRow(e, i);
+    return p ? p->name.c_str() : nullptr;
 }
 
 NotaResult nota_midi_set_claims(NotaEngine* e, const NotaMidiClaim* claims, int32_t count) {

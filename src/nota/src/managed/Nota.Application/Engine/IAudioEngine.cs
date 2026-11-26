@@ -1480,6 +1480,8 @@ public interface IAudioEngine : IDisposable
     /// connects the new set and <see cref="MidiPorts"/> lists it.</summary>
     uint MidiPortsGeneration { get; }
     IReadOnlyList<MidiPortInfo> MidiPorts();
+    /// <summary>Every MIDI destination the backend exposes — output-only devices included.</summary>
+    IReadOnlyList<MidiOutputInfo> MidiOutputs();
     /// <summary>Replaces the whole claim table; false (table unchanged) on a malformed entry.</summary>
     bool SetMidiClaims(ReadOnlySpan<MidiClaim> claims);
     /// <summary>While on, claimed CC / note-on are also copied to <see cref="PollMidiControlEvents"/>.</summary>

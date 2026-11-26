@@ -202,6 +202,15 @@ internal static partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "nota_midi_port_output_uid")]
     internal static partial IntPtr MidiPortOutputUid(IntPtr engine, int index);
 
+    [LibraryImport(Lib, EntryPoint = "nota_midi_output_count")]
+    internal static partial int MidiOutputCount(IntPtr engine);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_output_uid")]
+    internal static partial IntPtr MidiOutputUid(IntPtr engine, int index);
+
+    [LibraryImport(Lib, EntryPoint = "nota_midi_output_name")]
+    internal static partial IntPtr MidiOutputName(IntPtr engine, int index);
+
     [LibraryImport(Lib, EntryPoint = "nota_midi_set_claims")]
     internal static unsafe partial NotaResult MidiSetClaims(IntPtr engine, MidiClaim* claims, int count);
 
