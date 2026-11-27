@@ -71,5 +71,5 @@ Persyaratan: Windows 10/11 x64.
 
 ```
 fb0b996fc185ad413b4e05100d5ee211a0316be37290212c917c08a9a29bdfb2  Syntetika-Engine-Setup-0.1.20-x64.exe
-4eed7055fb79b0648025ca159c4e1544a2cc33017371d8b69842a3fa8d37ecb7  Syntetika-Engine-0.1.18-arm64.dmg
+452333f1a1ceb25220531035c1fd2b110171b144b108569f9dd8ab16dc561d39  Syntetika-Engine-0.1.19-arm64.dmg
 ```
