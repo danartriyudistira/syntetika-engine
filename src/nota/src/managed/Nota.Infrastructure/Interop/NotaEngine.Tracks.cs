@@ -612,6 +612,14 @@ public sealed partial class NotaEngine
     public int GetTrackMidiOutputChannel(int trackId)
     { ThrowIfDisposed(); return NativeMethods.TrackGetMidiOutputChannel(_handle, trackId); }
 
+    /// <summary>External MIDI out latency compensation in ms (-200..200): positive delays the
+    /// send, negative advances it inside the current block. Only the hardware route moves.</summary>
+    public void SetTrackMidiOutOffsetMs(int trackId, double ms)
+    { ThrowIfDisposed(); NativeMethods.TrackSetMidiOutOffsetMs(_handle, trackId, ms); }
+
+    public double GetTrackMidiOutOffsetMs(int trackId)
+    { ThrowIfDisposed(); return NativeMethods.TrackGetMidiOutOffsetMs(_handle, trackId); }
+
     /// <summary>Tests: a virtual MIDI port whose output is readable (source index, or -1).</summary>
     public int AddTestMidiPort(string name)
     { ThrowIfDisposed(); return NativeMethods.EngineAddTestMidiPort(_handle, name); }

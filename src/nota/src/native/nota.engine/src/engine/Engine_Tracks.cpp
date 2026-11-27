@@ -4006,6 +4006,7 @@ std::shared_ptr<Track> Engine::deepCloneTrack(const Track& src, int32_t newId, b
     nt->midiInputUid = src.midiInputUid;
     nt->setMidiOutPort(src.midiOutPort());
     nt->setMidiOutChannel(src.midiOutChannel());
+    nt->setMidiOutOffsetMs(src.midiOutOffsetMs());
     nt->midiOutUid = src.midiOutUid;
     nt->setMidiOffsetMs(src.midiOffsetMs());
     nt->articulationTable = src.articulationTable;   // the map goes with the instrument, content or not

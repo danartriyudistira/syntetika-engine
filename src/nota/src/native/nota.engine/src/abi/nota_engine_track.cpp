@@ -796,6 +796,14 @@ int32_t nota_track_get_midi_output_uid(const NotaEngine* e, int32_t track_id, ch
 int32_t nota_track_get_midi_output_channel(const NotaEngine* e, int32_t track_id) {
     return e ? CENG(e)->trackMidiOutputChannel(track_id) : 1;
 }
+NotaResult nota_track_set_midi_out_offset_ms(NotaEngine* e, int32_t track_id, double ms) {
+    if (!e) return NOTA_ERR_INVALID_ARG;
+    ENG(e)->setTrackMidiOutOffsetMs(track_id, ms);
+    return NOTA_OK;
+}
+double nota_track_get_midi_out_offset_ms(const NotaEngine* e, int32_t track_id) {
+    return e ? CENG(e)->trackMidiOutOffsetMs(track_id) : 0.0;
+}
 void nota_engine_push_midi_for_test(NotaEngine* e, int32_t source, int32_t status, int32_t channel, int32_t d1, int32_t d2) {
     if (e) ENG(e)->pushMidiForTest(source, status & 0xF0, channel & 0x0F, d1 & 0x7F, d2 & 0x7F);
 }

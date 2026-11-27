@@ -116,10 +116,17 @@ langkah itu dilewati dan SmartScreen tetap menampilkan "Unknown publisher".
 ### MIDI out ke synth eksternal
 
 Track instrument bisa memutar synth hardware/virtual: menu track (atau inspector) → **MIDI out** → pilih port
-lalu **Channel** 1–16. Engine mengirim note, CC, pitch bend dan channel pressure dari clip
+lalu **Channel** 1-16. Engine mengirim note, CC, pitch bend dan channel pressure dari clip
 track itu ke port tersebut; stop/seek mengirim all-notes-off (CC 123/120/64). Pengiriman
 berjalan di thread pump sendiri (RtMidi tidak realtime-safe), jadi audio tidak pernah menunggu.
 Route disimpan di project (midiOutputUid / midiOutputChannel).
+
+**Timing / offset (0.1.17).** Pump sekarang timestamped: tiap event dikirim mendekati sample
+time-nya, bukan diborong di awal blok render. **MIDI out offset** per track (-200…+200 ms;
+Inspector → MIDI out, atau menu MIDI out) hanya menggeser route eksternal: positif menunda,
+negatif memajukan sebanyak yang masih muat dalam blok berjalan. Nilai disimpan di project
+(`MidiOutOffsetMs`). Batas negative: tidak bisa lebih awal dari awal blok render; untuk
+kompensasi lebih besar, turunkan buffer atau tunggu lookahead di versi berikutnya.
 
 ### Kenapa DX12
 

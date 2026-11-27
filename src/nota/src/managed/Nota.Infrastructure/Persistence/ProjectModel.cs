@@ -171,6 +171,9 @@ public sealed class TrackDto
     // Absent = off; older builds ignore it.
     public string? MidiOutputUid { get; set; }
     public int? MidiOutputChannel { get; set; }
+    // External MIDI out latency compensation in ms (positive delays, negative advances).
+    // Omitted = 0; only meaningful with MidiOutputUid.
+    public double? MidiOutOffsetMs { get; set; }
     // MIDI playback offset in ms (negative = earlier; playback only, notes don't move). Omitted = 0. v30.
     public double? MidiOffsetMs { get; set; }
     // The track's articulation map (specs/085), embedded as Nota's map JSON

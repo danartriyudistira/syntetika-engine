@@ -143,6 +143,7 @@ public sealed class ProjectService
             {
                 t.MidiOutputUid = engine.GetTrackMidiOutputUid(ti.Id);
                 t.MidiOutputChannel = t.MidiOutputUid is { Length: > 0 } ? engine.GetTrackMidiOutputChannel(ti.Id) : null;
+                t.MidiOutOffsetMs = t.MidiOutputUid is { Length: > 0 } ? engine.GetTrackMidiOutOffsetMs(ti.Id) : null;
             }
             for (int b = 0; b < t.Sends.Length; b++) t.Sends[b] = engine.GetTrackSend(ti.Id, b);
 
@@ -851,6 +852,7 @@ public sealed class ProjectService
                 engine.SetTrackMidiInput(id, t.MidiInputUid, t.MidiInputChannel ?? 0);
             if (t.MidiOutputUid is { Length: > 0 })                                // external MIDI out
                 engine.SetTrackMidiOutput(id, t.MidiOutputUid, t.MidiOutputChannel ?? 1);
+            if (t.MidiOutOffsetMs is { } outOff && double.IsFinite(outOff)) engine.SetTrackMidiOutOffsetMs(id, outOff);
             if (t.MidiOffsetMs is { } offMs && double.IsFinite(offMs)) engine.SetTrackMidiOffsetMs(id, offMs);   // v30; absent = 0, engine clamps
             if (t.Type == 1 && t.ArticulationMap is { } artMap) ApplyArticulationMap(engine, id, artMap, warnings);   // v30
             for (int b = 0; b < t.Sends.Length && b < 4; b++) engine.SetTrackSend(id, b, t.Sends[b]);

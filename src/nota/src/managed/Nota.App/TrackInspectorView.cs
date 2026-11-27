@@ -311,6 +311,20 @@ internal sealed class TrackInspectorView : UserControl
         rows.Children.Add(SessionView.Row(Loc.T("midi_input.channel"), SessionView.Chip(ch.ToString(), false, a =>
             SessionView.Pick(a, Enumerable.Range(1, 16).Select(c => (c, Loc.F("midi_input.channel_n", c))), c => c == ch,
                 c => { _engine.SetTrackMidiOutput(id, _engine.GetTrackMidiOutputUid(id), c); Edited(); }))));
+        double outOff = _engine.GetTrackMidiOutOffsetMs(id);
+        double pendingOff = outOff;
+        var offset = new DragNumber(outOff, -200, 200, 1, "0", 8)
+        {
+            Width = 70, Height = NotaSize.Shell,
+        };
+        ToolTip.SetTip(offset, Loc.T("midi_output.offset_tip"));
+        offset.ValueChanged += v => pendingOff = Math.Round(v);
+        offset.GestureEnd += () =>
+        {
+            _engine.SetTrackMidiOutOffsetMs(id, pendingOff);
+            Edited();
+        };
+        rows.Children.Add(SessionView.Row(Loc.T("midi_output.offset"), offset));
         if (ports.Count == 0)
             rows.Children.Add(Note(Loc.T("midi_output.none")));
         return rows;

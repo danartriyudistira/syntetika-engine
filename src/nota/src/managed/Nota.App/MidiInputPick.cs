@@ -247,6 +247,18 @@ internal static class MidiOutputPick
             ch.Items.Add(mi);
         }
         menu.Items.Add(ch);
+        menu.Items.Add(new Separator());
+        double curOff = engine.GetTrackMidiOutOffsetMs(trackId);
+        var offsetMenu = MenuKit.ValueItem(Loc.T("midi_output.offset"), null,
+            Loc.F("midi_output.offset_ms", Math.Round(curOff)));
+        foreach (int v in new[] { -50, -25, -10, -5, 0, 5, 10, 25, 50 })
+        {
+            var mi = new MenuItem { Header = Loc.F("midi_output.offset_ms", v), ToggleType = MenuItemToggleType.Radio, IsChecked = Math.Abs(curOff - v) < 0.5 };
+            int value = v;
+            mi.Click += (_, _) => { engine.SetTrackMidiOutOffsetMs(trackId, value); edited?.Invoke(); };
+            offsetMenu.Items.Add(mi);
+        }
+        menu.Items.Add(offsetMenu);
         return menu;
     }
 }

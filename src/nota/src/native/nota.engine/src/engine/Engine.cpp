@@ -18,6 +18,12 @@
 
 namespace nota {
 
+namespace {
+int64_t steadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
+
 Engine::Engine()
     : backend_(createAudioBackend()), config_(loadAudioConfig()), // M7-1: persisted device/rate/buffer
       midiConfig_(loadMidiConfig()),                              // M7-2: persisted MIDI input selection
@@ -278,6 +284,10 @@ std::string Engine::midiOutPortUid(int32_t index) const {
 }
 
 void Engine::queueMidiOut(int32_t port, const uint8_t* data, int32_t len) noexcept {
+    queueMidiOutAt(port, data, len, steadyNowNs());
+}
+
+void Engine::queueMidiOutAt(int32_t port, const uint8_t* data, int32_t len, int64_t dueNs) noexcept {
     if (port < 0 || !data || len <= 0) return;
     if (len > 3) len = 3;
     const uint32_t head = midiOutHead_.load(std::memory_order_relaxed);
@@ -286,6 +296,7 @@ void Engine::queueMidiOut(int32_t port, const uint8_t* data, int32_t len) noexce
     MidiOutMsg& m = midiOutRing_[head % kMidiOutRing];
     m.port = port;
     m.len = static_cast<uint8_t>(len);
+    m.dueNs = dueNs;
     for (int32_t i = 0; i < len; ++i) m.data[i] = data[i];
     midiOutHead_.store(head + 1, std::memory_order_release);
 }
@@ -307,37 +318,59 @@ void Engine::sendExternalMidi(const Track& t, const MidiEv* evs, int32_t n, cons
     const int32_t midiOutPort = t.midiOutPort();
     if (midiOutPort < 0) return;
     const uint8_t outCh = static_cast<uint8_t>(std::clamp(t.midiOutChannel(), 1, 16) - 1);
-    for (int32_t i = 0; evs && i < n; ++i) {
-        uint8_t msg[3] = {
-            static_cast<uint8_t>((evs[i].on ? 0x90 : 0x80) | outCh),
-            static_cast<uint8_t>(std::clamp(evs[i].pitch, 0, 127)),
-            0,
-        };
-        if (evs[i].on)
-            msg[2] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(std::lround(evs[i].vel * 127.0f)), 1, 127));
-        queueMidiOut(midiOutPort, msg, 3);
-    }
-    for (int32_t i = 0; xev && i < xn; ++i) {
-        const ExprEv& e = xev[i];
-        if (e.dim < kCtlDimBase) continue; // per-note expression stays with the instrument
+    const double sr = transport_.sampleRate() > 0.0 ? transport_.sampleRate() : 48000.0;
+    const int64_t nowNs = steadyNowNs();
+    const double offsetMs = t.midiOutOffsetMs();
+    const int64_t offsetNs = std::isfinite(offsetMs) ? static_cast<int64_t>(std::llround(offsetMs * 1e6)) : 0;
+    // A block's events are queued with the sample time they belong to, plus the track's
+    // external latency compensation. Negative compensation can only advance them to the
+    // start of this block (they cannot be known before the render produced them).
+    const auto dueAt = [&](int32_t off) {
+        const int64_t due = nowNs + static_cast<int64_t>(std::llround(static_cast<double>(off) / sr * 1e9)) + offsetNs;
+        return due < nowNs ? nowNs : due;
+    };
+    // Notes and controllers are both sorted by their sample offset; merge them so the ring
+    // stays in due-time order (the pump holds the head until its time).
+    int32_t ni = 0, xi = 0;
+    while (true) {
+        while (xev && xi < xn && xev[xi].dim < kCtlDimBase) ++xi; // per-note expression stays local
+        const bool notesLeft = evs && ni < n;
+        const bool ctlsLeft = xev && xi < xn;
+        if (!notesLeft && !ctlsLeft) break;
+        const bool noteFirst = notesLeft && (!ctlsLeft || evs[ni].off <= xev[xi].off);
+        if (noteFirst) {
+            uint8_t msg[3] = {
+                static_cast<uint8_t>((evs[ni].on ? 0x90 : 0x80) | outCh),
+                static_cast<uint8_t>(std::clamp(evs[ni].pitch, 0, 127)),
+                0,
+            };
+            if (evs[ni].on)
+                msg[2] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(std::lround(evs[ni].vel * 127.0f)), 1, 127));
+            queueMidiOutAt(midiOutPort, msg, 3, dueAt(evs[ni].off));
+            ++ni;
+            continue;
+        }
+        const ExprEv& e = xev[xi];
         const int32_t ctl = e.dim - kCtlDimBase;
+        const int64_t due = dueAt(e.off);
         uint8_t msg[3];
         if (ctl == kCtlPitchWheel) {
             const int32_t v14 = std::clamp(static_cast<int32_t>(std::lround((e.value * 0.5f + 0.5f) * 16383.0f)), 0, 16383);
             msg[0] = static_cast<uint8_t>(0xE0 | outCh);
             msg[1] = static_cast<uint8_t>(v14 & 0x7F);
             msg[2] = static_cast<uint8_t>((v14 >> 7) & 0x7F);
-            queueMidiOut(midiOutPort, msg, 3);
+            queueMidiOutAt(midiOutPort, msg, 3, due);
         } else if (ctl == kCtlChannelPressure) {
             msg[0] = static_cast<uint8_t>(0xD0 | outCh);
             msg[1] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(std::lround(e.value * 127.0f)), 0, 127));
-            queueMidiOut(midiOutPort, msg, 2);
+            queueMidiOutAt(midiOutPort, msg, 2, due);
         } else if (ctl >= 0 && ctl < 128) {
             msg[0] = static_cast<uint8_t>(0xB0 | outCh);
             msg[1] = static_cast<uint8_t>(ctl);
             msg[2] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(std::lround(e.value * 127.0f)), 0, 127));
-            queueMidiOut(midiOutPort, msg, 3);
+            queueMidiOutAt(midiOutPort, msg, 3, due);
         }
+        ++xi;
     }
 }
 
@@ -349,8 +382,15 @@ void Engine::startMidiOutPump() {
 
 void Engine::stopMidiOutPump() {
     if (!midiOutPumpRun_.load(std::memory_order_relaxed)) return;
-    // Release every routed channel before the pump and its ports go away: a quit, an audio
-    // device restart or a project close must not leave a hardware synth holding a note.
+    // Stop the sender first: it may be waiting for a scheduled note, and a message thread
+    // flush must not race its tail update.
+    midiOutPumpRun_.store(false, std::memory_order_relaxed);
+    if (midiOutPump_.joinable()) midiOutPump_.join();
+    // Drop whatever was still scheduled (the all-notes-off below replaces it).
+    midiOutTail_.store(midiOutHead_.load(std::memory_order_acquire), std::memory_order_release);
+    // Release every routed channel synchronously: a quit, an audio device restart or a
+    // project close must not leave a hardware synth holding a note. Ports are already
+    // open from the pump, so this is a few short writes.
     if (authoring_) {
         std::vector<std::pair<int32_t, int32_t>> routes;
         for (const auto& t : authoring_->tracks) {
@@ -365,13 +405,18 @@ void Engine::stopMidiOutPump() {
                 }
             if (!seen) routes.push_back(key);
         }
-        for (const auto& r : routes) queueAllNotesOff(r.first, r.second);
+        for (const auto& [port, channel] : routes) {
+            const std::string uid = midiOutPortUid(port);
+            if (uid.empty()) continue;
+            const uint8_t ch = static_cast<uint8_t>(std::clamp(channel, 1, 16) - 1);
+            const uint8_t msgs[3][3] = {
+                {static_cast<uint8_t>(0xB0 | ch), 64, 0},  // sustain off
+                {static_cast<uint8_t>(0xB0 | ch), 123, 0}, // all notes off
+                {static_cast<uint8_t>(0xB0 | ch), 120, 0}, // all sound off
+            };
+            for (const auto& m : msgs) midiSend(uid, m, 3);
+        }
     }
-    // Give the pump a moment to drain what is queued (normally a millisecond or two).
-    for (int i = 0; i < 100 && midiOutTail_.load(std::memory_order_acquire) != midiOutHead_.load(std::memory_order_acquire); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    midiOutPumpRun_.store(false, std::memory_order_relaxed);
-    if (midiOutPump_.joinable()) midiOutPump_.join();
 }
 
 void Engine::pumpMidiOut() {
@@ -379,17 +424,28 @@ void Engine::pumpMidiOut() {
         bool sent = false;
         uint32_t tail = midiOutTail_.load(std::memory_order_relaxed);
         const uint32_t head = midiOutHead_.load(std::memory_order_acquire);
+        const int64_t now = steadyNowNs();
+        int64_t nextDue = 0;
         while (tail != head) {
             const MidiOutMsg m = midiOutRing_[tail % kMidiOutRing];
+            if (m.dueNs > now) {
+                nextDue = m.dueNs; // head is not due yet: keep FIFO and wait
+                break;
+            }
             ++tail;
             const std::string uid = midiOutPortUid(m.port);
             if (!uid.empty()) midiSend(uid, m.data, m.len);
             sent = true;
         }
         midiOutTail_.store(tail, std::memory_order_release);
-        // A sleep keeps the pump off the audio thread's back; 1 ms is under any MIDI jitter
-        // a synth cares about, and the audio thread never waits for it.
-        std::this_thread::sleep_for(std::chrono::milliseconds(sent ? 0 : 2));
+        if (nextDue > now) {
+            // Wake at least every 2 ms so a newly queued urgent message (all-notes-off,
+            // route change) is not held behind a far-future note.
+            int64_t wait = std::min<int64_t>(nextDue - now, 2000000);
+            if (wait > 0) std::this_thread::sleep_for(std::chrono::nanoseconds(wait));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sent ? 0 : 2));
+        }
     }
 }
 
@@ -1005,6 +1061,7 @@ std::shared_ptr<Track> Engine::cloneTrack(const Track& t) const {
     nt->midiInputUid = t.midiInputUid;
     nt->setMidiOutPort(t.midiOutPort());                             // external MIDI output route
     nt->setMidiOutChannel(t.midiOutChannel());
+    nt->setMidiOutOffsetMs(t.midiOutOffsetMs());
     nt->midiOutUid = t.midiOutUid;
     nt->setMidiOffsetMs(t.midiOffsetMs());                           // MIDI playback offset
     nt->articulationTable = t.articulationTable;                     // articulation map (shared, immutable)

@@ -433,6 +433,10 @@ public interface IAudioEngine : IDisposable
     bool SetTrackMidiOutput(int trackId, string? uid, int channel);
     string? GetTrackMidiOutputUid(int trackId);
     int GetTrackMidiOutputChannel(int trackId);
+    /// <summary>External MIDI out latency compensation in ms (-200..200): positive delays the
+    /// send, negative advances it inside the current block. Only the hardware route moves.</summary>
+    void SetTrackMidiOutOffsetMs(int trackId, double ms);
+    double GetTrackMidiOutOffsetMs(int trackId);
     /// <summary>Monitor mode, Ableton-style: 0 In (always), 1 Auto (while armed), 2 Off.</summary>
     void SetTrackMonitorMode(int trackId, int mode);
     int GetTrackMonitorMode(int trackId);

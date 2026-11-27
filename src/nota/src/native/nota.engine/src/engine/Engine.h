@@ -171,8 +171,14 @@ class Engine {
     bool setTrackMidiOutput(int32_t trackId, const std::string& outputUid, int32_t channel);
     const char* trackMidiOutputUid(int32_t trackId) const; // "" when off
     int32_t trackMidiOutputChannel(int32_t trackId) const;
+    // External MIDI out latency compensation in ms: positive delays the send, negative
+    // advances it inside the current block. Applies to this track's external route only.
+    void setTrackMidiOutOffsetMs(int32_t trackId, double ms);
+    double trackMidiOutOffsetMs(int32_t trackId) const;
     // Realtime-safe: queues a short channel message for the pump thread (audio thread).
     void queueMidiOut(int32_t port, const uint8_t* data, int32_t len) noexcept;
+    // Same, but `dueNs` is a steady_clock timestamp: the pump holds it until that moment.
+    void queueMidiOutAt(int32_t port, const uint8_t* data, int32_t len, int64_t dueNs) noexcept;
     // Test ports (MCP controller_inject): a virtual input + loopback output. Message thread.
     int32_t addTestMidiPort(const std::string& name);
     bool injectTestMidi(int32_t source, const uint8_t* data, int32_t len);
@@ -1855,6 +1861,7 @@ class Engine {
         int32_t port;
         uint8_t len;
         uint8_t data[3];
+        int64_t dueNs; // steady_clock time the pump should send it (0 = now)
     };
     static constexpr uint32_t kMidiOutRing = 1024;
     std::array<MidiOutMsg, kMidiOutRing> midiOutRing_{};

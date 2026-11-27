@@ -33,6 +33,10 @@ internal static class MidiOutTests
         yield return (e.SetTrackMidiOutput(ta, "test:midiout", 3), "routing a track to an output port");
         yield return (e.GetTrackMidiOutputUid(ta) == "test:midiout" && e.GetTrackMidiOutputChannel(ta) == 3,
             "the output route and channel read back");
+        e.SetTrackMidiOutOffsetMs(ta, 12.5);
+        yield return (Math.Abs(e.GetTrackMidiOutOffsetMs(ta) - 12.5) < 1e-6, "the MIDI out offset reads back");
+        e.AddMidiClip(ta, 4, 1); // an edit clones the track: the offset must travel with it
+        yield return (Math.Abs(e.GetTrackMidiOutOffsetMs(ta) - 12.5) < 1e-6, "the MIDI out offset survives an edit");
 
         var blk = new float[512 * 2];
         e.Seek(0);
@@ -92,6 +96,25 @@ internal static class MidiOutTests
         var edited = en.TakeTestMidiSent(pn);
         yield return (Contains(edited, 0x81, 60, _ => true),
             "removing a playing note releases it on the output port");
+
+        // A positive offset holds the note until its due time; the pump is timestamped, not
+        // just a per-block burst.
+        using var ed = new NotaEngine();
+        int td = ed.AddConsortTrack();
+        int pd = ed.AddTestMidiPort("midiout-delay");
+        ed.SetTrackMidiOutput(td, "test:midiout-delay", 1);
+        ed.SetTrackMidiOutOffsetMs(td, 200);
+        ed.AddMidiClip(td, 0, 4);
+        ed.SetClipNotes(td, 0, new[] { new NotaNote(62, 0, 1.0, 1f) });
+        ed.Seek(0);
+        ed.Play();
+        for (int i = 0; i < 20; i++) ed.RenderOffline(editBlock, 512);
+        Thread.Sleep(50);
+        var early = ed.TakeTestMidiSent(pd);
+        yield return (!HasNote(early), "a positive MIDI out offset holds the note");
+        Thread.Sleep(400);
+        var late = ed.TakeTestMidiSent(pd);
+        yield return (HasNote(late), "and sends it after the offset");
 
         // Session clips render on their own path (renderSessionSlotRaw): they must play the
         // external output too, not just arrangement clips.

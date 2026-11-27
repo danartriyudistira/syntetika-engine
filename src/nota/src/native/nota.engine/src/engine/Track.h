@@ -418,6 +418,12 @@ class Track {
     void setMidiOutPort(int32_t port) { midiOutPort_.store(port, std::memory_order_relaxed); }
     int32_t midiOutChannel() const { return midiOutChannel_.load(std::memory_order_relaxed); }
     void setMidiOutChannel(int32_t channel) { midiOutChannel_.store(channel, std::memory_order_relaxed); }
+    // External MIDI out latency compensation, in milliseconds (positive = delay, negative =
+    // advance within the current block). Only the external route is shifted; the instrument
+    // and the rest of the track stay where they are. Atomic: message thread writes, audio
+    // thread reads it for every outgoing event.
+    double midiOutOffsetMs() const { return midiOutOffsetMs_.load(std::memory_order_relaxed); }
+    void setMidiOutOffsetMs(double ms) { midiOutOffsetMs_.store(ms, std::memory_order_relaxed); }
     void setMidiInput(int32_t source, int32_t channel) {
         midiInputSource_.store(source, std::memory_order_relaxed);
         midiInputChannel_.store(channel, std::memory_order_relaxed);
@@ -550,6 +556,8 @@ class Track {
     std::atomic<int32_t> midiInputChannel_{0};
     std::atomic<int32_t> midiOutPort_{-1};                              // external MIDI out route (port index)
     std::atomic<int32_t> midiOutChannel_{1};                            // 1-16
+    std::atomic<double> midiOutOffsetMs_{0.0};                          // external MIDI out latency (ms)
+    static_assert(std::atomic<double>::is_always_lock_free, "the audio thread reads midiOutOffsetMs_: it must not take a lock");
     std::atomic<bool> frozen_{false};                                   // M7: play frozenBuf instead of the live chain
 };
 

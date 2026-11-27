@@ -641,6 +641,22 @@ double Engine::trackMidiOffsetMs(int32_t trackId) const {
     auto t = findTrackAuthoring(trackId);
     return t ? t->midiOffsetMs() : 0.0;
 }
+// External MIDI out latency compensation: a separate value from the playback offset above,
+// because only the hardware route moves. The same clone/publish rule keeps the audio thread
+// reading an immutable track.
+void Engine::setTrackMidiOutOffsetMs(int32_t trackId, double ms) {
+    if (!std::isfinite(ms)) ms = 0.0;
+    ms = std::clamp(ms, -200.0, 200.0);
+    auto old = findTrackAuthoring(trackId);
+    if (!old || old->midiOutOffsetMs() == ms) return;
+    auto nt = cloneTrack(*old);
+    nt->setMidiOutOffsetMs(ms);
+    republishWithTrack(trackId, nt);
+}
+double Engine::trackMidiOutOffsetMs(int32_t trackId) const {
+    auto t = findTrackAuthoring(trackId);
+    return t ? t->midiOutOffsetMs() : 0.0;
+}
 int32_t Engine::trackMidiSource(int32_t trackId) const {
     auto t = findTrackAuthoring(trackId);
     return t ? t->midiFromTrackId() : -1;
