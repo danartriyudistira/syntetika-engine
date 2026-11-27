@@ -1,6 +1,6 @@
 # 07 — Prioritas build macOS berikutnya
 
-Catatan ini dibuat 26 November 2026, setelah rilis Windows **0.1.20**. Tujuannya: saat build
+Catatan ini dibuat 26 November 2026, setelah rilis Windows **1.0.0**. Tujuannya: saat build
 macOS berikutnya dikerjakan, perbaikan-perbaikan terbaru ini **wajib masuk dan diuji**, bukan
 hanya ikut ter-build diam-diam.
 
@@ -8,8 +8,8 @@ hanya ikut ter-build diam-diam.
 
 | | |
 |---|---|
-| Rilis macOS terakhir | **0.1.20** (Apple Silicon, DMG) |
-| Rilis Windows terakhir | **0.1.20** |
+| Rilis macOS terakhir | **0.1.20** (beta, Apple Silicon) |
+| Rilis Windows terakhir | **1.0.0** (stable) |
 | Sumber di `main` | sudah memuat perubahan 0.1.8–0.1.20 (engine + managed dipakai bersama) |
 | Binary macOS | **0.1.20** — MIDI out, I/O baru, timing + offset, hot-plug, export loop Session |
 
