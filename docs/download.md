@@ -1,16 +1,16 @@
 # Download Syntetika Engine
 
-The latest installers are on GitHub. **Windows 1.0.0 is the first stable release; all 0.1.x versions are beta and unsupported.**
+The latest installers are on GitHub. **Syntetika Engine 1.0.0 is the first stable release on Windows and macOS; all 0.1.x versions are beta and unsupported.**
 
 **[Syntetika Engine releases](https://github.com/danartriyudistira/syntetika-engine/releases/latest)**
 
 | | |
 |---|---|
-| Latest macOS (beta) | **0.1.20** (`Syntetika-Engine-0.1.20-arm64.dmg`, 112 MB — macOS 12+, Apple Silicon) |
+| Latest macOS | **1.0.0** (`Syntetika-Engine-1.0.0-arm64.dmg`, 112 MB — macOS 12+, Apple Silicon) |
 | Latest Windows | **1.0.0** |
 | Windows | `Syntetika-Engine-Setup-1.0.0-x64.exe` (110 MB) — Windows 10/11 x64 |
 
-macOS SHA-256: `2956150440a5bef6b0b6d0fc6e0a26fc51233d00c1e5f866a4ecd6dee6cfb3ad`
+macOS SHA-256: `eb9650fd284b10f9626c2e7d658a2dfbfc1120146a46d766d3e606b3e787b0d5`
 
 Windows SHA-256: `ba1411d62ed793614592fa50df20cdd59014b32cedc72cb96883e567e5a33800`
 
@@ -56,7 +56,7 @@ settings in `%APPDATA%\Syntetika Engine` are kept.
 2. (Optional) Verify the download:
 
    ```bash
-   shasum -a 256 Syntetika-Engine-0.1.20-arm64.dmg
+   shasum -a 256 Syntetika-Engine-1.0.0-arm64.dmg
    ```
 
 3. Open the image and drag **Syntetika Engine** onto **Applications**.

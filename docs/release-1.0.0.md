@@ -1,8 +1,8 @@
-# Syntetika Engine 1.0.0 — rilis stabil pertama (Windows x64)
+# Syntetika Engine 1.0.0 — rilis stabil pertama (Windows x64 + macOS arm64)
 
-Versi **1.0.0** adalah rilis resmi pertama untuk Windows x64. Seluruh versi **0.1.x**
-(termasuk 0.1.20) sekarang ditandai **beta / pre-release** dan tidak disarankan untuk
-penggunaan sehari-hari.
+Versi **1.0.0** adalah rilis resmi pertama untuk **Windows x64 dan macOS arm64** — keduanya
+dibangun dari sumber yang sama. Seluruh versi **0.1.x** (termasuk 0.1.20) sekarang ditandai
+**beta / pre-release** dan tidak disarankan untuk penggunaan sehari-hari.
 
 ## Yang sudah ada di 1.0.0
 
@@ -21,8 +21,21 @@ penggunaan sehari-hari.
 ## Catatan versi
 
 - **Windows 1.0.0**: stabil.
-- **macOS 0.1.20**: masih **beta**; build macOS 1.0.0 menyusul dari sumber yang sama.
+- **macOS 1.0.0**: stabil, dari sumber yang sama; build ini juga membawa perbaikan hot-plug
+  port MIDI khusus CoreMIDI.
 - Semua rilis 0.1.x tetap tersedia untuk riwayat, tetapi ditandai **Pre-release** di GitHub.
+
+## macOS
+
+`Syntetika-Engine-1.0.0-arm64.dmg` — macOS 12+, Apple Silicon.
+
+Build ini membawa fitur yang sama dengan Windows 1.0.0: MIDI out (timestamped + offset global
+dan per track), I/O ala Ableton, Export Session Loops, Random MIDI parts, tempo realtime, dan
+hot-plug port MIDI. Suite `--export-session` dan `--midi-out` lulus di macOS.
+
+DMG ini **ad-hoc signed, belum notarized**. Saat pertama dibuka: klik kanan app → **Open** →
+**Open**, atau System Settings → Privacy & Security → **Open Anyway**. Hanya Apple Silicon;
+belum ada build Intel.
 
 ## Instalasi Windows
 
@@ -38,9 +51,21 @@ Get-FileHash .\Syntetika-Engine-Setup-1.0.0-x64.exe -Algorithm SHA256
 
 Persyaratan: Windows 10/11 x64. Tanpa .NET/VC++/FFmpeg terpasang pun jalan.
 
+## Instalasi macOS
+
+1. Unduh `Syntetika-Engine-1.0.0-arm64.dmg`.
+2. (Opsional) Verifikasi:
+
+   ```bash
+   shasum -a 256 Syntetika-Engine-1.0.0-arm64.dmg
+   ```
+
+3. Buka image, seret **Syntetika Engine** ke **Applications**.
+4. Jalankan; bila macOS menolak, pakai langkah Gatekeeper di atas.
+
 ## Checksums
 
 ```
 ba1411d62ed793614592fa50df20cdd59014b32cedc72cb96883e567e5a33800  Syntetika-Engine-Setup-1.0.0-x64.exe
-2956150440a5bef6b0b6d0fc6e0a26fc51233d00c1e5f866a4ecd6dee6cfb3ad  Syntetika-Engine-0.1.20-arm64.dmg
+eb9650fd284b10f9626c2e7d658a2dfbfc1120146a46d766d3e606b3e787b0d5  Syntetika-Engine-1.0.0-arm64.dmg
 ```
