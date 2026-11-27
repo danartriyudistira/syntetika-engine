@@ -48,6 +48,7 @@ public partial class MainWindow
         B("file.saveVersion", () => OnMenuSaveVersion(this, e));
         B("file.import", () => OnMenuImport(this, e));
         B("file.export", () => OnMenuExport(this, e));
+        B("file.exportSession", () => _ = DoExportSessionAsync());
         B("file.exit", Close);   // the close button's path: unsaved changes still ask first (#316)
 
         // ---- Edit

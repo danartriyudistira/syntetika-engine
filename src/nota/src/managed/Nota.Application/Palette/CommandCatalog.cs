@@ -30,6 +30,7 @@ public static class CommandCatalog
         C("file.saveVersion", Loc.T("commands.save_version_with_note"), Loc.T("common.file"), Shortcut.CmdAlt('S'), "snapshot history commit"),
         C("file.import", Loc.T("commands.import_audio"), Loc.T("common.file"), "", "add file wav"),
         C("file.export", Loc.T("commands.export_audio"), Loc.T("common.file"), Shortcut.CmdShift('E'), "render bounce mixdown stems"),
+        C("file.exportSession", Loc.T("session_export.command"), Loc.T("common.file"), "", "session loops export audio midi folders scenes deck"),
         C("file.exit", Loc.T("commands.exit_nota"), Loc.T("common.file"), Shortcut.Cmd('Q'), "quit close leave"),
 
         // ---- Edit -------------------------------------------------------------------------

@@ -59,4 +59,23 @@ public interface IAudioExporter
     /// files written.</summary>
     /// <param name="progress">Optional 0..1 sink reported across all stems.</param>
     int ExportStems(IAudioEngine engine, ExportRequest request, IProgress<double>? progress = null);
+
+    /// <summary>Exports the current deck's filled Session slots as loop files, one folder
+    /// per scene: a WAV per track and, optionally, a .mid for instrument tracks. Loops are
+    /// exactly the slot length; master effects are bypassed. Restores the engine afterwards.</summary>
+    SessionExportResult ExportSessionLoops(IAudioEngine engine, SessionExportRequest request,
+                                           IProgress<double>? progress = null);
 }
+
+/// <summary>Options for <see cref="IAudioExporter.ExportSessionLoops"/>. Audio is always WAV;
+/// <see cref="IncludeMidi"/> writes a companion .mid for instrument slots.</summary>
+public readonly record struct SessionExportRequest(
+    string Folder,
+    int SampleRate,
+    WavBitDepth Depth,
+    bool IncludeMidi,
+    bool RestoreMetronome);
+
+/// <summary>What a Session export wrote.</summary>
+public readonly record struct SessionExportResult(int AudioFiles, int MidiFiles, int Scenes);
+

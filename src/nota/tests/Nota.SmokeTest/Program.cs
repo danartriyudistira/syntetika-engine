@@ -316,6 +316,14 @@ if (args.Length >= 1 && args[0] == "--smart-samples")
     Console.WriteLine(failures == 0 ? "SMART SAMPLES PASSED" : $"SMART SAMPLES FAILED ({failures})");
     return failures == 0 ? 0 : 1;
 }
+// Export Session loops alone: `--export-session`.
+if (args.Length >= 1 && args[0] == "--export-session")
+{
+    Console.WriteLine("-- session export --");
+    foreach (var (ok, label) in SessionExportTests.Run()) Check(ok, label);
+    Console.WriteLine(failures == 0 ? "SESSION EXPORT PASSED" : $"SESSION EXPORT FAILED ({failures})");
+    return failures == 0 ? 0 : 1;
+}
 // External MIDI out alone: `--midi-out`.
 if (args.Length >= 1 && args[0] == "--midi-out")
 {
@@ -16438,6 +16446,8 @@ Console.WriteLine("-- dsp optimization --");
 foreach (var (ok, label) in DspOptimizationTests.Run()) Check(ok, label);
 Console.WriteLine("-- dsp silence bypass --");
 foreach (var (ok, label) in DspSilenceBypassTests.Run()) Check(ok, label);
+Console.WriteLine("-- session export --");
+foreach (var (ok, label) in SessionExportTests.Run()) Check(ok, label);
 Console.WriteLine("-- render pool --");
 foreach (var (ok, label) in RenderPoolTests.Run()) Check(ok, label);
 

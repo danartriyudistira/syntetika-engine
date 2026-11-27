@@ -30,6 +30,7 @@
             <NativeMenuItemSeparator/>
             <NativeMenuItem Header="{app:T 'main.import_audio'}" app:Commands.Id="file.import"/>
             <NativeMenuItem Header="{app:T 'main.export_audio'}" app:Commands.Id="file.export"/>
+            <NativeMenuItem Header="{app:T 'session_export.command'}" app:Commands.Id="file.exportSession"/>
             <NativeMenuItemSeparator/>
             <NativeMenuItem Header="{app:T 'main.settings'}" app:Commands.Id="prefs.open"/>
             <NativeMenuItemSeparator/>

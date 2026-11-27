@@ -139,6 +139,72 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>Exports the current deck's filled Session slots: one folder per scene, a WAV
+    /// per track and an optional MIDI file for instrument clips (loop length, master bypassed).</summary>
+    private async Task DoExportSessionAsync()
+    {
+        if (_vm is null) return;
+        _editorRoll?.SettlePlacement();
+
+        int deck = Engine.CurrentDeck;
+        int first = Engine.DeckSceneStart(deck);
+        int scenes = Engine.DeckSceneCount(deck);
+        int loops = 0, midi = 0, usedScenes = 0;
+        for (int local = 0; local < scenes; local++)
+        {
+            int scene = first + local;
+            bool any = false;
+            for (int i = 0; i < Engine.TrackCount; i++)
+            {
+                if (!Engine.TryGetTrackInfo(i, out var ti) || ti.IsReturn || ti.IsGroup) continue;
+                if (Engine.SessionSlotLength(ti.Id, scene) <= 0) continue;
+                loops++;
+                if (ti.IsInstrument) midi++;
+                any = true;
+            }
+            if (any) usedScenes++;
+        }
+        if (loops == 0)
+        {
+            _vm.StatusText = Loc.T("session_export.nothing");
+            return;
+        }
+
+        var opts = await new SessionExportWindow(usedScenes, loops, midi).ShowDialog<SessionExportOptions?>(this);
+        if (opts is null) return;
+
+        Activate();
+        var folders = await this.PickFoldersAsync(new FolderPickerOpenOptions
+        {
+            Title = Loc.T("session_export.choose_folder"),
+            AllowMultiple = false,
+        });
+        string? path = folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+        if (path is null) return;
+
+        _vm.SuspendEnginePolling = true;
+        try
+        {
+            var request = new SessionExportRequest(
+                path, opts.SampleRate, opts.Depth, opts.IncludeMidi, _vm.Transport.MetronomeOn);
+            await RunBlockingAsync(Loc.T("session_export.title"), Loc.T("session_export.exporting"), async prog =>
+            {
+                var frac = new Progress<double>(f =>
+                    prog.Report(ProgressReport.At(f, Loc.F("session_export.exporting_n", f * 100))));
+                var result = await Task.Run(() => _exporter.ExportSessionLoops(Engine, request, frac));
+                _vm.StatusText = Loc.F("session_export.done", result.AudioFiles, result.MidiFiles, path);
+            });
+        }
+        catch (Exception ex)
+        {
+            _vm.StatusText = Loc.F("session_export.failed", ex.Message);
+        }
+        finally
+        {
+            _vm.SuspendEnginePolling = false;
+        }
+    }
+
     /// <summary>Last clip end across all tracks, in beats (0 if the arrangement is empty).</summary>
     private double ProjectEndBeats()
     {

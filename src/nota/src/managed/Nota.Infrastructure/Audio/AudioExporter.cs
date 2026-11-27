@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace Nota.Infrastructure;
 
@@ -107,6 +108,201 @@ public sealed class AudioExporter : IAudioExporter
         Restore(engine, r, wasRunning, loop);
         progress?.Report(1.0);
         return written;
+    }
+
+    public SessionExportResult ExportSessionLoops(IAudioEngine engine, SessionExportRequest r,
+                                                  IProgress<double>? progress = null)
+    {
+        int sr = r.SampleRate;
+        int deck = engine.CurrentDeck;
+        int firstScene = engine.DeckSceneStart(deck);
+        int sceneCount = engine.DeckSceneCount(deck);
+
+        // Collect the current deck's filled slots. A slot has a length only when it holds a
+        // clip; empty slots are skipped. Groups and returns are buses, not loop sources.
+        var jobs = new List<(int TrackId, int TrackIndex, string TrackName, string ClipName,
+                             int Scene, string Folder, double LengthBeats, double Bpm,
+                             int SigNum, int SigDen, bool Instrument)>();
+        double projectBpm = engine.Bpm;
+        for (int local = 0; local < sceneCount; local++)
+        {
+            int scene = firstScene + local;
+            string sceneName = engine.GetSceneName(scene);
+            string sceneFolder = Path.Combine(r.Folder,
+                $"{local + 1:00} {SafeName(sceneName, $"Scene {local + 1:00}")}");
+            double sceneBpm = projectBpm;
+            int sigNum = 4, sigDen = 4;
+            if (engine.TryGetSceneProps(scene, out var sp))
+            {
+                if (sp.Tempo > 0) sceneBpm = sp.Tempo;
+                if (sp.SigNum > 0) sigNum = sp.SigNum;
+                if (sp.SigDen > 0) sigDen = sp.SigDen;
+            }
+            int n = engine.TrackCount;
+            for (int i = 0; i < n; i++)
+            {
+                if (!engine.TryGetTrackInfo(i, out var ti) || ti.IsReturn || ti.IsGroup) continue;
+                double length = engine.SessionSlotLength(ti.Id, scene);
+                if (length <= 0) continue;
+                string trackName = engine.GetTrackName(ti.Id);
+                if (trackName.Length == 0) trackName = $"Track {i + 1:00}";
+                jobs.Add((ti.Id, i + 1, trackName, engine.GetSessionClipName(ti.Id, scene),
+                          scene, sceneFolder, length, sceneBpm, sigNum, sigDen, ti.IsInstrument));
+            }
+        }
+
+        // Save everything the render touches, so a failed export still leaves the project
+        // exactly as it was.
+        var tracks = new List<NotaTrackInfo>();
+        for (int i = 0; i < engine.TrackCount; i++)
+            if (engine.TryGetTrackInfo(i, out var ti)) tracks.Add(ti);
+        var mute = new bool[tracks.Count];
+        var solo = new bool[tracks.Count];
+        for (int i = 0; i < tracks.Count; i++) { mute[i] = tracks[i].Muted != 0; solo[i] = tracks[i].Soloed != 0; }
+
+        var midiRoutes = new List<(int TrackId, string Uid, int Channel, double Offset)>();
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            string? uid = engine.GetTrackMidiOutputUid(tracks[i].Id);
+            if (!string.IsNullOrEmpty(uid))
+                midiRoutes.Add((tracks[i].Id, uid, engine.GetTrackMidiOutputChannel(tracks[i].Id),
+                                engine.GetTrackMidiOutOffsetMs(tracks[i].Id)));
+        }
+
+        bool wasRunning = engine.IsRunning;
+        bool loopOn = engine.LoopEnabled;
+        double loopStart = engine.LoopStart, loopEnd = engine.LoopEnd;
+        double position = engine.PositionBeats;
+        double savedBpm = engine.Bpm;
+        double savedQuant = engine.LaunchQuant;
+        int master = engine.MasterTrackId;
+        int masterDevices = engine.TrackDeviceCount(master);
+        var masterBypass = new bool[masterDevices];
+        for (int i = 0; i < masterDevices; i++) masterBypass[i] = engine.DeviceBypassed(master, i);
+
+        try
+        {
+            engine.Stop();                 // exclusive offline access
+            engine.StopAllSession();
+            engine.StopTransport();
+            engine.SetLoop(false, 0, 0);
+            engine.SetMetronome(false);
+            engine.SetLaunchQuant(0);
+            for (int i = 0; i < masterDevices; i++) engine.SetDeviceBypassed(master, i, true);
+            for (int i = 0; i < tracks.Count; i++)
+            {
+                engine.SetTrackSolo(tracks[i].Id, false);
+                engine.SetTrackMute(tracks[i].Id, false);
+            }
+            // An external synth must not receive the offline notes.
+            foreach (var route in midiRoutes) engine.SetTrackMidiOutput(route.TrackId, null, route.Channel);
+
+            int total = jobs.Count + (r.IncludeMidi ? jobs.Count(j => j.Instrument) : 0);
+            int done = 0;
+            int audioFiles = 0, midiFiles = 0;
+            var scenesWritten = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool firstRender = true;
+            foreach (var job in jobs)
+            {
+                Directory.CreateDirectory(job.Folder);
+                engine.SetBpm(job.Bpm);
+                // Isolate the regular tracks; groups and returns stay open so the track keeps
+                // its group processing and sends.
+                foreach (var ti in tracks)
+                    if (!ti.IsReturn && !ti.IsGroup)
+                        engine.SetTrackMute(ti.Id, ti.Id != job.TrackId);
+
+                string baseName = $"{job.TrackIndex:00} {SafeName(job.TrackName, $"Track {job.TrackIndex:00}")}";
+                if (!string.IsNullOrWhiteSpace(job.ClipName))
+                    baseName += " - " + SafeName(job.ClipName, "");
+                string wavPath = Path.Combine(job.Folder, baseName + ".wav");
+                RenderSessionSlot(engine, job.TrackId, job.Scene, wavPath, sr, r.Depth,
+                                  job.Bpm, job.LengthBeats, ref firstRender);
+                audioFiles++;
+                scenesWritten.Add(job.Folder);
+
+                if (r.IncludeMidi && job.Instrument)
+                {
+                    string midiPath = Path.Combine(job.Folder, baseName + ".mid");
+                    MidiFileWriter.Write(midiPath, job.TrackName + (job.ClipName.Length > 0 ? " - " + job.ClipName : ""),
+                                         job.Bpm, job.SigNum, job.SigDen, job.LengthBeats,
+                                         engine.GetSessionNotes(job.TrackId, job.Scene));
+                    midiFiles++;
+                }
+                done += 1 + (r.IncludeMidi && job.Instrument ? 1 : 0);
+                if (total > 0) progress?.Report((double)done / total);
+            }
+            progress?.Report(1.0);
+            return new SessionExportResult(audioFiles, midiFiles, scenesWritten.Count);
+        }
+        finally
+        {
+            engine.StopAllSession();
+            engine.StopTransport();
+            for (int i = 0; i < tracks.Count; i++)
+            {
+                engine.SetTrackSolo(tracks[i].Id, solo[i]);
+                engine.SetTrackMute(tracks[i].Id, mute[i]);
+            }
+            for (int i = 0; i < masterDevices; i++) engine.SetDeviceBypassed(master, i, masterBypass[i]);
+            foreach (var route in midiRoutes)
+            {
+                engine.SetTrackMidiOutput(route.TrackId, route.Uid, route.Channel);
+                engine.SetTrackMidiOutOffsetMs(route.TrackId, route.Offset);
+            }
+            engine.SetBpm(savedBpm);
+            engine.SetLoop(loopOn, loopStart, loopEnd);
+            engine.SetLaunchQuant(savedQuant);
+            engine.SetMetronome(r.RestoreMetronome);
+            engine.Seek(position);
+            // SetBpm / SetLoop / SetMetronome are queued for the audio thread; one silent frame
+            // applies them now, so the project reads the saved tempo the moment the dialog closes.
+            engine.StopTransport();
+            var flush = new float[2];
+            engine.RenderOffline(flush, 1, sr);
+            engine.StopTransport();
+            engine.Seek(position);
+            if (wasRunning) engine.Start();
+        }
+    }
+
+    // Renders one Session slot, isolated by the caller, for exactly its loop length.
+    private static void RenderSessionSlot(IAudioEngine engine, int trackId, int scene, string path,
+                                          int sr, WavBitDepth depth, double bpm, double lengthBeats,
+                                          ref bool firstRender)
+    {
+        engine.StopTransport();
+        engine.StopAllSession();
+        engine.Seek(0);
+        engine.Play();
+        engine.LaunchSlot(trackId, scene);
+
+        long total = (long)Math.Ceiling(lengthBeats * 60.0 / Math.Max(1.0, bpm) * sr);
+        var buf = new float[Chunk * 2];
+        using (var wav = new WavWriter(path, sr, 2, depth))
+        {
+            long remaining = total;
+            while (remaining > 0)
+            {
+                int m = (int)Math.Min(Chunk, remaining);
+                if (firstRender) { engine.RenderOffline(buf, m, sr); firstRender = false; }
+                else engine.RenderOffline(buf, m);
+                wav.WriteFrames(buf, m);
+                remaining -= m;
+            }
+        }
+        engine.StopAllSession();
+        engine.StopTransport();
+    }
+
+    private static string SafeName(string? text, string fallback)
+    {
+        string s = (text ?? "").Trim();
+        foreach (char c in Path.GetInvalidFileNameChars()) s = s.Replace(c, '_');
+        foreach (char c in "/\\:*?\"<>|") s = s.Replace(c, '_');
+        s = s.Trim().TrimEnd('.');
+        if (s.Length == 0) s = fallback;
+        return s.Length > 80 ? s[..80].TrimEnd() : s;
     }
 
     // Renders `totalFrames` of the current graph to one output file (WAV / FLAC /
