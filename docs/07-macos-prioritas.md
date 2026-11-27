@@ -8,12 +8,12 @@ hanya ikut ter-build diam-diam.
 
 | | |
 |---|---|
-| Rilis macOS terakhir | **0.1.19** (Apple Silicon, DMG) |
+| Rilis macOS terakhir | **0.1.20** (Apple Silicon, DMG) |
 | Rilis Windows terakhir | **0.1.20** |
 | Sumber di `main` | sudah memuat perubahan 0.1.8–0.1.20 (engine + managed dipakai bersama) |
-| Binary macOS | **0.1.19** — MIDI out, I/O baru, timing + offset global, hot-plug |
+| Binary macOS | **0.1.20** — MIDI out, I/O baru, timing + offset, hot-plug, export loop Session |
 
-Artinya: item P0 di bawah sudah ikut di build **0.1.19** dan diverifikasi dengan destination
+Artinya: item P0 di bawah sudah ikut di build **0.1.20** dan diverifikasi dengan destination
 CoreMIDI virtual (mesin build tidak punya synth/IAC fisik). Daftar ini tetap disimpan sebagai
 checklist untuk build macOS berikutnya.
 

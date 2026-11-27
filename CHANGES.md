@@ -3,6 +3,18 @@
 Base revisions are listed in [ATTRIBUTION.md](ATTRIBUTION.md). This is a summary; the exact
 diffs are in `patches/`.
 
+## Session loop export
+
+- **File → Export Session Loops…** renders the current deck scene by scene: one folder per
+  filled scene, one WAV per track and an optional Standard MIDI File per instrument track.
+  Files are loop length (no tail), 16/24-bit PCM or 32-bit float at 44.1/48/96 kHz; master
+  devices are bypassed, track/group/return processing stays, and the scene tempo is used.
+- Each slot is rendered in isolation (other tracks muted, solo off, launch quant 0, route MIDI
+  out off); mute/solo, BPM, loop, metronome, launch quant, transport, deck and master bypass
+  are restored afterwards. `AudioExporter` + `MidiFileWriter`; UI `SessionExportWindow`.
+- Tests: `--export-session` (folder and file naming, loop frame count at 120 and 140 BPM, no
+  leading silence, valid SMF, state restored).
+
 ## Global MIDI out offset
 
 - **A/V Offset → MIDI out offset (all tracks)**: one slider (±200 ms, 1 ms steps) shifts every

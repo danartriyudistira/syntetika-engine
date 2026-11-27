@@ -1,7 +1,8 @@
 # Syntetika Engine 0.1.20 — Export Session Loops
 
 Fitur baru: ekspor **current deck** dari Session menjadi loop audio (WAV) dan MIDI, satu
-folder per scene.
+folder per scene. Tersedia untuk **Windows x64** dan **macOS arm64** — build macOS 0.1.20
+berasal dari sumber yang sama.
 
 ## Cara pakai
 
@@ -58,7 +59,20 @@ Struktur hasil:
 Installer self-contained (VC++/FFmpeg), asosiasi `.syntetika`, Auto visual profile, MIDI out
 timestamped + offset, mixer I/O, dan fitur sebelumnya tetap.
 
-## Instalasi
+## macOS
+
+`Syntetika-Engine-0.1.20-arm64.dmg` — macOS 12+, Apple Silicon.
+
+Build ini membawa seluruh fitur 0.1.8–0.1.20 (MIDI out, I/O ala Ableton, timing + offset MIDI,
+hot-plug port MIDI) dan **Export Session Loops** yang sama dengan Windows. Suite
+`--export-session` lulus di macOS: folder per scene, WAV per track, `.mid` per track instrumen,
+penamaan file, dan pemulihan state setelah export.
+
+DMG ini **ad-hoc signed, belum notarized**. Saat pertama dibuka: klik kanan app → **Open** →
+**Open**, atau System Settings → Privacy & Security → **Open Anyway**. Hanya Apple Silicon;
+belum ada build Intel.
+
+## Instalasi Windows
 
 1. Unduh `Syntetika-Engine-Setup-0.1.20-x64.exe` dan `.sha256`-nya.
 2. Verifikasi: `Get-FileHash .\Syntetika-Engine-Setup-0.1.20-x64.exe -Algorithm SHA256`.
@@ -67,9 +81,21 @@ timestamped + offset, mixer I/O, dan fitur sebelumnya tetap.
 
 Persyaratan: Windows 10/11 x64.
 
+## Instalasi macOS
+
+1. Unduh `Syntetika-Engine-0.1.20-arm64.dmg` dan `.sha256`-nya.
+2. Verifikasi:
+
+   ```bash
+   shasum -a 256 Syntetika-Engine-0.1.20-arm64.dmg
+   ```
+
+3. Buka image, seret **Syntetika Engine** ke **Applications**.
+4. Jalankan; bila macOS menolak, pakai langkah Gatekeeper di atas.
+
 ## Checksums
 
 ```
 fb0b996fc185ad413b4e05100d5ee211a0316be37290212c917c08a9a29bdfb2  Syntetika-Engine-Setup-0.1.20-x64.exe
-452333f1a1ceb25220531035c1fd2b110171b144b108569f9dd8ab16dc561d39  Syntetika-Engine-0.1.19-arm64.dmg
+2956150440a5bef6b0b6d0fc6e0a26fc51233d00c1e5f866a4ecd6dee6cfb3ad  Syntetika-Engine-0.1.20-arm64.dmg
 ```
