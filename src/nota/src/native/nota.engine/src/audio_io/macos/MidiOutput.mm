@@ -27,6 +27,7 @@ struct MidiOutput::Impl {
 };
 
 std::vector<MidiOutput::PortEntry> MidiOutput::availablePorts() {
+    watchMidiPorts(); // a port connected after launch must appear without restarting the app
     std::vector<PortEntry> ports;
     for (ItemCount i = 0, n = MIDIGetNumberOfDestinations(); i < n; ++i) {
         MIDIEndpointRef d = MIDIGetDestination(i);
@@ -56,6 +57,7 @@ MidiOutput::~MidiOutput() {
 
 bool MidiOutput::open(const std::string& uid) {
     close();
+    watchMidiPorts(); // reopening a saved route must see a port connected after launch
     for (ItemCount i = 0, n = MIDIGetNumberOfDestinations(); i < n; ++i) {
         MIDIEndpointRef d = MIDIGetDestination(i);
         if (d && midiUidForEndpoint(d) == uid) {

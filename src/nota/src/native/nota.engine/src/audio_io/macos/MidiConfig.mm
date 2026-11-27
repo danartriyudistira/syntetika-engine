@@ -7,7 +7,10 @@
 #include "MidiConfig.h"
 
 #include <algorithm>
+#include <future>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #if defined(__APPLE__)
 
@@ -51,7 +54,28 @@ std::string midiEndpointName(uint32_t endpoint) {
     return endpointDisplayName(static_cast<MIDIEndpointRef>(endpoint));
 }
 
+void watchMidiPorts() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        // The block does nothing: receiving the add/remove message is what refreshes
+        // CoreMIDI's per-process enumeration. The client must own the run loop that
+        // delivers them, so it is created on the watcher thread itself. Wait for the
+        // client before returning, so the caller's first enumeration sees a live list.
+        std::promise<void> ready;
+        std::thread([&ready] {
+            MIDIClientRef client = 0;
+            const OSStatus status = MIDIClientCreateWithBlock(CFSTR("Nota Port Watch"), &client,
+                ^(const MIDINotification*) {});
+            ready.set_value();
+            if (status != noErr) return;
+            CFRunLoopRun(); // never returns; the thread lives as long as the app
+        }).detach();
+        ready.get_future().wait();
+    });
+}
+
 std::vector<MidiDeviceInfo> enumerateMidiInputs() {
+    watchMidiPorts();
     std::vector<MidiDeviceInfo> out;
     const ItemCount n = MIDIGetNumberOfSources();
     for (ItemCount i = 0; i < n; ++i) {

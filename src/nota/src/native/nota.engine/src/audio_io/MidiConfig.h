@@ -32,6 +32,12 @@ struct MidiDeviceInfo {
 // All current CoreMIDI input sources (uid + display name).
 std::vector<MidiDeviceInfo> enumerateMidiInputs();
 
+// Keep CoreMIDI's process-wide port list live (macOS). CoreMIDI snapshots the list for
+// the process until a client's notification run loop processes add/remove messages, so a
+// synth or controller connected after launch never shows up in Midi To / MIDI From.
+// Starts one notification client on its own run-loop thread the first time it is called.
+void watchMidiPorts();
+
 // Stable uid of a CoreMIDI endpoint (a MIDIEndpointRef, carried as uint32_t so
 // this header stays free of CoreMIDI types). Empty if it has no unique id.
 std::string midiUidForEndpoint(uint32_t endpoint);

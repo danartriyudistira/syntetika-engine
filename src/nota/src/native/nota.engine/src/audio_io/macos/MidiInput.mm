@@ -78,6 +78,7 @@ bool MidiInput::open(MessageCallback cb, SysexCallback sysex, const std::vector<
 
     for (auto& p : impl_->parsers) p.reset();
     uids_.clear();
+    watchMidiPorts(); // a controller connected after launch must be connectable without restarting
     const ItemCount n = MIDIGetNumberOfSources();
     intptr_t index = 0;
     for (ItemCount i = 0; i < n; ++i) {

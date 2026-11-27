@@ -3,6 +3,19 @@
 Base revisions are listed in [ATTRIBUTION.md](ATTRIBUTION.md). This is a summary; the exact
 diffs are in `patches/`.
 
+## MIDI hot-plug
+
+- **Ports connected while the app runs appear at once**: CoreMIDI keeps a per-process snapshot
+  of the endpoint list until a client's notification run loop processes add/remove messages,
+  so a synth or controller plugged in after launch never appeared in *Midi To* / *MIDI From* —
+  not even after reopening the picker. `watchMidiPorts()` now starts one notification client
+  on its own run-loop thread; output enumeration, reopening a saved route and input
+  enumeration call it. The listener itself does nothing: receiving the add/remove message is
+  what keeps `MIDIGetNumberOfDestinations` / `MIDIGetNumberOfSources` live.
+- macOS only (CoreMIDI); the shared engine ABI is unchanged. Verified with a virtual CoreMIDI
+  destination: a port created after the engine started appears in `MidiOutputs()` in ~250 ms
+  and disappears when its process ends.
+
 ## Random MIDI parts
 
 - **Random… in the MIDI clip editor**: next to Tools, it opens a dialog that writes a

@@ -85,9 +85,12 @@ menjalankan checklist di bagian akhir.
 
 ## P1 — segera setelah P0
 
-6. **Refresh hot-plug port MIDI.** Picker dibangun saat mixer dibuka; perangkat yang dicolok
-   setelahnya belum muncul sampai mixer dibuka ulang. `nota_midi_ports_generation` sudah
-   memberi notifikasi CoreMIDI — pertimbangkan auto-refresh combo saat generasi berubah.
+6. **Hot-plug port MIDI — selesai (macOS).** CoreMIDI menyimpan snapshot daftar port per
+   proses sampai ada client dengan notification run loop. `watchMidiPorts()` sekarang membuat
+   client itu di thread sendiri; enumerasi output, buka ulang route, dan enumerasi input
+   memanggilnya, jadi perangkat yang dicolok setelah app berjalan muncul tanpa restart.
+   Catatan: `portsGeneration()` hanya membandingkan hasil polling dan **tidak** menyegarkan
+   snapshot CoreMIDI — jangan diandalkan untuk hot-plug.
 7. **Jalankan `--midi-out` di macOS.** Suite yang sama sudah menguji enumerasi output, clip
    Arrangement, dan clip Session. Jalankan juga `--midi-part`. Catatan: gate performa
    (Consort/VST3/render-pool) bisa gagal di laptop lambat dan bukan regresi MIDI.
@@ -119,8 +122,9 @@ menjalankan checklist di bagian akhir.
   hanya di `renderInstrumentRaw`.
 - **Clone track**: setiap field routing baru harus ikut disalin di `cloneTrack` **dan**
   `deepCloneTrack`, kalau tidak akan hilang saat clip diedit.
-- **CoreMIDI notification** sudah dipakai `MidiInput::portsGeneration()`; gunakan itu untuk
-  hot-plug, bukan polling input.
+- **CoreMIDI butuh notification run loop**: `portsGeneration()` cuma polling dan tidak
+  menyegarkan snapshot proses. Hot-plug memakai `watchMidiPorts()` (client
+  `MIDIClientCreateWithBlock` + `CFRunLoopRun` di thread sendiri).
 
 ## Riwayat terkait
 
