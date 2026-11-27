@@ -41,6 +41,10 @@ public sealed partial class SessionView
 
     private int ReturnRows => Math.Min(_engine.ReturnTrackCount, 4);
 
+    // The I/O section gets a MIDI-out row only when a column can use one (an instrument
+    // track); audio-only projects keep the three-row layout.
+    private bool HasInstrumentColumn => _cols.Any(c => c.Kind == ColKind.Track && c.IsInstrument);
+
     private List<(int Id, string Name)> Returns()
     {
         var list = new List<(int, string)>();
@@ -78,7 +82,16 @@ public sealed partial class SessionView
         };
         Border Row(double h, string text) => new() { Height = h, Child = Label(text) };
         if (_showIO)
-            stack.Children.Add(Section(Row(IoRowH, Loc.T("common.input")), Row(IoRowH, Loc.T("session.mixer.monitor")), Row(IoRowH, Loc.T("common.output"))));
+        {
+            var ioRows = new List<Control>
+            {
+                Row(IoRowH, Loc.T("common.input")),
+                Row(IoRowH, Loc.T("session.mixer.monitor")),
+            };
+            if (HasInstrumentColumn) ioRows.Add(Row(IoRowH, Loc.T("midi_output.menu")));
+            ioRows.Add(Row(IoRowH, Loc.T("common.output")));
+            stack.Children.Add(Section(ioRows.ToArray()));
+        }
         if (_showSends && ReturnRows > 0)
         {
             var rows = Returns().Take(ReturnRows).Select((r, i) => (Control)Row(FaderRowH, Loc.F("session.mixer.send_n", (char)('A' + i), r.Name))).ToArray();
@@ -130,7 +143,17 @@ public sealed partial class SessionView
                 if (_engine.TryGetTrackInfo(i, out var t) && t.Id == c.TrackId) { ti = t; break; }
         if (c.Kind == ColKind.Track && ti.Armed != 0) _armed.Add(c.TrackId); else _armed.Remove(c.TrackId);
 
-        if (_showIO) root.Children.Add(Section(Named(InputRow(c), Loc.T("common.input")), Named(MonitorRow(c), Loc.T("session.mixer.monitor")), Named(OutputRow(c), Loc.T("common.output"))));
+        if (_showIO)
+        {
+            var io = new List<Control>
+            {
+                Named(InputRow(c), Loc.T("common.input")),
+                Named(MonitorRow(c), Loc.T("session.mixer.monitor")),
+            };
+            if (HasInstrumentColumn) io.Add(Named(MidiOutRow(c), Loc.T("midi_output.menu")));
+            io.Add(Named(OutputRow(c), Loc.T("common.output")));
+            root.Children.Add(Section(io.ToArray()));
+        }
 
         // Send faders follow changes made elsewhere — the Devices panel's Sends card, the
         // Mixer window, automation (#138) — on the same tick as the meters.
@@ -361,22 +384,7 @@ public sealed partial class SessionView
                 if (mcb.SelectedIndex >= 0 && mcb.SelectedIndex < entries.Count) MidiInputPick.Apply(_engine, tid, entries[mcb.SelectedIndex]);
             };
             ToolTip.SetTip(mcb, Loc.T("session.mixer.midi_input_every_input_or"));
-            // MIDI out beside it: the track's external synth, Off when unset.
-            var (outEntries, outCur) = MidiOutputPick.Compact(_engine, tid);
-            var ocb = new ComboBox { Height = IoRowH, FontSize = 10, Padding = new Thickness(6, 0), HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(4, 0) };
-            foreach (var en in outEntries) ocb.Items.Add(new ComboBoxItem { Content = en.Label, FontSize = 10 });
-            ocb.SelectedIndex = outCur;
-            ocb.SelectionChanged += (_, _) =>
-            {
-                if (ocb.SelectedIndex >= 0 && ocb.SelectedIndex < outEntries.Count)
-                    MidiOutputPick.Apply(_engine, tid, outEntries[ocb.SelectedIndex].Uid);
-            };
-            ToolTip.SetTip(ocb, Loc.T("midi_output.menu"));
-            var midiRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
-            midiRow.Children.Add(mcb);
-            Grid.SetColumn(ocb, 1);
-            midiRow.Children.Add(ocb);
-            return midiRow;
+            return mcb;
         }
         else
         {
@@ -403,13 +411,67 @@ public sealed partial class SessionView
 
     private Control MonitorRow(Column c)
     {
-        if (c.Kind != ColKind.Track || !c.IsAudio) return new Border { Height = IoRowH };
+        if (c.Kind != ColKind.Track) return new Border { Height = IoRowH };
         int id = c.TrackId;
+        if (c.IsInstrument)
+        {
+            // MIDI monitor: In always plays live input, Auto only while armed, Off never.
+            // Clip playback is unaffected.
+            var midiSeg = Segmented(new[] { "In", Loc.T("common.auto"), Loc.T("common.off") },
+                _engine.GetTrackMidiMonitor(id), i => _engine.SetTrackMidiMonitor(id, i), compact: true);
+            midiSeg.Margin = new Thickness(4, 0);
+            ToolTip.SetTip(midiSeg, Loc.T("common.monitor"));
+            return midiSeg;
+        }
+        if (!c.IsAudio) return new Border { Height = IoRowH };
         bool on = _engine.GetTrackMonitor(id);
         var seg = Segmented(new[] { "In", Loc.T("common.auto") }, on ? 0 : 1, i => _engine.SetTrackMonitor(id, i == 0), compact: true);
         seg.Margin = new Thickness(4, 0);
         ToolTip.SetTip(seg, Loc.T("session.mixer.in_hear_the_input_live"));
         return seg;
+    }
+
+    // Instrument tracks: the external synth port and its channel, a row of its own so the
+    // I/O section reads like Ableton's (MIDI From -> Monitor -> MIDI out -> Audio To).
+    private Control MidiOutRow(Column c)
+    {
+        if (c.Kind != ColKind.Track || !c.IsInstrument) return new Border { Height = IoRowH };
+        int id = c.TrackId;
+        var (entries, cur) = MidiOutputPick.Compact(_engine, id);
+        var port = new ComboBox
+        {
+            Height = IoRowH, FontSize = 9, Padding = new Thickness(6, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(4, 0, 2, 0),
+        };
+        foreach (var en in entries) port.Items.Add(new ComboBoxItem { Content = en.Label, FontSize = 9 });
+        port.SelectedIndex = cur;
+        port.SelectionChanged += (_, _) =>
+        {
+            if (port.SelectedIndex >= 0 && port.SelectedIndex < entries.Count)
+                MidiOutputPick.Apply(_engine, id, entries[port.SelectedIndex].Uid);
+        };
+        ToolTip.SetTip(port, Loc.T("midi_output.menu"));
+
+        var ch = new ComboBox
+        {
+            Height = IoRowH, FontSize = 9, Padding = new Thickness(4, 0), Width = 48,
+            HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 4, 0),
+        };
+        for (int i = 1; i <= 16; i++) ch.Items.Add(new ComboBoxItem { Content = i.ToString(), FontSize = 9 });
+        ch.SelectedIndex = Math.Clamp(_engine.GetTrackMidiOutputChannel(id), 1, 16) - 1;
+        ch.SelectionChanged += (_, _) =>
+        {
+            if (ch.SelectedIndex < 0) return;
+            int channel = Math.Clamp(ch.SelectedIndex + 1, 1, 16);
+            _engine.SetTrackMidiOutput(id, _engine.GetTrackMidiOutputUid(id), channel);
+        };
+        ToolTip.SetTip(ch, Loc.T("midi_input.channel"));
+
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        row.Children.Add(port);
+        Grid.SetColumn(ch, 1);
+        row.Children.Add(ch);
+        return row;
     }
 
     private Control OutputRow(Column c)

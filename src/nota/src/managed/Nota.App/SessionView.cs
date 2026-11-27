@@ -83,7 +83,7 @@ public sealed partial class SessionView : UserControl
     // UI-only state: which group columns are folded, which mixer sections show, and the
     // selection (a slot on a track or group column, a scene row, or a Return / Master column).
     private readonly HashSet<int> _collapsed = new();
-    private bool _showIO, _showSends = true, _showMixer = true;
+    private bool _showIO = true, _showSends, _showMixer = true;
     private bool _selectNextOnLaunch;
     private Selection _sel = new(SelKind.Slot, 0, 0);
 

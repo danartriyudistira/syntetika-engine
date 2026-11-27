@@ -62,7 +62,7 @@ public sealed partial class MixerView : UserControl
     // toggles); we keep the section borders so a toggle can hide them all at once.
     private readonly List<Control> _sendSections = new();
     private readonly List<Control> _ioSections = new();
-    private bool _sendsVisible = true, _ioVisible = true;
+    private bool _sendsVisible = false, _ioVisible = true;
 
     // Height-adaptive strips (specs/054): the strips fit the height they get, docked or in the
     // window. As it shrinks, I/O rows hide first, then sends, then the fader shortens to
