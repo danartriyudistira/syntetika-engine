@@ -8,14 +8,14 @@ hanya ikut ter-build diam-diam.
 
 | | |
 |---|---|
-| Rilis macOS terakhir | **0.1.7** (Apple Silicon, DMG) |
+| Rilis macOS terakhir | **0.1.18** (Apple Silicon, DMG) |
 | Rilis Windows terakhir | **0.1.17** |
-| Sumber di `main` | sudah memuat perubahan 0.1.8–0.1.13 (engine + managed dipakai bersama) |
-| Binary macOS baru | **belum ada** — build macOS berikutnya adalah yang pertama membawa fitur ini |
+| Sumber di `main` | sudah memuat perubahan 0.1.8–0.1.18 (engine + managed dipakai bersama) |
+| Binary macOS | **0.1.18** — build pertama yang membawa MIDI out, I/O baru, timing, dan hot-plug |
 
-Artinya: kode macOS untuk item P0 di bawah **sudah ada di `main`**, tetapi belum pernah
-dirilis/diuji sebagai aplikasi macOS. Jangan menganggapnya selesai sampai build macOS
-menjalankan checklist di bagian akhir.
+Artinya: item P0 di bawah sudah ikut di build **0.1.18** dan diverifikasi dengan destination
+CoreMIDI virtual (mesin build tidak punya synth/IAC fisik). Daftar ini tetap disimpan sebagai
+checklist untuk build macOS berikutnya.
 
 ## P0 — wajib ada dan diverifikasi di build macOS berikutnya
 

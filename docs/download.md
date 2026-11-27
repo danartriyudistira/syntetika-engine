@@ -6,11 +6,11 @@ The latest installers are on GitHub:
 
 | | |
 |---|---|
+| Latest macOS | **0.1.18** (`Syntetika-Engine-0.1.18-arm64.dmg`, 112 MB — macOS 12+, Apple Silicon) |
 | Latest Windows | **0.1.17** |
-| Latest macOS | **0.1.7** (`Syntetika-Engine-0.1.7-arm64.dmg`, 112 MB — macOS 12+, Apple Silicon) |
 | Windows | `Syntetika-Engine-Setup-0.1.17-x64.exe` (110 MB) — Windows 10/11 x64 |
 
-macOS SHA-256: `b1c10c57a5801e7bc3c6f986221b84cfa1477ac980b02fc605be5c06f2b3c58a`
+macOS SHA-256: `4eed7055fb79b0648025ca159c4e1544a2cc33017371d8b69842a3fa8d37ecb7`
 
 Windows SHA-256: `9215a2d511f409e66e8e536f5300a6d92eaf932f888271f8cf23b5c9d5a0099d`
 
@@ -54,7 +54,7 @@ settings in `%APPDATA%\Syntetika Engine` are kept.
 2. Verify the download:
 
    ```bash
-   shasum -a 256 Syntetika-Engine-0.1.7-arm64.dmg
+   shasum -a 256 Syntetika-Engine-0.1.18-arm64.dmg
    ```
 
 3. Open the image and drag **Syntetika Engine** onto **Applications**.
@@ -79,9 +79,10 @@ Nota is the DAW host; `syntetika-visual` (openVJ) runs beside it — in
 FFmpeg ships with both, so video clips carry their sound. Session clips carry visuals; the
 DAW's transport, launches and master audio drive the picture.
 
-Syphon is macOS-only; the Windows build cannot send video to other apps yet (Spout is not
-integrated). Everything else in the Windows build — audio, visuals, mapping, projection
-output, audio-reactive parameters — is the same.
+Frame sharing is platform-specific: **Syphon** on macOS, **Spout** output on Windows
+(Settings → Output, off by default, sender name "Syntetika Engine"). Spout *input* is not
+available on Windows yet. Everything else in the Windows build — audio, visuals, mapping,
+projection output, audio-reactive parameters — is the same.
 
 First launch creates the profile:
 
