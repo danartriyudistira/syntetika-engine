@@ -24,7 +24,14 @@ struct AudioConfig {
     std::string outputDeviceUid;  // "" = system default output
     std::string inputDeviceUid;   // "" = system default input
     double sampleRate = 0.0;      // 0 = device default
+#if defined(_WIN32)
+    // Stability first on Windows/WASAPI shared mode: 512 frames (~10.7 ms at 48 kHz)
+    // survives the DPC latency spikes low-power laptops show. 0 (device default) and
+    // smaller blocks stay selectable in Settings -> Audio for low-latency setups.
+    int32_t bufferFrames = 512;
+#else
     int32_t bufferFrames = 0;     // 0 = device default (ignored under ASIO: the driver decides)
+#endif
     bool wasapiExclusive = false; // Windows/WASAPI only; ignored elsewhere
     AudioSystem audioSystem = AudioSystem::Wasapi;
     std::string asioDriverClsid;  // the chosen ASIO driver's CLSID (primary key)

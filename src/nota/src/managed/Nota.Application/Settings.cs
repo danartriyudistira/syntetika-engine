@@ -97,9 +97,9 @@ public sealed class Settings
     /// window, true = its own window. Toggled from the panel / window and View → Mixer in its
     /// own window.</summary>
     public bool MixerFloating { get; set; }
-    /// <summary>openVJ render profile: 0 Eco (30 fps, preview 15), 1 Balanced (45/30), 2 Quality
+    /// <summary>openVJ render profile: -1 Auto (follows the GPU), 0 Eco (30 fps, preview 15), 1 Balanced (45/30), 2 Quality
     /// (60/60). Controlled by View → Visual Performance.</summary>
-    public int VisualPerformanceMode { get; set; } = 2;
+    public int VisualPerformanceMode { get; set; } = -1;
     /// <summary>Picture vs sound offset in milliseconds, -200..+200 (positive delays the
     /// picture). Set from View → A/V Offset; replayed to the visual engine on connect.</summary>
     public int VisualAvOffsetMs { get; set; }

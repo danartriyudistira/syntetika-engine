@@ -157,13 +157,14 @@ public partial class MainWindow
 
     private void SetVisualPerformance(int mode)
     {
-        mode = Math.Clamp(mode, 0, 2);
+        mode = Math.Clamp(mode, -1, 2);
         if (_vm is not null)
         {
             _vm.Settings.Current.VisualPerformanceMode = mode;
             _vm.Settings.Save();
             _vm.StatusText = mode switch
             {
+                -1 => Loc.T("main.visual_auto"),
                 0 => Loc.T("main.visual_eco"),
                 1 => Loc.T("main.visual_balanced"),
                 _ => Loc.T("main.visual_quality"),
@@ -175,7 +176,8 @@ public partial class MainWindow
 
     private void SyncVisualPerformanceMenu()
     {
-        int mode = _vm?.Settings.Current.VisualPerformanceMode ?? 2;
+        int mode = _vm?.Settings.Current.VisualPerformanceMode ?? -1;
+        if (MenuItemFor("view.visualAuto") is { } auto) auto.IsChecked = mode == -1;
         if (MenuItemFor("view.visualEco") is { } eco) eco.IsChecked = mode == 0;
         if (MenuItemFor("view.visualBalanced") is { } balanced) balanced.IsChecked = mode == 1;
         if (MenuItemFor("view.visualQuality") is { } quality) quality.IsChecked = mode == 2;
@@ -248,7 +250,7 @@ public partial class MainWindow
         SyncOpenVjMenu();
         SyncMappingMenu();
         SyncVisualPerformanceMenu();
-        VisualBridge.Current?.VizPerf(_vm?.Settings.Current.VisualPerformanceMode ?? 2);
+        VisualBridge.Current?.VizPerf(_vm?.Settings.Current.VisualPerformanceMode ?? -1);
         VisualBridge.Current?.VizOffset(_vm?.Settings.Current.VisualAvOffsetMs ?? 0);
 
         if (Environment.GetEnvironmentVariable("NOTA_VISUAL_OUTPUT_TEST") is { Length: > 0 } mode)

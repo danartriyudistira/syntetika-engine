@@ -58,7 +58,7 @@ AudioConfig loadAudioConfig() {
         cfg.outputDeviceUid = getStringTolerant(j, "outputDeviceUid");
         cfg.inputDeviceUid = getStringTolerant(j, "inputDeviceUid");
         cfg.sampleRate = getNumberTolerant(j, "sampleRate", 0.0);
-        cfg.bufferFrames = static_cast<int32_t>(getNumberTolerant(j, "bufferFrames", 0.0));
+        cfg.bufferFrames = static_cast<int32_t>(getNumberTolerant(j, "bufferFrames", cfg.bufferFrames));
         cfg.wasapiExclusive = getBoolTolerant(j, "wasapiExclusive", false);
         // ASIO (specs/049): missing keys keep today's behaviour (WASAPI); only Windows has ASIO.
 #if defined(_WIN32)

@@ -38,6 +38,30 @@
 
 namespace nota {
 
+#if defined(_WIN32)
+namespace {
+// Physical cores (RelationProcessorCore), not logical processors: hyper-threads share one
+// core's execution units, so they are not separate render workers.
+int physicalCoreCount() {
+    DWORD len = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len);
+    if (len == 0) return 0;
+    std::vector<unsigned char> buffer(len);
+    if (!GetLogicalProcessorInformationEx(
+            RelationProcessorCore, reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data()), &len))
+        return 0;
+    int cores = 0;
+    for (DWORD at = 0; at + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= len;) {
+        const auto* entry = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + at);
+        if (entry->Relationship == RelationProcessorCore) ++cores;
+        if (entry->Size == 0) break;
+        at += entry->Size;
+    }
+    return cores;
+}
+} // namespace
+#endif
+
 int AudioThreadPool::defaultWorkers() {
     int hw = (int)std::thread::hardware_concurrency();
 #if defined(__APPLE__)
@@ -47,6 +71,11 @@ int AudioThreadPool::defaultWorkers() {
     size_t size = sizeof perf;
     if (sysctlbyname("hw.perflevel0.physicalcpu", &perf, &size, nullptr, 0) == 0 && perf > 0)
         hw = std::min(hw, perf);
+#elif defined(_WIN32)
+    // Physical cores, not logical ones: on a 4C/8T low-power laptop hw - 1 = 7 workers
+    // leaves the audio callback, UI and visual engine one thread between them. Capping to
+    // the core count leaves hyper-thread slots free for those.
+    if (int cores = physicalCoreCount(); cores > 0) hw = std::min(hw, cores);
 #endif
     if (hw <= 2) return 0;       // tiny machines: render inline
     return std::min(hw - 1, 16); // cap: past this the fork-join overhead wins

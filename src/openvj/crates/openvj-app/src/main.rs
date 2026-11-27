@@ -38,7 +38,7 @@ use slint::winit_030::{
     winit::keyboard::{Key, NamedKey},
 };
 
-use app::App;
+use app::{recommended_performance_mode, App};
 
 slint::include_modules!();
 
@@ -212,6 +212,8 @@ mod titlebar {
 
 fn main() -> Result<()> {
     let (instance, adapter, device, queue) = init_gpu()?;
+    // Auto performance: classified from the adapter before the GPU is handed to the UI.
+    let auto_mode = recommended_performance_mode(&adapter.get_info());
     let selector = slint::BackendSelector::new();
     #[cfg(target_os = "macos")]
     let selector = selector.with_winit_window_attributes_hook(titlebar::hook);
@@ -233,7 +235,7 @@ fn main() -> Result<()> {
     let arg = std::env::args_os().nth(1).map(PathBuf::from);
     let comp = Composition::demo();
     let engine = Engine::new(device, queue, comp.width, comp.height);
-    let app = Rc::new(RefCell::new(App::new(engine, comp)));
+    let app = Rc::new(RefCell::new(App::new(engine, comp, auto_mode)));
     // Syntetika Engine: follow Nota's transport when OPENVJ_NOTA points at its bridge.
     if let Ok(addr) = std::env::var("OPENVJ_NOTA") {
         app.borrow_mut().set_nota_bridge(nota_bridge::NotaBridge::connect(&addr));

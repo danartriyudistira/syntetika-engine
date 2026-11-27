@@ -80,6 +80,7 @@ public partial class MainWindow
         B("view.openvj", ToggleOpenVjWindow);
         B("view.visualOutput", ToggleVisualOutput);
         B("view.mapping", ToggleMapping);
+        B("view.visualAuto", () => SetVisualPerformance(-1));
         B("view.visualEco", () => SetVisualPerformance(0));
         B("view.visualBalanced", () => SetVisualPerformance(1));
         B("view.visualQuality", () => SetVisualPerformance(2));

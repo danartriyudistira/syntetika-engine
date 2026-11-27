@@ -64,12 +64,28 @@ fn performance_preview_secs(mode: i32) -> f64 {
     }
 }
 
-/// `SYNTHETIKA_FPS` opts into a profile; macOS defaults to Quality (60).
-fn default_performance_mode() -> i32 {
+/// `SYNTHETIKA_FPS` opts into a profile; otherwise the GPU's Auto recommendation applies.
+fn default_performance_mode(auto_mode: i32) -> i32 {
     match std::env::var("SYNTHETIKA_FPS").ok().and_then(|v| v.parse::<u32>().ok()) {
         Some(30) => 0,
         Some(45) => 1,
-        _ => 2,
+        Some(60) => 2,
+        _ => auto_mode.clamp(0, 2),
+    }
+}
+
+/// What Auto picks for this GPU. An integrated GPU shares system memory and bandwidth
+/// (a single-channel laptop is the worst case), so it starts at Eco; discrete GPUs keep
+/// Quality. Apple Silicon is integrated but has bandwidth and a capable GPU, so macOS
+/// keeps its Quality default.
+pub fn recommended_performance_mode(info: &wgpu::AdapterInfo) -> i32 {
+    if cfg!(target_os = "macos") {
+        return 2;
+    }
+    match info.device_type {
+        wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu => 0,
+        wgpu::DeviceType::DiscreteGpu => 2,
+        _ => 1,
     }
 }
 
@@ -388,6 +404,8 @@ pub struct App {
     ui_images_pending: bool,
     /// 0 Eco (30 fps / preview 15), 1 Balanced (45 / 30), 2 Quality (60 / 60).
     performance_mode: i32,
+    /// What Auto picks for this machine's GPU (0..2).
+    auto_mode: i32,
     /// The render timer reads this for its target interval (Nota can change it live).
     target_fps: Rc<Cell<u32>>,
     /// Frames over 1.5× the target interval, logged and reset once per second.
@@ -444,13 +462,17 @@ impl App {
         Rc::clone(&self.target_fps)
     }
 
-    /// Nota's Visual Performance menu: Eco (30/15), Balanced (45/30), Quality (60/60).
+    /// Nota's Visual Performance menu: Auto (-1), Eco (0, 30/15), Balanced (1, 45/30),
+    /// Quality (2, 60/60). Auto resolves to the GPU recommendation once, live.
     pub fn performance_mode_picked(&mut self, mode: i32) {
-        self.performance_mode = mode.clamp(0, 2);
+        let auto = mode < 0;
+        let chosen = if auto { self.auto_mode } else { mode };
+        self.performance_mode = chosen.clamp(0, 2);
         self.target_fps.set(performance_fps(self.performance_mode));
         self.engine.set_preview_interval(performance_preview_secs(self.performance_mode));
         eprintln!(
-            "openVJ: performance mode {} ({} fps, preview {} fps)",
+            "openVJ: performance mode {}{} ({} fps, preview {} fps)",
+            if auto { "auto -> " } else { "" },
             self.performance_mode,
             performance_fps(self.performance_mode),
             match self.performance_mode {
@@ -461,11 +483,12 @@ impl App {
         );
     }
 
-    pub fn new(engine: Engine, comp: Composition) -> Self {
+    pub fn new(engine: Engine, comp: Composition, auto_mode: i32) -> Self {
         let (load_tx, load_rx) = mpsc::channel();
         let browser_dir = browser::default_dir();
         let mut engine = engine;
-        let performance_mode = default_performance_mode();
+        let auto_mode = auto_mode.clamp(0, 2);
+        let performance_mode = default_performance_mode(auto_mode);
         engine.set_preview_interval(performance_preview_secs(performance_mode));
         let target_fps = Rc::new(Cell::new(performance_fps(performance_mode)));
         let share_out = ShareOutput::new(engine.device(), engine.queue());
@@ -585,6 +608,7 @@ impl App {
             images_dirty: true,
             ui_images_pending: false,
             performance_mode,
+            auto_mode,
             target_fps,
             dropped_frames: 0,
             render_scale: 1.0,

@@ -122,7 +122,7 @@ public sealed class VisualBridge : IDisposable
     /// not retrigger it; stale entries expire so a cancelled launch can't mute a later one.</summary>
     private readonly Dictionary<int, (int Scene, long At)> _expectedLayerScene = new();
     /// <summary>Last visual performance profile (0 Eco, 1 Balanced, 2 Quality); replayed on connect.</summary>
-    private volatile int _perfMode = 2;
+    private volatile int _perfMode = -1;
     /// <summary>A/V offset in ms (+ delays the picture); replays on connect for the UI.</summary>
     private volatile int _avOffsetMs;
     private long _slotTimingAt;
@@ -1018,10 +1018,10 @@ public sealed class VisualBridge : IDisposable
         Send($"{{\"t\":\"vizMapping\",\"show\":{(show ? "true" : "false")}}}");
     }
 
-    /// <summary>openVJ performance profile: 0 Eco 30, 1 Balanced 45, 2 Quality 60.</summary>
+    /// <summary>openVJ performance profile: -1 Auto (GPU), 0 Eco 30, 1 Balanced 45, 2 Quality 60.</summary>
     public void VizPerf(int mode)
     {
-        _perfMode = Math.Clamp(mode, 0, 2);
+        _perfMode = Math.Clamp(mode, -1, 2);
         Send($"{{\"t\":\"vizPerf\",\"mode\":{_perfMode.ToString(CultureInfo.InvariantCulture)}}}");
     }
 

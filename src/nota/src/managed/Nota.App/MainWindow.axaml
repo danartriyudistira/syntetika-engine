@@ -86,6 +86,7 @@
             <NativeMenuItem Header="{app:T 'main.visual_performance'}">
               <NativeMenuItem.Menu>
                 <NativeMenu>
+                  <NativeMenuItem Header="{app:T 'main.visual_auto'}" app:Commands.Id="view.visualAuto" ToggleType="CheckBox"/>
                   <NativeMenuItem Header="{app:T 'main.visual_eco'}" app:Commands.Id="view.visualEco" ToggleType="CheckBox"/>
                   <NativeMenuItem Header="{app:T 'main.visual_balanced'}" app:Commands.Id="view.visualBalanced" ToggleType="CheckBox"/>
                   <NativeMenuItem Header="{app:T 'main.visual_quality'}" app:Commands.Id="view.visualQuality" ToggleType="CheckBox"/>

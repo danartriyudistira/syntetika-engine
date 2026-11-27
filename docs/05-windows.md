@@ -142,6 +142,36 @@ antar-proses. Dengan ini parameter audio-reactive mengikuti master Nota di Windo
 engine mati saat app jalan, log mencatat `visual engine exited; restarting (n/3)` dan
 engine baru menyambung lagi ke bridge tanpa perlu restart app.
 
+### Performa di mesin minimum (profil Auto)
+
+Build **0.1.14** menyesuaikan profil visual ke kelas GPU lewat **View → Visual Performance → Auto**
+(sekarang default untuk pengaturan baru):
+
+- **iGPU / CPU** → **Eco** (30 fps, preview 15)
+- **dGPU** → **Quality** (60/60)
+- **macOS** tetap **Quality** (Apple Silicon tidak memakai heuristic iGPU Windows)
+
+Selain profil, dua default dibuat lebih aman untuk laptop kelas minimum:
+
+- **Buffer WASAPI 512 frame** (~10,7 ms pada 48 kHz) bila `audio.json` belum ada. Buffer 0 (device
+  default), 128, 256 dan 1024 tetap bisa dipilih dari status bar atau **Settings → Audio**.
+- **Render pool memakai physical core**, bukan logical: 4C/8T memakai 3 worker (bukan 7), sehingga
+  audio callback, UI dan `syntetika-visual` punya sisa thread.
+
+Panduan untuk laptop 15 W / iGPU / RAM single-channel (mis. i5-10310U + UHD 620):
+
+1. Pakai **Auto** atau **Eco**; Quality 60 fps hanya untuk komposisi ringan.
+2. Jika masih ada crackle, naikkan buffer ke **1024** dan jalankan **Preferences → Performance**
+   (5 detik; lihat DSP peak dan jumlah dropout).
+3. Jangan menyimpan project aktif di folder OneDrive saat sesi; sync dan backup menambah hitch I/O.
+4. Matikan **Spout** bila tidak ada penerima (Resolume/OBS); jalur salinan frame GPU→CPU mahal di iGPU.
+5. Gunakan **Best Performance** saat di AC, dan jaga ventilasi (i5-10310U cepat throttle).
+6. Kecilkan window output visual ke 480p/720p bila output 1080p penuh membuat `drops` naik.
+
+Telemetri: `%APPDATA%\Syntetika Engine\logs\visual-engine.log` menulis `fps`, `max_dt`,
+`max_render`, `passes` dan `drops` tiap detik; baris `performance mode auto -> 0` menunjukkan
+profil yang dipilih Auto.
+
 ## Batasan yang masih ada
 
 - **Syphon** tetap macOS-only; di Windows dipakai **Spout**. Versi pertama memakai salinan GPU→CPU per frame (beberapa ms); jalur GPU-ke-GPU dan NDI menyusul.
