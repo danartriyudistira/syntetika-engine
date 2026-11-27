@@ -131,6 +131,15 @@ bool Engine::start() {
         pool_->setWorkgroup(wg, wg && bf > 0 && backend_->sampleRate() > 0 ? 1e9 * bf / backend_->sampleRate() : 0.0);
     renderSuspended_.store(false, std::memory_order_release);
     if (ok) openMidiInput();
+    // The MIDI-out pump is message-thread state, not the device's. An audio restart (rate,
+    // buffer or device change) stopped it in stop(); the routes are still there, so bring it
+    // back rather than silently dropping the track's external synth.
+    if (ok && authoring_)
+        for (const auto& t : authoring_->tracks)
+            if (t && t->midiOutPort() >= 0) {
+                startMidiOutPump();
+                break;
+            }
     return ok;
 }
 
@@ -339,6 +348,28 @@ void Engine::startMidiOutPump() {
 }
 
 void Engine::stopMidiOutPump() {
+    if (!midiOutPumpRun_.load(std::memory_order_relaxed)) return;
+    // Release every routed channel before the pump and its ports go away: a quit, an audio
+    // device restart or a project close must not leave a hardware synth holding a note.
+    if (authoring_) {
+        std::vector<std::pair<int32_t, int32_t>> routes;
+        for (const auto& t : authoring_->tracks) {
+            const int32_t port = t->midiOutPort();
+            if (port < 0) continue;
+            const auto key = std::make_pair(port, t->midiOutChannel());
+            bool seen = false;
+            for (const auto& r : routes)
+                if (r == key) {
+                    seen = true;
+                    break;
+                }
+            if (!seen) routes.push_back(key);
+        }
+        for (const auto& r : routes) queueAllNotesOff(r.first, r.second);
+    }
+    // Give the pump a moment to drain what is queued (normally a millisecond or two).
+    for (int i = 0; i < 100 && midiOutTail_.load(std::memory_order_acquire) != midiOutHead_.load(std::memory_order_acquire); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     midiOutPumpRun_.store(false, std::memory_order_relaxed);
     if (midiOutPump_.joinable()) midiOutPump_.join();
 }
@@ -367,13 +398,16 @@ bool Engine::setTrackMidiOutput(int32_t trackId, const std::string& outputUid, i
     if (!t) return false;
     channel = std::clamp(channel <= 0 ? 1 : channel, 1, 16);
     const int32_t oldPort = t->midiOutPort();
+    const int32_t oldChannel = t->midiOutChannel(); // the notes sounding on the old route
     const int32_t port = outputUid.empty() ? -1 : registerMidiOutPort(outputUid);
     if (!outputUid.empty() && port < 0) return false;
     t->setMidiOutPort(port);
     t->setMidiOutChannel(channel);
     t->midiOutUid = port >= 0 ? outputUid : std::string();
     if (port >= 0) startMidiOutPump();
-    if (oldPort >= 0) queueAllNotesOff(oldPort, channel);
+    // Release what the old route was playing on the channel it was playing it on: changing
+    // only the channel must not leave notes hanging on the previous one.
+    if (oldPort >= 0) queueAllNotesOff(oldPort, oldChannel);
     return true;
 }
 
@@ -456,12 +490,14 @@ int32_t Engine::gamepadAxisValues(int32_t pad, int32_t* out, int32_t max) const 
 }
 
 void Engine::stop() {
-    stopMidiOutPump();
-    if (midiInput_) midiInput_->close();
-    midiOutputs_.clear();
+    // Stop producing first, then release the external routes: a note queued after the flush
+    // would never be followed by its note-off.
     setPluginAudioWorkgroup(nullptr); // before the device (and its workgroup) goes
     if (pool_) pool_->setWorkgroup(nullptr, 0.0);
     if (backend_) backend_->stop();
+    stopMidiOutPump();
+    if (midiInput_) midiInput_->close();
+    midiOutputs_.clear();
     tap_.close(); // no callback can be inside render() now
 }
 
@@ -1091,7 +1127,13 @@ void Engine::releaseVanishedClipNotes(const Graph& before, const Graph& after) {
                 same = (t == old);
                 break;
             }
-        if (same || !now) continue; // untouched, or gone with its instrument
+        if (same) continue; // untouched
+        if (!now) {
+            // The track (and its external synth route) is gone: let the hardware go rather
+            // than leave whatever it was playing ringing.
+            if (old->midiOutPort() >= 0) queueAllNotesOff(old->midiOutPort(), old->midiOutChannel());
+            continue;
+        }
         was.clear();
         around(*old, was);
         if (was.empty()) continue;
@@ -1112,6 +1154,8 @@ void Engine::releaseVanishedClipNotes(const Graph& before, const Graph& after) {
         }
         for (const Span& n : is)
             if (n.on <= pos + kAhead && n.off >= pos) gone[n.pitch >> 5] &= ~(1u << (n.pitch & 31));
+        const int32_t outPort = old->midiOutPort();
+        const uint8_t outCh = static_cast<uint8_t>(std::clamp(old->midiOutChannel(), 1, 16) - 1);
         for (int p = 0; p < 128; ++p) {
             if (!((gone[p >> 5] >> (p & 31)) & 1u)) continue;
             Command c;
@@ -1119,6 +1163,12 @@ void Engine::releaseVanishedClipNotes(const Graph& before, const Graph& after) {
             c.i0 = old->id();
             c.i1 = p;
             commands_.push(c);
+            // The same vanished note must end on the external synth, not just on the
+            // instrument: its note-off would otherwise never be rendered.
+            if (outPort >= 0) {
+                const uint8_t off[3] = {static_cast<uint8_t>(0x80 | outCh), static_cast<uint8_t>(p), 0};
+                queueMidiOut(outPort, off, 3);
+            }
         }
     }
 }

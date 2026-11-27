@@ -64,6 +64,35 @@ internal static class MidiOutTests
         var off = e.TakeTestMidiSent(port);
         yield return (!HasNote(off), "an off route sends no notes");
 
+        // Changing only the output channel releases what the old channel was playing, not
+        // the new one: otherwise a sustained note hangs after a channel switch.
+        e.SetTrackMidiOutput(ta, "test:midiout", 3);
+        e.SetTrackMidiOutput(ta, "test:midiout", 5);
+        Thread.Sleep(200);
+        var changed = e.TakeTestMidiSent(port);
+        yield return (Contains(changed, 0xB2, 123, 0), "changing the output channel releases notes on the old channel");
+        yield return (!Contains(changed, 0xB4, 123, 0), "and not on the new one");
+
+        // Editing a playing clip away must end its note on the external synth too: the
+        // instrument gets ReleaseNote, but its note-off would never be rendered.
+        using var en = new NotaEngine();
+        int tn = en.AddConsortTrack();
+        int pn = en.AddTestMidiPort("midiout-edit");
+        en.SetTrackMidiOutput(tn, "test:midiout-edit", 2);
+        en.AddMidiClip(tn, 0, 4);
+        en.SetClipNotes(tn, 0, new[] { new NotaNote(60, 0, 2.0, 1f) });
+        var editBlock = new float[512 * 2];
+        en.Seek(0);
+        en.Play();
+        for (int i = 0; i < 20; i++) en.RenderOffline(editBlock, 512);
+        Thread.Sleep(120);
+        en.TakeTestMidiSent(pn); // the note-on (and any start-up noise)
+        en.SetClipNotes(tn, 0, Array.Empty<NotaNote>());
+        Thread.Sleep(200);
+        var edited = en.TakeTestMidiSent(pn);
+        yield return (Contains(edited, 0x81, 60, _ => true),
+            "removing a playing note releases it on the output port");
+
         // Session clips render on their own path (renderSessionSlotRaw): they must play the
         // external output too, not just arrangement clips.
         using var es = new NotaEngine();

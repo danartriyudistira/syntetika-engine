@@ -145,6 +145,15 @@ internal static class MidiOutputPick
     /// <summary>The output ports the MIDI devices expose (output uid + the device's name).</summary>
     public static List<(string Uid, string Name)> Outputs(IAudioEngine engine)
     {
+        // Enumerating destinations builds an RtMidi/CoreMIDI scanning client, and the mixer
+        // asks once per strip. Reuse the answer for a moment (and across every strip in the
+        // same build), but refresh as soon as the backend reports a port change.
+        uint gen = engine.MidiPortsGeneration;
+        long now = Environment.TickCount64;
+        if (ReferenceEquals(_cachedEngine, engine) && _cachedOutputs is { } cached &&
+            _cachedGen == gen && now - _cachedAt < 500)
+            return cached;
+
         var list = new List<(string, string)>();
         void Add(string uid, string name)
         {
@@ -157,8 +166,18 @@ internal static class MidiOutputPick
         foreach (var o in engine.MidiOutputs()) Add(o.Uid, o.Name);
         // Then each connected input's paired output, for backends that only pair by entity.
         foreach (var p in engine.MidiPorts()) Add(p.OutputUid, p.Name);
+
+        _cachedEngine = engine;
+        _cachedGen = gen;
+        _cachedAt = now;
+        _cachedOutputs = list;
         return list;
     }
+
+    private static IAudioEngine? _cachedEngine;
+    private static uint _cachedGen;
+    private static long _cachedAt;
+    private static List<(string Uid, string Name)>? _cachedOutputs;
 
     /// <summary>What the track plays, short: "Off", or a device and "Ch 3".</summary>
     public static string ShortLabel(IAudioEngine engine, int trackId)
