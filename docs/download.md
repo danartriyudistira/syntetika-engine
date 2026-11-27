@@ -1,28 +1,28 @@
 # Download Syntetika Engine
 
-The latest installers are on GitHub. **Syntetika Engine 1.0.0 is the first stable release on Windows and macOS; all 0.1.x versions are beta and unsupported.**
+The latest installers are on GitHub. **Syntetika Engine 1.0.1 is the latest Windows release; macOS stays on 1.0.0. All 0.1.x versions are beta and unsupported.**
 
 **[Syntetika Engine releases](https://github.com/danartriyudistira/syntetika-engine/releases/latest)**
 
 | | |
 |---|---|
 | Latest macOS | **1.0.0** (`Syntetika-Engine-1.0.0-arm64.dmg`, 112 MB — macOS 12+, Apple Silicon) |
-| Latest Windows | **1.0.0** |
-| Windows | `Syntetika-Engine-Setup-1.0.0-x64.exe` (110 MB) — Windows 10/11 x64 |
+| Latest Windows | **1.0.1** |
+| Windows | `Syntetika-Engine-Setup-1.0.1-x64.exe` (110 MB) — Windows 10/11 x64 |
 
 macOS SHA-256: `eb9650fd284b10f9626c2e7d658a2dfbfc1120146a46d766d3e606b3e787b0d5`
 
-Windows SHA-256: `ba1411d62ed793614592fa50df20cdd59014b32cedc72cb96883e567e5a33800`
+Windows SHA-256: `15654bcd6fc64ff1156fb2e6905b06da1c967cc99db2b02f0cc97e9042f4f97f`
 
 These hashes are optional: only the installer/DMG needs to be downloaded. The `.sha256` files are not separate assets.
 
 ## Install on Windows
 
-1. Download `Syntetika-Engine-Setup-1.0.0-x64.exe` from the release.
+1. Download `Syntetika-Engine-Setup-1.0.1-x64.exe` from the release.
 2. (Optional) Verify the download (PowerShell):
 
    ```powershell
-   Get-FileHash .\Syntetika-Engine-Setup-1.0.0-x64.exe -Algorithm SHA256
+   Get-FileHash .\Syntetika-Engine-Setup-1.0.1-x64.exe -Algorithm SHA256
    ```
 
 3. Run the installer. It installs **per user** (no administrator prompt) into

@@ -57,9 +57,11 @@ Jalankan:
 & src/nota/src/managed/Nota.App/bin/Release/net10.0/Nota.App.exe
 ```
 
-Nota menyalakan `syntetika-visual.exe` sendiri (auto-start, restart bila crash, dimatikan
-saat app keluar) dengan `OPENVJ_NOTA`, `SYNTETIKA_UI_HIDDEN`, `SYNTETIKA_AUDIO_TAP` dan
-`SYNTETIKA_EXIT_ON_DISCONNECT` di environment-nya.
+Nota menyalakan `syntetika-visual.exe` sendiri saat visual pertama diminta (Visual Output,
+OpenVJ, mapping, atau tab OpenVJ; `SYNTETIKA_VISUAL_ALWAYS=1` mengembalikan auto-start).
+Proses di-restart bila crash dan dimatikan saat app keluar, dengan `OPENVJ_NOTA`,
+`SYNTETIKA_UI_HIDDEN`, `SYNTETIKA_AUDIO_TAP` dan `SYNTETIKA_EXIT_ON_DISCONNECT` di
+environment-nya.
 
 ## Packaging
 

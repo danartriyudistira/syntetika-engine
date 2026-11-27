@@ -6,7 +6,8 @@ Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an 
 
 ![Syntetika Engine: the Session grid and OpenVJ tab driving a monochrome ink kaleidoscope in the always-on-top visual output](docs/images/syntetika-engine.png)
 
-> **Syntetika Engine 1.0.0 is the first stable release** for Windows x64 and macOS Apple Silicon.
+> **Syntetika Engine 1.0.1 is the latest Windows release** (Windows x64). macOS Apple Silicon
+> stays on **1.0.0** until the next macOS build.
 > All 0.1.x releases are beta / pre-release and are not supported for daily use.
 > What works, known limits and the roadmap: [docs/04-status-dan-rencana.md](docs/04-status-dan-rencana.md).
 > Next macOS build priorities: [docs/07-macos-prioritas.md](docs/07-macos-prioritas.md).
@@ -15,8 +16,8 @@ Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an 
 
 | Platform | Version | File |
 |---|---|---|
-| **Windows x64** | **1.0.0 stable** | [`Syntetika-Engine-Setup-1.0.0-x64.exe`](https://github.com/danartriyudistira/syntetika-engine/releases/latest) |
-| **macOS arm64** | **1.0.0 stable** | [`Syntetika-Engine-1.0.0-arm64.dmg`](https://github.com/danartriyudistira/syntetika-engine/releases/latest) |
+| **Windows x64** | **1.0.1 stable** | [`Syntetika-Engine-Setup-1.0.1-x64.exe`](https://github.com/danartriyudistira/syntetika-engine/releases/latest) |
+| **macOS arm64** | **1.0.0 stable** | [`Syntetika-Engine-1.0.0-arm64.dmg`](https://github.com/danartriyudistira/syntetika-engine/releases/tag/v1.0.0) |
 
 Only the installer/DMG needs to be downloaded. SHA-256 hashes are **optional** and listed in
 the release notes and [docs/download.md](docs/download.md).
@@ -65,13 +66,13 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 
 - **Auto visual profile** — integrated GPU → **Eco** (30 fps, preview 15), discrete GPU → **Quality** (60/60); macOS keeps Quality. **View → Visual Performance** also offers Eco/Balanced/Quality manually.
 - **Adaptive render scale** — a visual that runs far over budget renders at a lower internal scale (down to 12.5%) instead of freezing the app.
-- **Background visual engine** — openVJ runs hidden by default; while nothing is on screen it stops GPU rendering and slows its tick. **View → OpenVJ** raises its editor.
+- **Visual engine on demand** — an audio-only session pays no visual cost: openVJ starts only when you open **Visual Output**, the **OpenVJ** window/tab or **Projection Mapping**. Hidden, it runs at **below-normal priority**, stops GPU rendering and slows its tick; if it still grows past **1.2 GB** while hidden it saves the composition and exits, and the next visual request starts a fresh engine. `SYNTETIKA_VISUAL_ALWAYS=1` restores always-on.
 - **Windows stability defaults** — 512-frame WASAPI buffer (≈10.7 ms), render workers follow **physical cores** rather than logical processors, and iGPU machines start at Eco.
 - **No GPU readback during a show** — static grid thumbnails and pipeline prewarm keep the UI cheap.
 
 ## Run it
 
-### Windows (x64, stable 1.0.0)
+### Windows (x64, stable 1.0.1)
 
 Download the installer from the
 [latest release](https://github.com/danartriyudistira/syntetika-engine/releases/latest), or
@@ -104,13 +105,17 @@ bash scripts/package-dmg-syntetika.sh   # dist/Syntetika-Engine-<version>-arm64.
 Install, Gatekeeper and checksum details: [docs/download.md](docs/download.md).
 
 The app starts its bundled visual engine (`Contents/Helpers/syntetika-visual` on macOS,
-`syntetika-visual.exe` beside the app on Windows), restarts it if it crashes, and stops it on
-quit. Then open **Session View**, select a clip, and use the **OpenVJ** tab to assign a visual.
+`syntetika-visual.exe` beside the app on Windows) when a visual is first requested, restarts it
+if it crashes, and stops it on quit. Then open **Session View**, select a clip, and use the
+**OpenVJ** tab to assign a visual. Set `SYNTETIKA_VISUAL_ALWAYS=1` to start the engine with the
+app instead.
 Build instructions live in [docs/02-m0-setup.md](docs/02-m0-setup.md) and
 [docs/05-windows.md](docs/05-windows.md).
 
 ## Versioning
 
+- **1.0.1** — Windows x64: visual engine on demand, below-normal priority while hidden, and a
+  memory guard that saves and restarts a bloated hidden engine.
 - **1.0.0** — Windows x64 and macOS Apple Silicon, first stable release.
 - **0.1.0 – 0.1.20** — beta / pre-release; kept for history, marked **Pre-release** on GitHub.
 

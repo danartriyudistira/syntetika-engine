@@ -134,6 +134,8 @@ public partial class MainWindow
     // MIDI needs both headers, the roll's lane controls and a usable note viewport,
     // including the multi-clip strip and horizontal scrollbar at the smallest size.
     private VisualParamsView? _visualView;
+    /// <summary>The OpenVJ tab is in the visual tree (its own panel, or the floating detail).</summary>
+    private bool _visualViewAttached;
 
     private double DetailMinimumHeight => DetailBody.Content is ClipEditorView ? 300 : 120;
 
@@ -1261,7 +1263,24 @@ public partial class MainWindow
 
     private VisualParamsView EnsureVisualView()
     {
-        _visualView ??= new VisualParamsView { MediaPicked = ImportVisualMediaAsync };
+        if (_visualView is null)
+        {
+            _visualView = new VisualParamsView { MediaPicked = ImportVisualMediaAsync };
+            // The OpenVJ tab is a visual surface: start the engine on demand and keep it at
+            // Normal priority while the tab is in the visual tree (also when the detail panel
+            // is floated into its own window).
+            _visualView.AttachedToVisualTree += (_, _) =>
+            {
+                _visualViewAttached = true;
+                Nota.Infrastructure.Visuals.VisualEngineProcess.Current?.Start();
+                Dispatcher.UIThread.Post(UpdateVisualEngineActivity);
+            };
+            _visualView.DetachedFromVisualTree += (_, _) =>
+            {
+                _visualViewAttached = false;
+                Dispatcher.UIThread.Post(UpdateVisualEngineActivity);
+            };
+        }
         return _visualView;
     }
 

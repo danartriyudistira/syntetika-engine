@@ -48,6 +48,7 @@ public partial class MainWindow
         // A click before the auto-started engine has connected must not be lost: the bridge
         // replays the last request once the connection is up.
         if (_visualOutputShown && !bridge.Connected) VisualEngineProcess.Current?.Start();
+        UpdateVisualEngineActivity();
     }
 
     private void ToggleOpenVjWindow()
@@ -70,6 +71,7 @@ public partial class MainWindow
                 ? Loc.T("main.openvj_window_shown")
                 : Loc.T("main.openvj_window_hidden");
         if (_openVjShown && !bridge.Connected) VisualEngineProcess.Current?.Start();
+        UpdateVisualEngineActivity();
     }
 
     private void SyncVisualOutputMenu()
@@ -102,11 +104,21 @@ public partial class MainWindow
                 ? Loc.T("main.mapping_shown")
                 : Loc.T("main.mapping_hidden");
         if (_mappingShown && !bridge.Connected) VisualEngineProcess.Current?.Start();
+        UpdateVisualEngineActivity();
     }
 
     private void SyncMappingMenu()
     {
         if (MenuItemFor("view.mapping") is { } mi) mi.IsChecked = _mappingShown;
+    }
+
+    /// <summary>A visual surface is on screen (or the OpenVJ tab is open): keep the visual
+    /// process at Normal priority. Hidden, it drops to BelowNormal and the memory guard may
+    /// stop it; the next request starts a fresh engine.</summary>
+    private void UpdateVisualEngineActivity()
+    {
+        VisualEngineProcess.Current?.SetActive(
+            _visualOutputShown || _openVjShown || _mappingShown || _visualViewAttached);
     }
 
     /// <summary>
@@ -219,16 +231,19 @@ public partial class MainWindow
             {
                 _visualOutputShown = open;
                 SyncVisualOutputMenu();
+                UpdateVisualEngineActivity();
             });
             bridge.UiOpenChanged += open => Dispatcher.UIThread.Post(() =>
             {
                 _openVjShown = open;
                 SyncOpenVjMenu();
+                UpdateVisualEngineActivity();
             });
             bridge.MappingOpenChanged += open => Dispatcher.UIThread.Post(() =>
             {
                 _mappingShown = open;
                 SyncMappingMenu();
+                UpdateVisualEngineActivity();
             });
             bridge.SlotAudioRequested += (layer, scene, path) =>
                 Dispatcher.UIThread.Post(() => _ = PairSlotAudioAsync(layer, scene, path));
@@ -258,6 +273,7 @@ public partial class MainWindow
         SyncVisualOutputMenu();
         SyncOpenVjMenu();
         SyncMappingMenu();
+        UpdateVisualEngineActivity();
         SyncVisualPerformanceMenu();
         VisualBridge.Current?.VizPerf(_vm?.Settings.Current.VisualPerformanceMode ?? -1);
         VisualBridge.Current?.VizOffset(_vm?.Settings.Current.VisualAvOffsetMs ?? 0);

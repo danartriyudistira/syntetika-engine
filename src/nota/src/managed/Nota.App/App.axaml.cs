@@ -129,7 +129,7 @@ public partial class App : Avalonia.Application
             bridge.VizOffset(visualSettings.Current.VisualAvOffsetMs);
             // NotA owns the visual engine: start it unless one is already connected.
             var visual = Services.GetRequiredService<VisualEngineProcess>();
-            if (visual.AutoStart) visual.Start();
+            if (visual.StartAtLaunch) visual.Start();
         }
         catch (Exception ex) { log.Error("Visual bridge could not start", ex); }
         // Structural sync is polled on the UI thread (track list reads are not thread-safe).

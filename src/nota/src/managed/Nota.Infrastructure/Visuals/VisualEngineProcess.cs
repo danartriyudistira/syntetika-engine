@@ -24,22 +24,41 @@ public sealed class VisualEngineProcess : IDisposable
     private const int MaxRestarts = 3;
     /// A run this long is not part of a startup crash loop, so the restart budget refills.
     private static readonly TimeSpan HealthyRun = TimeSpan.FromSeconds(15);
+    /// A hidden visual engine above this private footprint is stopped; the next Visual
+    /// Output/OpenVJ request starts a fresh one. Fresh idle is ~300 MB; long sessions leaked
+    /// several GB before this guard.
+    private const long IdleMemoryLimit = 1_200_000_000;
 
     private readonly VisualBridge _bridge;
     private readonly object _gate = new();
+    private readonly Timer _memoryTimer;
     private Process? _process;
     private bool _stopping;
+    private volatile bool _shouldRun;
+    private volatile bool _active;
     private int _restarts;
     private long _startedAtTicks;
     private Timer? _restartTimer;
     private StreamWriter? _log;
 
-    public VisualEngineProcess(VisualBridge bridge) => _bridge = bridge;
+    public VisualEngineProcess(VisualBridge bridge)
+    {
+        _bridge = bridge;
+        // Visuals are on demand: the engine starts only when a visual surface is requested,
+        // then is checked while hidden so a long audio-only session does not keep old media.
+        StartAtLaunch = Environment.GetEnvironmentVariable("SYNTETIKA_VISUAL_ALWAYS") == "1";
+        _memoryTimer = new Timer(_ => CheckIdleMemory(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+        // The app creates the engine before any window; assign it here so the on-demand paths
+        // (Visual Output, OpenVJ, mapping, OpenVJ tab) find it before a process exists.
+        Current = this;
+    }
 
     public static VisualEngineProcess? Current { get; private set; }
 
-    /// <summary>Start automatically when NotA opens (the one-app experience).</summary>
-    public bool AutoStart { get; set; } = true;
+    /// <summary>Start at app launch. Off by default; View → Visual Output/OpenVJ/Mapping
+    /// (or the OpenVJ tab) starts the engine on demand. <c>SYNTETIKA_VISUAL_ALWAYS=1</c>
+    /// restores the old always-on behaviour.</summary>
+    public bool StartAtLaunch { get; set; }
 
     public bool Running
     {
@@ -88,6 +107,7 @@ public sealed class VisualEngineProcess : IDisposable
             string? path = FindBinary();
             if (path is null) return;
             _stopping = false;
+            _shouldRun = true;
             // An explicit start (app launch or View ▸ Visual Output) is a fresh intent: give
             // the engine a full restart budget even after a crash loop used it up.
             Interlocked.Exchange(ref _restarts, 0);
@@ -143,6 +163,7 @@ public sealed class VisualEngineProcess : IDisposable
             process.BeginErrorReadLine();
             _process = process;
             Interlocked.Exchange(ref _startedAtTicks, DateTime.UtcNow.Ticks);
+            ApplyPriority();
             WriteLog($"started {path} (pid {process.Id})");
             Current = this;
         }
@@ -174,7 +195,7 @@ public sealed class VisualEngineProcess : IDisposable
             _process = null;
         }
         dead?.Dispose();
-        if (_stopping || !AutoStart) return;
+        if (_stopping || !_shouldRun) return;
         // A crash loop at startup must not hammer the GPU, but a long healthy run is not part
         // of that loop: refill the budget so three crashes over a session never leave the
         // visuals permanently down.
@@ -202,8 +223,58 @@ public sealed class VisualEngineProcess : IDisposable
         }, null, TimeSpan.FromSeconds(1.5), Timeout.InfiniteTimeSpan);
     }
 
+    /// <summary>Called when a visual surface (output, OpenVJ window, mapping or the OpenVJ
+    /// tab) becomes visible. While hidden the process runs BelowNormal and may be stopped if
+    /// its private memory grows; the next visual request starts a fresh engine.</summary>
+    public void SetActive(bool active)
+    {
+        _active = active;
+        ApplyPriority();
+        if (!active) CheckIdleMemory();
+    }
+
+    private void ApplyPriority()
+    {
+        if (!OperatingSystem.IsWindows()) return; // no portable Process priority on Unix
+        Process? p;
+        lock (_gate) p = _process is { HasExited: false } ? _process : null;
+        if (p is null) return;
+        try { p.PriorityClass = _active ? ProcessPriorityClass.Normal : ProcessPriorityClass.BelowNormal; }
+        catch { /* the process may have exited between the check and the set */ }
+    }
+
+    private void CheckIdleMemory()
+    {
+        if (_active) return;
+        Process? p;
+        lock (_gate) p = _process is { HasExited: false } ? _process : null;
+        if (p is null) return;
+        try
+        {
+            long limit = IdleMemoryLimit;
+            // SYNTETIKA_VISUAL_IDLE_LIMIT_MB overrides the cap (tests and small machines).
+            if (long.TryParse(Environment.GetEnvironmentVariable("SYNTETIKA_VISUAL_IDLE_LIMIT_MB"), out long mb) && mb > 0)
+                limit = mb * 1024 * 1024;
+            long bytes = p.PrivateMemorySize64;
+            if (bytes <= limit) return;
+            WriteLog($"visual engine idle at {bytes / (1024 * 1024)} MB; stopping (limit {limit / (1024 * 1024)} MB)");
+            // Visual edits live in the engine: write the composition to the project before
+            // the process goes away, so a later save does not fall back to older visuals.
+            try
+            {
+                _bridge.SaveProject();
+                _bridge.WaitForSave(1500);
+            }
+            catch { /* the composition on disk stays the last known good one */ }
+            Stop();
+        }
+        catch { /* diagnostics must never break the app */ }
+    }
+
     public void Stop()
     {
+        _shouldRun = false;
+        _active = false;
         _stopping = true;
         Interlocked.Exchange(ref _startedAtTicks, 0);
         _restartTimer?.Dispose();
@@ -221,5 +292,9 @@ public sealed class VisualEngineProcess : IDisposable
         CloseLog();
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        _memoryTimer.Dispose();
+        Stop();
+    }
 }

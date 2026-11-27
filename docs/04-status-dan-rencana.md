@@ -1,8 +1,8 @@
 # Status & Rencana Pengembangan
 
-Terakhir diperbarui: 22 November 2026.
+Terakhir diperbarui: 28 November 2026.
 Repo: https://github.com/danartriyudistira/syntetika-engine
-Commit terakhir: `1ba41dd` — *Start and stop the visual engine from the app*
+Commit terakhir: `c7cc967` — *Start and stop the visual engine from the app*
 
 ---
 
@@ -21,17 +21,31 @@ Ini adalah proyek **integrasi**, bukan DAW atau VJ engine baru:
 
 Tidak berafiliasi dengan/endorse oleh kedua proyek upstream. Detail di `ATTRIBUTION.md`.
 
-### Status platform (25 November 2026)
+### Status platform (28 November 2026)
 
 - **macOS Apple Silicon** — target awal, build `.app`/DMG.
 - **Windows x64** — build penuh sejak 0.1.4: engine native (`nota_engine.dll`), aplikasi,
   `syntetika-visual.exe` (DX12), audio tap, installer per-user. Syphon tidak ada di Windows
   (tetap macOS-only); detail dan batasan di [`05-windows.md`](05-windows.md).
 
+### Rilis 1.0.1 (28 November 2026, Windows x64)
+
+- **Visual engine on demand**: `syntetika-visual` tidak lagi dijalankan saat aplikasi dibuka.
+  Engine mulai hanya saat Visual Output, OpenVJ, Projection Mapping, atau tab OpenVJ dibuka;
+  `SYNTETIKA_VISUAL_ALWAYS=1` mengembalikan perilaku selalu-aktif.
+- **Prioritas visual**: BelowNormal saat tersembunyi, Normal saat ada permukaan visual; audio
+  dan UI tetap High.
+- **Memory guard**: bila engine tersembunyi melewati 1,2 GB private, komposisi disimpan lebih
+  dulu lalu proses dihentikan; permintaan visual berikutnya memulai engine baru.
+  `SYNTETIKA_VISUAL_IDLE_LIMIT_MB` menimpa batas itu.
+- **Save aman tanpa engine**: menyimpan proyek saat engine mati tidak lagi melaporkan
+  "visuals were not saved" — `visuals/composition.json` di disk adalah versi terakhir.
+- Baseline di laptop referensi (i5-10310U, UHD 620, 16 GB): engine visual 280—350 MB private
+  saat idle; sesi audio-only yang tidak pernah membuka visual tidak membayar engine sama sekali.
+
 ---
 
 ## 2. Yang sudah selesai
-
 ### 2.1 Fondasi & build (M0)
 
 - Toolchain user-local tanpa sudo: Rust, .NET 10, CMake 4.5.1 (Ninja atau Makefiles).

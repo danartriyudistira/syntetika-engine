@@ -590,9 +590,10 @@ public partial class MainWindow
             // The engine writes composition.json after it answers, so wait for that
             // acknowledgement before claiming the save. A restart in this window would
             // otherwise keep the old visuals on disk while the audio moved on.
-            bool visualsSaved = true;
-            if (bridge is not null)
-                visualsSaved = bridge.Connected && await Task.Run(() => bridge.WaitForSave(1200));
+            // Visuals are on demand: when the engine isn't running, the composition already on
+            // disk is the current one, so there is nothing to write and nothing to warn about.
+            bool visualsSaved = bridge is not { Connected: true }
+                || await Task.Run(() => bridge.WaitForSave(1200));
             // Staged media is copied in before the composition is written; prune what this
             // composition (and older versions) does not use so a new project does not carry the
             // previous project's videos.
