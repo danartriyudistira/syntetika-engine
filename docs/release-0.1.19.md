@@ -1,8 +1,8 @@
 # Syntetika Engine 0.1.19 — slider MIDI out di jendela A/V offset
 
-Rilis Windows ini menambahkan slider **MIDI out offset** seperti slider A/V offset, di atas
-kode MIDI out 0.1.17. Build macOS **0.1.18** (DMG) sudah tersedia terpisah dan membawa fitur
-MIDI out yang sama, kecuali slider A/V ini.
+Rilis ini menambahkan slider **MIDI out offset** seperti slider A/V offset, di atas kode
+MIDI out 0.1.17. Tersedia untuk **Windows x64** dan, mulai build ini, **macOS arm64** — build
+macOS 0.1.19 berasal dari sumber yang sama dan juga membawa perbaikan hot-plug port MIDI.
 
 ## Baru
 
@@ -39,7 +39,19 @@ besar, turunkan buffer atau tunggu lookahead.
 
 Installer self-contained (VC++/FFmpeg), asosiasi `.syntetika`, tanpa .NET terpasang pun jalan.
 
-## Instalasi
+## macOS
+
+`Syntetika-Engine-0.1.19-arm64.dmg` — macOS 12+, Apple Silicon.
+
+Build ini membawa seluruh rangkaian 0.1.8–0.1.19 (MIDI out, I/O ala Ableton, timing MIDI,
+slider offset global), ditambah **hot-plug port MIDI**: port/controller yang dicolok setelah
+app berjalan langsung muncul di MIDI To / MIDI From tanpa restart.
+
+DMG ini **ad-hoc signed, belum notarized**. Saat pertama dibuka: klik kanan app → **Open** →
+**Open**, atau System Settings → Privacy & Security → **Open Anyway**. Hanya tersedia untuk
+Apple Silicon; belum ada build Intel.
+
+## Instalasi Windows
 
 1. Unduh `Syntetika-Engine-Setup-0.1.19-x64.exe` dan `.sha256`-nya.
 2. Verifikasi: `Get-FileHash .\Syntetika-Engine-Setup-0.1.19-x64.exe -Algorithm SHA256`.
@@ -48,9 +60,21 @@ Installer self-contained (VC++/FFmpeg), asosiasi `.syntetika`, tanpa .NET terpas
 
 Persyaratan: Windows 10/11 x64.
 
+## Instalasi macOS
+
+1. Unduh `Syntetika-Engine-0.1.19-arm64.dmg` dan `.sha256`-nya.
+2. Verifikasi:
+
+   ```bash
+   shasum -a 256 Syntetika-Engine-0.1.19-arm64.dmg
+   ```
+
+3. Buka image, seret **Syntetika Engine** ke **Applications**.
+4. Jalankan; bila macOS menolak, pakai langkah Gatekeeper di atas.
+
 ## Checksums
 
 ```
 a29c6c9b5a0ee7838a6bb87731c21a6f652fc9931ce1343f85be1a37760a7400  Syntetika-Engine-Setup-0.1.19-x64.exe
-4eed7055fb79b0648025ca159c4e1544a2cc33017371d8b69842a3fa8d37ecb7  Syntetika-Engine-0.1.18-arm64.dmg
+452333f1a1ceb25220531035c1fd2b110171b144b108569f9dd8ab16dc561d39  Syntetika-Engine-0.1.19-arm64.dmg
 ```

@@ -3,6 +3,18 @@
 Base revisions are listed in [ATTRIBUTION.md](ATTRIBUTION.md). This is a summary; the exact
 diffs are in `patches/`.
 
+## Global MIDI out offset
+
+- **A/V Offset → MIDI out offset (all tracks)**: one slider (±200 ms, 1 ms steps) shifts every
+  external MIDI route, added on top of each track's own trim in *Inspector → MIDI out*.
+  Positive delays the synth send, negative advances it within the current block. The value is
+  stored in app settings, applied at startup and while dragging, and noted in the status line.
+- The picture offset keeps its own slider in the same window; the metronome/visual calibration
+  behaviour is unchanged. Files: `VisualOffsetWindow`, `Settings.MidiOutOffsetMs`,
+  `IAudioEngine.SetMidiOutOffsetMs` (engine-wide, added to `Track::midiOutOffsetMs`).
+- Tests: `--midi-out` (global value reads back, survives an edit, and a positive offset holds
+  the note until its due time).
+
 ## MIDI hot-plug
 
 - **Ports connected while the app runs appear at once**: CoreMIDI keeps a per-process snapshot
