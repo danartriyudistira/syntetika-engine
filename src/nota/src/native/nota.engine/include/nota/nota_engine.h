@@ -1830,6 +1830,10 @@ NOTA_API int32_t    nota_track_get_midi_output_channel(const NotaEngine* engine,
  * send, negative advances it inside the current block. Only the hardware route moves. */
 NOTA_API NotaResult nota_track_set_midi_out_offset_ms(NotaEngine* engine, int32_t track_id, double ms);
 NOTA_API double     nota_track_get_midi_out_offset_ms(const NotaEngine* engine, int32_t track_id);
+/* Engine-wide MIDI out latency compensation (the A/V offset dialog slider), added to each
+ * track's own trim. -200..200 ms; positive delays, negative advances. */
+NOTA_API NotaResult nota_engine_set_midi_out_offset_ms(NotaEngine* engine, double ms);
+NOTA_API double     nota_engine_get_midi_out_offset_ms(const NotaEngine* engine);
 /* Tests: a virtual MIDI input plus its loopback output ("test:<name>"), so external-MIDI
  * routing can be checked without hardware; take returns the bytes sent to that output. */
 NOTA_API int32_t    nota_engine_add_test_midi_port(NotaEngine* engine, const char* name);

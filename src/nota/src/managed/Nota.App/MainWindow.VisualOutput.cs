@@ -129,19 +129,28 @@ public partial class MainWindow
         }
 
         int ms = Math.Clamp(_vm.Settings.Current.VisualAvOffsetMs, -200, 200);
+        int midiMs = Math.Clamp(_vm.Settings.Current.MidiOutOffsetMs, -200, 200);
         if (!_visualOutputShown) ToggleVisualOutput();
         _offsetMetronomeWasOn = _vm.Transport.MetronomeOn;
         _vm.Transport.MetronomeOn = true;
         bridge.VizOffset(ms);
         bridge.VizCalibrate(true);
+        _vm.Engine.SetMidiOutOffsetMs(midiMs);
 
-        var window = new VisualOffsetWindow(ms);
+        var window = new VisualOffsetWindow(ms, midiMs);
         window.OffsetChanged += v =>
         {
             _vm.Settings.Current.VisualAvOffsetMs = v;
             _vm.Settings.Save();
             bridge.VizOffset(v);
             _vm.StatusText = Loc.F("visual.av_offset_status", v);
+        };
+        window.MidiOffsetChanged += v =>
+        {
+            _vm.Settings.Current.MidiOutOffsetMs = v;
+            _vm.Settings.Save();
+            _vm.Engine.SetMidiOutOffsetMs(v);
+            _vm.StatusText = Loc.F("visual.midi_offset_status", v);
         };
         window.CalibrationToggled += on => bridge.VizCalibrate(on);
         window.Closed += (_, _) =>

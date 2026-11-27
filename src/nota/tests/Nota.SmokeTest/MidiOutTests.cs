@@ -35,6 +35,9 @@ internal static class MidiOutTests
             "the output route and channel read back");
         e.SetTrackMidiOutOffsetMs(ta, 12.5);
         yield return (Math.Abs(e.GetTrackMidiOutOffsetMs(ta) - 12.5) < 1e-6, "the MIDI out offset reads back");
+        e.SetMidiOutOffsetMs(7.5);
+        yield return (Math.Abs(e.GetMidiOutOffsetMs() - 7.5) < 1e-6, "the engine MIDI out offset reads back");
+        e.SetMidiOutOffsetMs(0);
         e.AddMidiClip(ta, 4, 1); // an edit clones the track: the offset must travel with it
         yield return (Math.Abs(e.GetTrackMidiOutOffsetMs(ta) - 12.5) < 1e-6, "the MIDI out offset survives an edit");
 

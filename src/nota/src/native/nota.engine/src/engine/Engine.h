@@ -175,6 +175,10 @@ class Engine {
     // advances it inside the current block. Applies to this track's external route only.
     void setTrackMidiOutOffsetMs(int32_t trackId, double ms);
     double trackMidiOutOffsetMs(int32_t trackId) const;
+    // Engine-wide MIDI out latency compensation (the A/V offset dialog's slider). It adds to
+    // each track's own trim; positive delays, negative advances inside the block.
+    void setMidiOutOffsetMs(double ms);
+    double midiOutOffsetMs() const;
     // Realtime-safe: queues a short channel message for the pump thread (audio thread).
     void queueMidiOut(int32_t port, const uint8_t* data, int32_t len) noexcept;
     // Same, but `dueNs` is a steady_clock timestamp: the pump holds it until that moment.
@@ -1876,6 +1880,7 @@ class Engine {
     std::mutex midiSendMutex_;
     std::thread midiOutPump_;
     std::atomic<bool> midiOutPumpRun_{false};
+    std::atomic<double> midiOutGlobalOffsetMs_{0.0}; // A/V dialog slider: adds to every track's trim
     void startMidiOutPump();
     void stopMidiOutPump();
     void pumpMidiOut();

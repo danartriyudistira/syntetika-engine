@@ -191,6 +191,7 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainWindowViewModel vm || _vm is not null) return;
         _vm = vm;
+        vm.Engine.SetMidiOutOffsetMs(vm.Settings.Current.MidiOutOffsetMs);
 
         _learn = App.Services.GetRequiredService<MidiLearnService>();
         // Hardware values land through one applier (specs/051): a Select button picks the track

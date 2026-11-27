@@ -320,7 +320,7 @@ void Engine::sendExternalMidi(const Track& t, const MidiEv* evs, int32_t n, cons
     const uint8_t outCh = static_cast<uint8_t>(std::clamp(t.midiOutChannel(), 1, 16) - 1);
     const double sr = transport_.sampleRate() > 0.0 ? transport_.sampleRate() : 48000.0;
     const int64_t nowNs = steadyNowNs();
-    const double offsetMs = t.midiOutOffsetMs();
+    const double offsetMs = t.midiOutOffsetMs() + midiOutGlobalOffsetMs_.load(std::memory_order_relaxed);
     const int64_t offsetNs = std::isfinite(offsetMs) ? static_cast<int64_t>(std::llround(offsetMs * 1e6)) : 0;
     // A block's events are queued with the sample time they belong to, plus the track's
     // external latency compensation. Negative compensation can only advance them to the

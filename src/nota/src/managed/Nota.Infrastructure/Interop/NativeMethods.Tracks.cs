@@ -391,6 +391,12 @@ internal static partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "nota_track_get_midi_out_offset_ms")]
     internal static partial double TrackGetMidiOutOffsetMs(IntPtr engine, int trackId);
 
+    [LibraryImport(Lib, EntryPoint = "nota_engine_set_midi_out_offset_ms")]
+    internal static partial NotaResult EngineSetMidiOutOffsetMs(IntPtr engine, double ms);
+
+    [LibraryImport(Lib, EntryPoint = "nota_engine_get_midi_out_offset_ms")]
+    internal static partial double EngineGetMidiOutOffsetMs(IntPtr engine);
+
     [LibraryImport(Lib, EntryPoint = "nota_engine_add_test_midi_port", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int EngineAddTestMidiPort(IntPtr engine, string name);
 

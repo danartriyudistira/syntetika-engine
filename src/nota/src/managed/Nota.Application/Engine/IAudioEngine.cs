@@ -437,6 +437,10 @@ public interface IAudioEngine : IDisposable
     /// send, negative advances it inside the current block. Only the hardware route moves.</summary>
     void SetTrackMidiOutOffsetMs(int trackId, double ms);
     double GetTrackMidiOutOffsetMs(int trackId);
+    /// <summary>Engine-wide MIDI out latency compensation (the A/V offset dialog's slider),
+    /// added to each track's own trim. Positive delays, negative advances.</summary>
+    void SetMidiOutOffsetMs(double ms);
+    double GetMidiOutOffsetMs();
     /// <summary>Monitor mode, Ableton-style: 0 In (always), 1 Auto (while armed), 2 Off.</summary>
     void SetTrackMonitorMode(int trackId, int mode);
     int GetTrackMonitorMode(int trackId);

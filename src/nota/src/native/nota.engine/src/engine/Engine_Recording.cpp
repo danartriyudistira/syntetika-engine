@@ -657,6 +657,13 @@ double Engine::trackMidiOutOffsetMs(int32_t trackId) const {
     auto t = findTrackAuthoring(trackId);
     return t ? t->midiOutOffsetMs() : 0.0;
 }
+void Engine::setMidiOutOffsetMs(double ms) {
+    if (!std::isfinite(ms)) ms = 0.0;
+    midiOutGlobalOffsetMs_.store(std::clamp(ms, -200.0, 200.0), std::memory_order_relaxed);
+}
+double Engine::midiOutOffsetMs() const {
+    return midiOutGlobalOffsetMs_.load(std::memory_order_relaxed);
+}
 int32_t Engine::trackMidiSource(int32_t trackId) const {
     auto t = findTrackAuthoring(trackId);
     return t ? t->midiFromTrackId() : -1;

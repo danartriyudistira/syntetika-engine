@@ -103,6 +103,9 @@ public sealed class Settings
     /// <summary>Picture vs sound offset in milliseconds, -200..+200 (positive delays the
     /// picture). Set from View → A/V Offset; replayed to the visual engine on connect.</summary>
     public int VisualAvOffsetMs { get; set; }
+    /// <summary>Engine-wide MIDI out latency compensation (the A/V offset dialog's slider),
+    /// added to each track's own trim. -200..200 ms; positive delays, negative advances.</summary>
+    public int MidiOutOffsetMs { get; set; }
     /// <summary>The Mixer was shown when the user last showed or hid it; restored on launch
     /// (specs/054). Quitting the app does not count as hiding it.</summary>
     public bool MixerShown { get; set; }

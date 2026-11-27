@@ -128,6 +128,11 @@ negatif memajukan sebanyak yang masih muat dalam blok berjalan. Nilai disimpan d
 (`MidiOutOffsetMs`). Batas negative: tidak bisa lebih awal dari awal blok render; untuk
 kompensasi lebih besar, turunkan buffer atau tunggu lookahead di versi berikutnya.
 
+**Slider MIDI out (0.1.18).** **View → A/V Offset** sekarang punya slider **MIDI out offset
+(all tracks)** di bawah slider gambar. Nilai itu global (disimpan di settings) dan ditambahkan
+ke trim per track, jadi satu slider bisa menggeser semua synth; trim Inspector untuk koreksi
+per perangkat.
+
 ### Kenapa DX12
 
 Driver Vulkan Intel (`igvk64.dll`, versi 31.0.101.2114 di mesin uji) crash `0xc0000005`

@@ -620,6 +620,14 @@ public sealed partial class NotaEngine
     public double GetTrackMidiOutOffsetMs(int trackId)
     { ThrowIfDisposed(); return NativeMethods.TrackGetMidiOutOffsetMs(_handle, trackId); }
 
+    /// <summary>Engine-wide MIDI out latency compensation (the A/V offset dialog's slider),
+    /// added to each track's own trim. Positive delays, negative advances.</summary>
+    public void SetMidiOutOffsetMs(double ms)
+    { ThrowIfDisposed(); NativeMethods.EngineSetMidiOutOffsetMs(_handle, ms); }
+
+    public double GetMidiOutOffsetMs()
+    { ThrowIfDisposed(); return NativeMethods.EngineGetMidiOutOffsetMs(_handle); }
+
     /// <summary>Tests: a virtual MIDI port whose output is readable (source index, or -1).</summary>
     public int AddTestMidiPort(string name)
     { ThrowIfDisposed(); return NativeMethods.EngineAddTestMidiPort(_handle, name); }
