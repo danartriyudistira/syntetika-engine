@@ -3,6 +3,20 @@
 Base revisions are listed in [ATTRIBUTION.md](ATTRIBUTION.md). This is a summary; the exact
 diffs are in `patches/`.
 
+## Visual engine on demand
+
+- `syntetika-visual` no longer runs at app launch: it starts when **View → Visual Output**,
+  **OpenVJ**, **Projection Mapping** or the **OpenVJ tab** is used. An audio-only session pays
+  no visual process, memory or GPU context; `SYNTETIKA_VISUAL_ALWAYS=1` restores always-on.
+- While hidden, the engine is checked every 30 s and stopped above 1.2 GB private after
+  saving `visuals/composition.json`; the next visual request starts a fresh one.
+  `SYNTETIKA_VISUAL_IDLE_LIMIT_MB` overrides the cap. Saving with no engine no longer reports
+  "visuals were not saved".
+- The BelowNormal/Normal priority switch is Windows-only (no portable process priority on
+  Unix). `VisualEngineProcess.Current` exists from app start so every visual surface can start
+  the engine.
+- Verified on macOS: no helper at launch, `SYNTETIKA_VISUAL_ALWAYS=1` starts and connects it.
+
 ## Session loop export
 
 - **File → Export Session Loops…** renders the current deck scene by scene: one folder per

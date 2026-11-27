@@ -1,7 +1,7 @@
-# Syntetika Engine 1.0.1 — visual engine on demand (Windows x64)
+# Syntetika Engine 1.0.1 — visual engine on demand (Windows x64 + macOS arm64)
 
-Rilis patch untuk **Windows x64**. macOS Apple Silicon tetap di **1.0.0**; perubahan yang sama
-akan ikut build macOS berikutnya. Semua versi **0.1.x** tetap beta / pre-release.
+Rilis patch untuk **Windows x64** dan **macOS arm64** — keduanya dari sumber yang sama.
+Semua versi **0.1.x** tetap beta / pre-release.
 
 ## Yang berubah
 
@@ -36,6 +36,30 @@ i5-10310U, UHD 620, RAM 16 GB single-channel, 1080p60:
 | Visual Output ditutup | ~345 MB, prioritas BelowNormal, render off |
 | Sesi panjang yang membesar > 1,2 GB saat tersembunyi | disimpan lalu dihentikan, mulai segar saat diminta |
 
+## macOS
+
+`Syntetika-Engine-1.0.1-arm64.dmg` — macOS 12+, Apple Silicon.
+
+Yang berlaku di macOS:
+
+- **Visual engine on demand** — `syntetika-visual` tidak dijalankan saat app dibuka; baru
+  menyala ketika Visual Output, OpenVJ, Projection Mapping, atau tab OpenVJ dibuka.
+  Sesi audio-only tidak memakai proses/memori/konteks GPU visual.
+  `SYNTETIKA_VISUAL_ALWAYS=1` mengembalikan perilaku selalu-aktif.
+- **Memory guard** — engine tersembunyi di atas 1,2 GB private disimpan lalu dihentikan;
+  permintaan berikutnya memulai engine baru. `SYNTETIKA_VISUAL_IDLE_LIMIT_MB` menimpa batas.
+- **Save aman tanpa engine** — menyimpan project saat engine mati tetap menyimpan
+  `visuals/composition.json` tanpa pesan “visuals were not saved”.
+- Pengaturan prioritas **BelowNormal/Normal** khusus Windows; di macOS proses visual memakai
+  prioritas normal dari OS.
+
+Diverifikasi di macOS: tanpa helper saat launch, dan dengan `SYNTETIKA_VISUAL_ALWAYS=1`
+helper menyala serta tersambung ke bridge.
+
+DMG ini **ad-hoc signed, belum notarized**. Saat pertama dibuka: klik kanan app → **Open** →
+**Open**, atau System Settings → Privacy & Security → **Open Anyway**. Hanya Apple Silicon;
+belum ada build Intel.
+
 ## Instalasi Windows
 
 1. Unduh `Syntetika-Engine-Setup-1.0.1-x64.exe`.
@@ -53,3 +77,22 @@ Get-FileHash .\Syntetika-Engine-Setup-1.0.1-x64.exe -Algorithm SHA256
 ```
 
 Persyaratan: Windows 10/11 x64. Tanpa .NET/VC++/FFmpeg terpasang pun jalan.
+
+## Instalasi macOS
+
+1. Unduh `Syntetika-Engine-1.0.1-arm64.dmg`.
+2. (Opsional) Verifikasi:
+
+   ```bash
+   shasum -a 256 Syntetika-Engine-1.0.1-arm64.dmg
+   ```
+
+3. Buka image, seret **Syntetika Engine** ke **Applications**.
+4. Jalankan; bila macOS menolak, pakai langkah Gatekeeper di atas.
+
+## Checksums
+
+```
+15654bcd6fc64ff1156fb2e6905b06da1c967cc99db2b02f0cc97e9042f4f97f  Syntetika-Engine-Setup-1.0.1-x64.exe
+18cb1f66094bf4d3d0e255329a492ec7bef0f5a77b3aad11b1086a269a7971df  Syntetika-Engine-1.0.1-arm64.dmg
+```
