@@ -80,7 +80,7 @@ Installer memasang **per user** tanpa UAC ke `%LOCALAPPDATA%\Programs\Syntetika 
 (atau untuk semua user bila dipilih di halaman hak akses). Karena project Nota adalah
 *folder* berakhiran `.nota` — dan Windows selalu membuka folder di Explorer — installer
 menambahkan menu klik-kanan **"Open with Syntetika Engine"** untuk folder `.nota`, bukan
-asosiasi ekstensi. Skrip juga menulis `<installer>.sha256` di `dist/`.
+asosiasi ekstensi. Skrip juga menulis `<installer>.sha256` di `dist/`; hash itu dicantumkan di release notes, bukan diunggah sebagai asset terpisah.
 
 ### Code signing (opsional)
 

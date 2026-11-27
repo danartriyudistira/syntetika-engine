@@ -14,10 +14,12 @@ macOS SHA-256: `2956150440a5bef6b0b6d0fc6e0a26fc51233d00c1e5f866a4ecd6dee6cfb3ad
 
 Windows SHA-256: `fb0b996fc185ad413b4e05100d5ee211a0316be37290212c917c08a9a29bdfb2`
 
+These hashes are optional: only the installer/DMG needs to be downloaded. The `.sha256` files are not separate assets.
+
 ## Install on Windows
 
-1. Download `Syntetika-Engine-Setup-0.1.20-x64.exe` and its `.sha256` from the release.
-2. Verify the download (PowerShell):
+1. Download `Syntetika-Engine-Setup-0.1.20-x64.exe` from the release.
+2. (Optional) Verify the download (PowerShell):
 
    ```powershell
    Get-FileHash .\Syntetika-Engine-Setup-0.1.20-x64.exe -Algorithm SHA256
@@ -50,8 +52,8 @@ settings in `%APPDATA%\Syntetika Engine` are kept.
 
 ## Install on macOS
 
-1. Download the `.dmg` and its `.sha256` from the release.
-2. Verify the download:
+1. Download the `.dmg` from the release.
+2. (Optional) Verify the download:
 
    ```bash
    shasum -a 256 Syntetika-Engine-0.1.20-arm64.dmg

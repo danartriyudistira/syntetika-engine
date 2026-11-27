@@ -110,7 +110,7 @@ checklist untuk build macOS berikutnya.
 - [ ] Uji manual: MIDI To (IAC + hardware), clip Session, edit/duplikat track, monitor mode,
       simpan/buka project, mixer dock/float.
 - [ ] Jalankan `--midi-out` dan `--midi-part`.
-- [ ] Rilis DMG + `.sha256`, perbarui `docs/download.md`, dan samakan catatan rilis.
+- [ ] Rilis DMG; cantumkan hash SHA-256 di release notes (jangan unggah `.sha256` sebagai asset), perbarui `docs/download.md`, dan samakan catatan rilis.
 - [ ] Setelah rilis: hapus item yang sudah beres dari dokumen ini atau tandai selesai.
 
 ## Catatan teknis macOS vs Windows

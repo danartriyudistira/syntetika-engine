@@ -53,8 +53,10 @@ Apple Silicon; belum ada build Intel.
 
 ## Instalasi Windows
 
-1. Unduh `Syntetika-Engine-Setup-0.1.19-x64.exe` dan `.sha256`-nya.
-2. Verifikasi: `Get-FileHash .\Syntetika-Engine-Setup-0.1.19-x64.exe -Algorithm SHA256`.
+Hanya installer/DMG yang perlu diunduh; hash SHA-256 di bagian Checksums opsional.
+
+1. Unduh `Syntetika-Engine-Setup-0.1.19-x64.exe`.
+2. (Opsional) Verifikasi: `Get-FileHash .\Syntetika-Engine-Setup-0.1.19-x64.exe -Algorithm SHA256`.
 3. Jalankan installer (tanpa hak admin), lalu buka **Syntetika Engine** dari Start Menu.
 4. SmartScreen: **More info → Run anyway**.
 
@@ -62,8 +64,8 @@ Persyaratan: Windows 10/11 x64.
 
 ## Instalasi macOS
 
-1. Unduh `Syntetika-Engine-0.1.19-arm64.dmg` dan `.sha256`-nya.
-2. Verifikasi:
+1. Unduh `Syntetika-Engine-0.1.19-arm64.dmg`.
+2. (Opsional) Verifikasi:
 
    ```bash
    shasum -a 256 Syntetika-Engine-0.1.19-arm64.dmg

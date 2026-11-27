@@ -62,13 +62,13 @@ shasum -a 256 Syntetika-Engine-<v>-arm64.dmg
 ```bash
 gh release create v<version> \
   "src/nota/dist/Syntetika-Engine-<version>-arm64.dmg" \
-  "src/nota/dist/Syntetika-Engine-<version>-arm64.dmg.sha256" \
   --title "Syntetika Engine <version> (macOS arm64)" \
   --notes-file release-notes/<version>.md
 ```
 
 Release notes must state the requirements (macOS 12+, Apple Silicon) and, for an ad-hoc build,
-the Gatekeeper "Open Anyway" step.
+the Gatekeeper "Open Anyway" step. Do not attach the `.sha256` as a release asset; put its hash
+in the notes instead (one download is clearer).
 
 ## CI
 
