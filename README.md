@@ -6,9 +6,20 @@ Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an 
 
 ![Syntetika Engine: the Session grid and OpenVJ tab driving a monochrome ink kaleidoscope in the always-on-top visual output](docs/images/syntetika-engine.png)
 
-> Status: **1.0.0 (first stable)**. Windows x64 and macOS Apple Silicon.
+> **Syntetika Engine 1.0.0 is the first stable release** for Windows x64 and macOS Apple Silicon.
+> All 0.1.x releases are beta / pre-release and are not supported for daily use.
 > What works, known limits and the roadmap: [docs/04-status-dan-rencana.md](docs/04-status-dan-rencana.md).
-> Prioritas build macOS berikutnya (MIDI out, Session clips, mixer I/O): [docs/07-macos-prioritas.md](docs/07-macos-prioritas.md).
+> Next macOS build priorities: [docs/07-macos-prioritas.md](docs/07-macos-prioritas.md).
+
+## Download
+
+| Platform | Version | File |
+|---|---|---|
+| **Windows x64** | **1.0.0 stable** | [`Syntetika-Engine-Setup-1.0.0-x64.exe`](https://github.com/danartriyudistira/syntetika-engine/releases/latest) |
+| **macOS arm64** | **1.0.0 stable** | [`Syntetika-Engine-1.0.0-arm64.dmg`](https://github.com/danartriyudistira/syntetika-engine/releases/latest) |
+
+Only the installer/DMG needs to be downloaded. SHA-256 hashes are **optional** and listed in
+the release notes and [docs/download.md](docs/download.md).
 
 ## Built on two excellent open-source projects
 
@@ -16,7 +27,7 @@ This project is an **integration**, not a new DAW or a new VJ engine:
 
 | Project | What it is | Author / licence |
 |---|---|---|
-| [Nota](https://github.com/nota-daw/nota) | Cross-platform DAW: audio engine, Session/Arrangement, plugin hosting | © Egor Khindikaynen — **AGPL-3.0-only** |
+| [Nota](https://github.com/nota-daw/nota) | Cross-platform DAW: audio engine, Session/Arrangement, plugin hosting | Ac Egor Khindikaynen — **AGPL-3.0-only** |
 | [openVJ](https://github.com/openwave-studio/openvj) | GPU VJ mixer: layers, ISF, video, mapping, Syphon | openwave-studio and contributors — **GPL-3.0-or-later** |
 
 We did not write the DAW or the VJ engine. Our work is the bridge between them, released under
@@ -25,64 +36,45 @@ revisions and file-level changes are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 
 ## What we added
 
-- **Beat-accurate launches** — NotA is the master clock; launches are scheduled on absolute
-  beats, with a PLL so visual playback stays smooth even when the clock source is steppy.
-- **Structure mirroring** — one openVJ layer per playable track, one column per scene, live
-  add/remove/reorder, with stable track UIDs across save/reload.
-- **Selection mirroring** — selecting a clip in NotA selects and previews it in openVJ.
-- **OpenVJ tab** — the selected clip's visual parameters, transform and full effect chain,
-  edited with Nota's own sliders; two-way with openVJ's UI.
-- **One-file projects** — save a whole project (audio, visuals, media, version history) as a
-  single `.syntetika` file; copy it to another Mac and open it. Legacy `.nota` folders still
-  open and migrate on Save As.
-- **Media sources** — generators, ISF, images, video (bundled decode-only FFmpeg), cameras and
-  Syphon (Spout on Windows); media is copied into the project bundle so it travels with the project.
-- **Video clips with sound in Nota** — drop a video on an audio Session slot: its audio is
-  extracted into the slot and its picture becomes the slot's visual, beat-synced to the clip.
-  Trimming the audio's start/end or looping it retimes and trims the video with it, with
-  launches and stops on the same quantum (and phase-corrected) as the audio.
-- **Always-on-top visual output** — View → Visual Output opens openVJ's output window above
-  every other app at 480p; maximizing it means fullscreen, and Esc returns to the windowed output.
-- **Projection mapping** — View → Projection Mapping opens openVJ's mapping editor for
-  projector warping, slicing and masking, from inside Nota.
-- **Clip copy/paste carries the visual** — copying, cutting, duplicating or dragging a Session
-  clip also copies or moves its openVJ visual and media.
-- **Scenes stay aligned** — inserting, removing, moving or duplicating scenes moves/copies the
-  visual columns, and track reorders re-sync the selected slot.
-- **Reconnect recovery** — a restarted visual engine reloads the project, then resumes the
-  visuals of Session clips that are still playing.
-- **Click-through launching** — clicking a clip in openVJ launches the matching Nota Session
-  slot (audio and visual on the same quantum).
-- **Paired video sound** — a video dropped on a visual slot also brings its audio into that
-  Nota slot, unless the slot already has sound.
-- **Audio-reactive visuals** — the visual engine analyses Nota's master output through a
-  lock-free shared ring, so shaders, MilkDrop and audio-modulated parameters follow the DAW.
-- **A/V offset & calibration** — View → A/V Offset shifts the picture ±200 ms with a beat
-  strobe, so a projector or slow display lines up with the sound.
-- **Visual undo/redo** — the OpenVJ tab has Undo/Redo for clip sources, parameters, playback,
-  effects and layer settings; slider drags count as one step.
-- **Performance** — hidden engine ~3% CPU (audio tap included), output-only ~24% at 60 fps; editor work is
-  capped at 30 fps and the output path skips UI sync. View → Visual Performance selects Eco
-  (30 fps, ~6.5% output), Balanced (45) or Quality (60). A visual that takes far over budget
-  makes the engine render smaller (down to 12.5%) instead of freezing the app.
-- **Background visual engine** — openVJ runs hidden by default; View → OpenVJ raises its
-  editor once (not always-on-top), and while nothing is on screen it stops GPU rendering and
-  slows its tick.
-- **Persistence** — visuals are stored in the project bundle (`visuals/composition.json`) and
-  restored with the track identity map.
-- **Performance work** — static grid thumbnails, pipeline prewarm, and no GPU readback during
-  a show.
+### Session, MIDI and export
+
+- **One-file projects** — save audio, visuals, media and version history in a single `.syntetika` file; legacy `.nota` folders still open and migrate on Save As.
+- **Ableton-style mixer I/O** — instrument strips show **MIDI From → Monitor In/Auto/Off → MIDI out + Channel → Audio To**; audio strips show **Audio From → Monitor → Audio To**. Session I/O uses the same order: Input → Monitor → MIDI out → Output.
+- **External MIDI output per track** — play a hardware or virtual synth (loopMIDI, USB-MIDI) from Arrangement **and** Session clips: notes, CC, pitch bend and channel pressure. Stop, seek, channel change, clip edit, audio-device change and quit send all-notes-off so nothing hangs.
+- **MIDI timing** — timestamped send (each event leaves near its sample time, not as one block burst), a global **MIDI out offset** in **View → A/V Offset**, and a per-track trim in the Inspector. Positive delays the synth; negative advances it inside the current block. Routing and offsets are saved with the project.
+- **Export Session Loops** — current deck → one folder per scene, a WAV per track and a MIDI (`.mid`) file per instrument clip. Loops are trimmed to the slot length, scene tempo is honoured, and master effects are bypassed for clean files. Empty slots are skipped.
+- **Mixer/Session defaults** — I/O on, Sends off, Mixer on, matching a live performance layout.
+
+### Visuals
+
+- **Beat-accurate launches** — Nota is the master clock; launches are scheduled on absolute beats with a PLL, so visual playback stays smooth even when the clock source is steppy.
+- **Structure and selection mirroring** — one openVJ layer per playable track, one column per scene, live add/remove/reorder, with stable track UIDs across save/reload. Selecting a clip in Nota selects and previews it in openVJ.
+- **OpenVJ tab** — the selected clip's visual parameters, transform and full effect chain, edited with Nota's own controls; two-way with openVJ's UI.
+- **Media sources** — generators, ISF, images, video (bundled decode-only FFmpeg), cameras and Syphon (Spout on Windows); media travels inside the project.
+- **Video clips with sound** — drop a video on an audio Session slot: its audio is extracted into the slot and its picture becomes the slot's visual, beat-synced and retimed/trimmed with the audio loop.
+- **Visual output and mapping** — always-on-top output window (480p by default, maximize for fullscreen, Esc to return) and **View → Projection Mapping** for projector warping, slicing and masking.
+- **Clip copy/paste carries the visual** — copy, cut, duplicate or drag a Session clip and its openVJ visual and media move with it; scene insert/remove/move/duplicate keeps visual columns aligned.
+- **Reconnect recovery** — a restarted visual engine reloads the project and resumes visuals for Session clips that are still playing.
+- **Click-through launching** — clicking a clip in openVJ launches the matching Session slot (audio and visual on the same quantum).
+- **Audio-reactive visuals** — the visual engine analyses Nota's master output through a lock-free shared ring, so shaders, MilkDrop and modulated parameters follow the DAW.
+- **A/V offset and calibration** — **View → A/V Offset** shifts the picture ±200 ms with a beat strobe; the same window carries the global MIDI out offset.
+- **Visual undo/redo** — Undo/Redo for clip sources, parameters, playback, effects and layer settings; a slider drag is one step.
+- **Persistence** — visuals live in `visuals/composition.json` inside the project bundle and are restored with the track identity map.
+
+### Performance and Windows
+
+- **Auto visual profile** — integrated GPU → **Eco** (30 fps, preview 15), discrete GPU → **Quality** (60/60); macOS keeps Quality. **View → Visual Performance** also offers Eco/Balanced/Quality manually.
+- **Adaptive render scale** — a visual that runs far over budget renders at a lower internal scale (down to 12.5%) instead of freezing the app.
+- **Background visual engine** — openVJ runs hidden by default; while nothing is on screen it stops GPU rendering and slows its tick. **View → OpenVJ** raises its editor.
+- **Windows stability defaults** — 512-frame WASAPI buffer (≈10.7 ms), render workers follow **physical cores** rather than logical processors, and iGPU machines start at Eco.
+- **No GPU readback during a show** — static grid thumbnails and pipeline prewarm keep the UI cheap.
 
 ## Run it
 
-**macOS** (Apple Silicon):
+### Windows (x64, stable 1.0.0)
 
-```bash
-open "./src/nota/dist/Syntetika Engine.app"
-```
-
-**Windows** (x64): run the installer from the
-[releases page](https://github.com/danartriyudistira/syntetika-engine/releases/latest), or
+Download the installer from the
+[latest release](https://github.com/danartriyudistira/syntetika-engine/releases/latest), or
 build it yourself:
 
 ```powershell
@@ -90,20 +82,18 @@ powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1
 & src/nota/src/managed/Nota.App/bin/Release/net10.0/Nota.App.exe
 ```
 
-The Windows installer is self-contained (no .NET needed) and installs per user by default.
-Build/packaging details: [docs/05-windows.md](docs/05-windows.md).
+The Windows installer is self-contained (no .NET, VC++ or FFmpeg needed) and installs per user
+by default. Build/packaging details: [docs/05-windows.md](docs/05-windows.md).
 
-Prebuilt macOS installers (Apple Silicon) are on the
-[releases page](https://github.com/danartriyudistira/syntetika-engine/releases/latest); see
-[docs/download.md](docs/download.md) for install, Gatekeeper and checksums.
+### macOS (Apple Silicon, stable 1.0.0)
 
-The app starts its bundled visual engine (`Contents/Helpers/syntetika-visual` on macOS,
-`syntetika-visual.exe` beside the app on Windows), restarts it if it crashes, and stops it
-on quit. Then open **Session View**, select a clip, and use the **OpenVJ** tab to assign a
-visual. Build instructions live in [docs/02-m0-setup.md](docs/02-m0-setup.md) and
-[docs/05-windows.md](docs/05-windows.md).
+Download the DMG from the
+[latest release](https://github.com/danartriyudistira/syntetika-engine/releases/latest),
+open it and drag **Syntetika Engine** to **Applications**. The image is ad-hoc signed, not
+notarized: on another Mac, right-click → **Open** once (or System Settings → Privacy & Security
+→ **Open Anyway**).
 
-Package a DMG (the bundle must be built first):
+Build it yourself:
 
 ```bash
 cd src/nota
@@ -111,8 +101,18 @@ bash scripts/bundle-mac.sh              # native engine + managed publish + .app
 bash scripts/package-dmg-syntetika.sh   # dist/Syntetika-Engine-<version>-arm64.dmg
 ```
 
-The image is ad-hoc signed, not notarized: on another Mac, right-click → **Open** once (or
-System Settings → Privacy & Security → **Open Anyway**).
+Install, Gatekeeper and checksum details: [docs/download.md](docs/download.md).
+
+The app starts its bundled visual engine (`Contents/Helpers/syntetika-visual` on macOS,
+`syntetika-visual.exe` beside the app on Windows), restarts it if it crashes, and stops it on
+quit. Then open **Session View**, select a clip, and use the **OpenVJ** tab to assign a visual.
+Build instructions live in [docs/02-m0-setup.md](docs/02-m0-setup.md) and
+[docs/05-windows.md](docs/05-windows.md).
+
+## Versioning
+
+- **1.0.0** — Windows x64 and macOS Apple Silicon, first stable release.
+- **0.1.0 – 0.1.20** — beta / pre-release; kept for history, marked **Pre-release** on GitHub.
 
 ## Repository layout
 
@@ -132,7 +132,7 @@ profile once (macOS) and leaves the old folder untouched.
 
 ## Credits & licences
 
-- Nota — © Egor Khindikaynen, AGPL-3.0-only. The Nota part of this repository remains AGPL.
+- Nota — Ac Egor Khindikaynen, AGPL-3.0-only. The Nota part of this repository remains AGPL.
 - openVJ — openwave-studio and contributors, GPL-3.0-or-later. The openVJ part remains GPL.
 - Integration layer and documentation — AGPL-3.0-only.
 - Third-party notices (JUCE, Avalonia, Slint, FFmpeg, Ghost Arcade, fonts) are kept in each
