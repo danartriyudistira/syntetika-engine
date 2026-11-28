@@ -1,6 +1,6 @@
 # Download Syntetika Engine
 
-The latest installers are on GitHub. **Syntetika Engine 1.0.1 is the latest Windows release; macOS stays on 1.0.0. All 0.1.x versions are beta and unsupported.**
+The latest installers are on GitHub. **Syntetika Engine 1.0.1 is the latest release on Windows and macOS; all 0.1.x versions are beta and unsupported.**
 
 **[Syntetika Engine releases](https://github.com/danartriyudistira/syntetika-engine/releases/latest)**
 
@@ -12,7 +12,7 @@ The latest installers are on GitHub. **Syntetika Engine 1.0.1 is the latest Wind
 
 macOS SHA-256: `18cb1f66094bf4d3d0e255329a492ec7bef0f5a77b3aad11b1086a269a7971df`
 
-Windows SHA-256: `e9c4a3035ac6d599252ba0a97ee40626c5c34b490657627343cdb35c8bd3689d`
+Windows SHA-256: `193338753c29b9c5480d319313fda8b7e2dbf9271aa2cffdab815ffc556a859f`
 
 These hashes are optional: only the installer/DMG needs to be downloaded. The `.sha256` files are not separate assets.
 
