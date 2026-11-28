@@ -97,5 +97,5 @@ Persyaratan: Windows 10/11 x64. Tanpa .NET/VC++/FFmpeg terpasang pun jalan.
 
 ```
 193338753c29b9c5480d319313fda8b7e2dbf9271aa2cffdab815ffc556a859f  Syntetika-Engine-Setup-1.0.1-x64.exe
-18cb1f66094bf4d3d0e255329a492ec7bef0f5a77b3aad11b1086a269a7971df  Syntetika-Engine-1.0.1-arm64.dmg
+79d2efe8a6d35f1b3b84c298ac1ea972aff4f530e0f6eb696ecbca94661ff3e7  Syntetika-Engine-1.0.1-arm64.dmg
 ```

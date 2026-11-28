@@ -3,6 +3,17 @@
 Base revisions are listed in [ATTRIBUTION.md](ATTRIBUTION.md). This is a summary; the exact
 diffs are in `patches/`.
 
+## Syntetika-named user folders
+
+- Default project and sample folders are now **`Syntetika Projects`** (`~/Documents`) and
+  **`Syntetika Samples`** (`~/Music`). On the first 1.0.1 start, existing `Nota Projects` /
+  `Nota Samples` are renamed once, and settings — including the recent-projects list — follow.
+  A failed rename keeps the old path; an empty new folder yields to the old library, and two
+  non-empty folders are left for the user to merge.
+- `SettingsService.DefaultSamplesLocation/DefaultProjectsLocation` + `MigrateLegacyFolders`;
+  `--browser-files` covers rename, one-time behaviour, blocked rename, empty target, both
+  non-empty, and a custom project folder. Verified on macOS against a temporary folder tree.
+
 ## Visual engine on demand
 
 - `syntetika-visual` no longer runs at app launch: it starts when **View → Visual Output**,

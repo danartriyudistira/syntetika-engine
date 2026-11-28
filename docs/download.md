@@ -10,7 +10,7 @@ The latest installers are on GitHub. **Syntetika Engine 1.0.1 is the latest rele
 | Latest Windows | **1.0.1** |
 | Windows | `Syntetika-Engine-Setup-1.0.1-x64.exe` (110 MB) — Windows 10/11 x64 |
 
-macOS SHA-256: `18cb1f66094bf4d3d0e255329a492ec7bef0f5a77b3aad11b1086a269a7971df`
+macOS SHA-256: `79d2efe8a6d35f1b3b84c298ac1ea972aff4f530e0f6eb696ecbca94661ff3e7`
 
 Windows SHA-256: `193338753c29b9c5480d319313fda8b7e2dbf9271aa2cffdab815ffc556a859f`
 
