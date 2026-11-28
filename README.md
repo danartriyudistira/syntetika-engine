@@ -6,8 +6,7 @@ Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an 
 
 ![Syntetika Engine: the Session grid and OpenVJ tab driving a monochrome ink kaleidoscope in the always-on-top visual output](docs/images/syntetika-engine.png)
 
-> **Syntetika Engine 1.0.1 is the latest Windows release** (Windows x64). macOS Apple Silicon
-> stays on **1.0.0** until the next macOS build.
+> **Syntetika Engine 1.0.1 is the latest release** for Windows x64 and macOS Apple Silicon.
 > All 0.1.x releases are beta / pre-release and are not supported for daily use.
 > What works, known limits and the roadmap: [docs/04-status-dan-rencana.md](docs/04-status-dan-rencana.md).
 > Next macOS build priorities: [docs/07-macos-prioritas.md](docs/07-macos-prioritas.md).
@@ -17,7 +16,7 @@ Syntetika Engine is a live audio-visual workspace: Nota's Session view, with an 
 | Platform | Version | File |
 |---|---|---|
 | **Windows x64** | **1.0.1 stable** | [`Syntetika-Engine-Setup-1.0.1-x64.exe`](https://github.com/danartriyudistira/syntetika-engine/releases/latest) |
-| **macOS arm64** | **1.0.0 stable** | [`Syntetika-Engine-1.0.0-arm64.dmg`](https://github.com/danartriyudistira/syntetika-engine/releases/tag/v1.0.0) |
+| **macOS arm64** | **1.0.1 stable** | [`Syntetika-Engine-1.0.1-arm64.dmg`](https://github.com/danartriyudistira/syntetika-engine/releases/latest) |
 
 Only the installer/DMG needs to be downloaded. SHA-256 hashes are **optional** and listed in
 the release notes and [docs/download.md](docs/download.md).
@@ -86,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1
 The Windows installer is self-contained (no .NET, VC++ or FFmpeg needed) and installs per user
 by default. Build/packaging details: [docs/05-windows.md](docs/05-windows.md).
 
-### macOS (Apple Silicon, stable 1.0.0)
+### macOS (Apple Silicon, stable 1.0.1)
 
 Download the DMG from the
 [latest release](https://github.com/danartriyudistira/syntetika-engine/releases/latest),
@@ -114,8 +113,10 @@ Build instructions live in [docs/02-m0-setup.md](docs/02-m0-setup.md) and
 
 ## Versioning
 
-- **1.0.1** — Windows x64: visual engine on demand, below-normal priority while hidden, and a
-  memory guard that saves and restarts a bloated hidden engine.
+- **1.0.1** — Windows x64 and macOS Apple Silicon: visual engine on demand, below-normal
+  priority while hidden (Windows), a memory guard that saves and restarts a bloated hidden
+  engine, and Syntetika-named library/projects folders with a one-time rename. The Windows
+  1.0.1 installer was rebuilt once; the release notes carry the final hash.
 - **1.0.0** — Windows x64 and macOS Apple Silicon, first stable release.
 - **0.1.0 – 0.1.20** — beta / pre-release; kept for history, marked **Pre-release** on GitHub.
 

@@ -28,13 +28,13 @@ Tidak berafiliasi dengan/endorse oleh kedua proyek upstream. Detail di `ATTRIBUT
   `syntetika-visual.exe` (DX12), audio tap, installer per-user. Syphon tidak ada di Windows
   (tetap macOS-only); detail dan batasan di [`05-windows.md`](05-windows.md).
 
-### Rilis 1.0.1 (28 November 2026, Windows x64)
+### Rilis 1.0.1 (28 November 2026, Windows x64 + macOS arm64)
 
 - **Visual engine on demand**: `syntetika-visual` tidak lagi dijalankan saat aplikasi dibuka.
   Engine mulai hanya saat Visual Output, OpenVJ, Projection Mapping, atau tab OpenVJ dibuka;
   `SYNTETIKA_VISUAL_ALWAYS=1` mengembalikan perilaku selalu-aktif.
 - **Prioritas visual**: BelowNormal saat tersembunyi, Normal saat ada permukaan visual; audio
-  dan UI tetap High.
+  dan UI tetap High. Di macOS proses visual memakai prioritas normal dari OS.
 - **Memory guard**: bila engine tersembunyi melewati 1,2 GB private, komposisi disimpan lebih
   dulu lalu proses dihentikan; permintaan visual berikutnya memulai engine baru.
   `SYNTETIKA_VISUAL_IDLE_LIMIT_MB` menimpa batas itu.
