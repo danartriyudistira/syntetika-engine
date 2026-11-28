@@ -20,7 +20,7 @@ On Windows:
 powershell -File scripts/make-demo-win.ps1
 ```
 
-Default destination: `~/Documents/Nota Projects/Syntetika Demo.nota`. Pass a path to put it
+Default destination: `~/Documents/Syntetika Projects/Syntetika Demo.nota`. Pass a path to put it
 somewhere else. The script:
 
 1. copies `demo/project.json` (the canonical audio manifest: tracks, instruments, patterns,

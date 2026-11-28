@@ -20,7 +20,7 @@ driver GPU.
 - [ ] `syntetika-visual.exe` muncul di Task Manager setelah app jalan.
 - [ ] Kill `syntetika-visual.exe` → hidup lagi dalam ~2 detik; status tidak "offline".
 - [ ] Tutup app → proses visual ikut berhenti (tidak ada proses menggantung).
-- [ ] Log ada di `%APPDATA%\Syntetika Engine\logs` (`nota-*.log`, `visual-engine.log`).
+- [ ] Log ada di `%APPDATA%\Syntetika Engine\logs` (`syntetika-*.log`, `visual-engine.log`).
 
 ## 3. Audio
 

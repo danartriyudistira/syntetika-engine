@@ -55,7 +55,7 @@ internal static class ClipAudioExport
         string clean = new string((name.Length > 0 ? name : "Clip")
             .Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray()).Trim();
         if (clean.Length == 0) clean = "Clip";
-        string dir = Path.Combine(Path.GetTempPath(), "Nota", "Clip Samples", Guid.NewGuid().ToString("N")[..8]);
+        string dir = Path.Combine(Path.GetTempPath(), "Syntetika", "Clip Samples", Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, clean + ".wav");
         using (var w = new WavWriter(path, si.SampleRate > 0 ? (int)Math.Round(si.SampleRate) : 44100, ch, WavBitDepth.Float32))

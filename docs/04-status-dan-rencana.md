@@ -40,6 +40,10 @@ Tidak berafiliasi dengan/endorse oleh kedua proyek upstream. Detail di `ATTRIBUT
   `SYNTETIKA_VISUAL_IDLE_LIMIT_MB` menimpa batas itu.
 - **Save aman tanpa engine**: menyimpan proyek saat engine mati tidak lagi melaporkan
   "visuals were not saved" — `visuals/composition.json` di disk adalah versi terakhir.
+- **Folder bermerek Syntetika**: default baru `~/Music/Syntetika Samples` dan
+  `~/Documents/Syntetika Projects`. Folder lama `Nota Samples`/`Nota Projects` di-rename
+  sekali saat start (settings + recent project ikut); log baru `syntetika-YYYYMMDD.log`.
+  Kalau rename gagal, path lama dipertahankan.
 - Baseline di laptop referensi (i5-10310U, UHD 620, 16 GB): engine visual 280—350 MB private
   saat idle; sesi audio-only yang tidak pernah membuka visual tidak membayar engine sama sekali.
 
@@ -156,7 +160,7 @@ bersifat ad-hoc signed dan belum notarized; di Mac lain perlu **Open Anyway** se
 
 Log yang berguna:
 
-- `~/Library/Application Support/Syntetika Engine/logs/nota-*.log`
+- `~/Library/Application Support/Syntetika Engine/logs/syntetika-*.log`
 - `~/Library/Application Support/Syntetika Engine/logs/visual-engine.log`
 
 Hook uji (env, dev build): `NOTA_VISUAL_TEST=1`, `NOTA_LAYOUT_TEST=1`, `NOTA_SELECT_TEST=1`,
@@ -589,7 +593,7 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 
 ## 7t. Demo project + regresi undo/persistensi (24 Nov)
 
-- **Demo**: `~/Documents/Nota Projects/Syntetika Demo.nota`, dibangun ulang dengan
+- **Demo**: `~/Documents/Syntetika Projects/Syntetika Demo.nota`, dibangun ulang dengan
   `scripts/make-demo.sh` (panduan di `demo/README.md`).
   **Ink Industrial** 105 BPM F minor, **2:59** otomatis lewat Follow Actions. 3 layer:
   DrumBrute (drum rack Volta), Model D (Monolith Reese Bass, unison detune, Valve+Crush),
@@ -707,7 +711,7 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 - **Demo reproducible**: `demo/project.json` (manifest kanonik) + `scripts/make-demo.sh`.
   Skrip menyalin manifest lalu menjalankan contoh `demo_visuals`, yang kini bisa membuat
   komposisi dari nol (nama kolom diambil dari Session scenes project) tanpa perlu
-  `composition.json` awal. Hasil: `~/Documents/Nota Projects/Syntetika Demo.nota`
+  `composition.json` awal. Hasil: `~/Documents/Syntetika Projects/Syntetika Demo.nota`
   (5 track, 15 slot, 3 layer, 15 clip, 5 look, ink shader). Setelah dibuka, Save sekali
   untuk mengisi `.history` dan sidecar.
 
@@ -795,7 +799,7 @@ save/load media benar, `codesign --verify --deep` lolos, tidak ada error baru di
 
 - **Download model**: URL arsip ONNX Runtime di GitHub sudah 404. Runtime sekarang diambil dari
   paket NuGet immutable `Microsoft.ML.OnnxRuntime` 1.23.2 (library native untuk semua RID,
-  ukuran + SHA dipin); error instalasi juga masuk `nota-*.log`. Uji live: runtime + basic-pitch
+  ukuran + SHA dipin); error instalasi juga masuk `syntetika-*.log`. Uji live: runtime + basic-pitch
   terunduh, ONNX Runtime dimuat, nada A4 dikenali sebagai A4 (69).
 - **Audio → MIDI**: Melody/Harmony sekarang membuka dialog **Audio to MIDI**:
   - **Timing**: snap start (opsional end) ke grid 1/32–1/4, straight atau triplet; default

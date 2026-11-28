@@ -37,7 +37,7 @@ public sealed class LogSink : ILogSink
 
             try
             {
-                var file = Path.Combine(_dir, $"nota-{DateTime.UtcNow:yyyyMMdd}.log");
+                var file = Path.Combine(_dir, $"syntetika-{DateTime.UtcNow:yyyyMMdd}.log");
                 File.AppendAllText(file, line + Environment.NewLine, Encoding.UTF8);
             }
             catch { /* disk full / permissions — keep the in-memory copy */ }

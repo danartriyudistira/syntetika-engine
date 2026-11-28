@@ -7,6 +7,7 @@
 // the sample index scanning several roots. Runnable alone with the other spec 092 checks:
 // `dotnet run --project tests/Nota.SmokeTest -- --browser-files`.
 
+using Nota.Application;
 using Nota.Application.Browser;
 using Nota.Application.Samples;
 using Nota.Infrastructure;
@@ -20,6 +21,7 @@ internal static class SampleFoldersTests
     {
         foreach (var r in Rules()) yield return r;
         foreach (var r in Service()) yield return r;
+        foreach (var r in Rebrand()) yield return r;
         foreach (var r in Tree()) yield return r;
         foreach (var r in Index()) yield return r;
     }
@@ -122,6 +124,102 @@ internal static class SampleFoldersTests
             Directory.Delete(b);
             var f3 = re.ResolvedSampleFolders();
             yield return (f3.Count == 2 && !f3[1].Available && f3[0].Available, "settings: a folder that went away stays listed, unavailable");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // ---- rebrand migration (1.0.1) ------------------------------------------------------------
+
+    private static IEnumerable<(bool, string)> Rebrand()
+    {
+        string dir = Temp();
+        try
+        {
+            string oldSamples = Path.Combine(dir, "Music", "Nota Samples");
+            string newSamples = Path.Combine(dir, "Music", "Syntetika Samples");
+            string oldProjects = Path.Combine(dir, "Documents", "Nota Projects");
+            string newProjects = Path.Combine(dir, "Documents", "Syntetika Projects");
+            Directory.CreateDirectory(Path.Combine(oldSamples, "Kicks"));
+            Directory.CreateDirectory(Path.Combine(oldProjects, "Live.syntetika"));
+            File.WriteAllText(Path.Combine(oldSamples, "Kicks", "kick.wav"), "x");
+
+            var settings = new Settings
+            {
+                SamplesFolder = oldSamples,
+                SampleFolders = [new SampleFolderEntry { Path = oldSamples, IsDefault = true }],
+                RecentProjects = [Path.Combine(oldProjects, "Live.syntetika"), Path.Combine(dir, "Other")],
+            };
+            bool changed = SettingsService.MigrateLegacyFolders(settings, oldSamples, newSamples, oldProjects, newProjects);
+            yield return (changed
+                          && !Directory.Exists(oldSamples) && File.Exists(Path.Combine(newSamples, "Kicks", "kick.wav"))
+                          && !Directory.Exists(oldProjects) && Directory.Exists(Path.Combine(newProjects, "Live.syntetika"))
+                          && settings.SampleFolders![0].Path == newSamples && settings.SamplesFolder == newSamples
+                          && settings.RecentProjects[0] == Path.Combine(newProjects, "Live.syntetika")
+                          && settings.RecentProjects[1] == Path.Combine(dir, "Other"),
+                "settings: the rebrand renames Nota Samples/Projects and rewrites the recent projects");
+
+            yield return (!SettingsService.MigrateLegacyFolders(settings, oldSamples, newSamples, oldProjects, newProjects),
+                "settings: the rebrand migration only acts once");
+
+            // A rename that cannot happen keeps the old path instead of losing the library.
+            string stillOld = Path.Combine(dir, "Music", "Nota Samples 2");
+            Directory.CreateDirectory(stillOld);
+            string blocked = Path.Combine(dir, "missing-parent", "Syntetika Samples 2");
+            var stuck = new Settings
+            {
+                SamplesFolder = stillOld,
+                SampleFolders = [new SampleFolderEntry { Path = stillOld, IsDefault = true }],
+            };
+            bool stuckChanged = SettingsService.MigrateLegacyFolders(stuck, stillOld, blocked,
+                Path.Combine(dir, "none", "Nota Projects"), Path.Combine(dir, "none2", "Syntetika Projects"));
+            yield return (stuckChanged && stuck.SampleFolders![0].Path == stillOld && stuck.SamplesFolder == stillOld
+                          && Directory.Exists(stillOld),
+                "settings: a folder that cannot be renamed keeps its old path");
+
+            // A new default folder made before the rename (empty) gives way to the old library.
+            string old2 = Path.Combine(dir, "Music2", "Nota Samples");
+            string new2 = Path.Combine(dir, "Music2", "Syntetika Samples");
+            Directory.CreateDirectory(old2);
+            Directory.CreateDirectory(new2);
+            File.WriteAllText(Path.Combine(old2, "a.wav"), "x");
+            var emptyNew = new Settings
+            {
+                SamplesFolder = old2,
+                SampleFolders = [new SampleFolderEntry { Path = old2, IsDefault = true }],
+            };
+            bool emptyChanged = SettingsService.MigrateLegacyFolders(emptyNew, old2, new2,
+                Path.Combine(dir, "none3", "Nota Projects"), Path.Combine(dir, "none4", "Syntetika Projects"));
+            yield return (emptyChanged && emptyNew.SampleFolders![0].Path == new2
+                          && File.Exists(Path.Combine(new2, "a.wav")),
+                "settings: an empty Syntetika folder made before the rename gives way to the old library");
+
+            // Two non-empty folders are kept apart; the old one stays the library.
+            string old3 = Path.Combine(dir, "Music3", "Nota Samples");
+            string new3 = Path.Combine(dir, "Music3", "Syntetika Samples");
+            Directory.CreateDirectory(old3);
+            Directory.CreateDirectory(new3);
+            File.WriteAllText(Path.Combine(old3, "a.wav"), "x");
+            File.WriteAllText(Path.Combine(new3, "b.wav"), "y");
+            var both = new Settings
+            {
+                SamplesFolder = old3,
+                SampleFolders = [new SampleFolderEntry { Path = old3, IsDefault = true }],
+            };
+            SettingsService.MigrateLegacyFolders(both, old3, new3,
+                Path.Combine(dir, "none5", "Nota Projects"), Path.Combine(dir, "none6", "Syntetika Projects"));
+            yield return (both.SampleFolders![0].Path == old3 && File.Exists(Path.Combine(old3, "a.wav"))
+                          && File.Exists(Path.Combine(new3, "b.wav")),
+                "settings: two non-empty folders are kept apart, the old one stays the library");
+
+            // A projects folder the user chose is never renamed, even if the old default exists.
+            string custom = Path.Combine(dir, "Custom Projects");
+            Directory.CreateDirectory(custom);
+            Directory.CreateDirectory(oldProjects);
+            var customSettings = new Settings { ProjectsFolder = custom };
+            bool customChanged = SettingsService.MigrateLegacyFolders(customSettings,
+                Path.Combine(dir, "no-samples-a"), Path.Combine(dir, "no-samples-b"), oldProjects, newProjects);
+            yield return (!customChanged && customSettings.ProjectsFolder == custom && Directory.Exists(oldProjects),
+                "settings: a projects folder the user chose is never renamed");
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }

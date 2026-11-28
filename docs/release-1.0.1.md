@@ -3,6 +3,9 @@
 Rilis patch untuk **Windows x64** dan **macOS arm64** — keduanya dari sumber yang sama.
 Semua versi **0.1.x** tetap beta / pre-release.
 
+> Build ini **menggantikan installer 1.0.1 sebelumnya**: asset di-clobber dan hash di bawah
+> adalah yang terbaru. Nomor versi tetap 1.0.1.
+
 ## Yang berubah
 
 - **Visual engine on demand** — `syntetika-visual` tidak lagi dijalankan saat aplikasi dibuka.
@@ -18,6 +21,10 @@ Semua versi **0.1.x** tetap beta / pre-release.
   yang segar. `SYNTETIKA_VISUAL_IDLE_LIMIT_MB` menimpa batas itu.
 - **Save aman tanpa engine** — menyimpan proyek saat engine visual mati tidak lagi melaporkan
   "visuals were not saved": `visuals/composition.json` di disk adalah versi terakhir.
+- **Folder bermerek Syntetika** — default baru `~/Music/Syntetika Samples` dan
+  `~/Documents/Syntetika Projects`. Folder `Nota Samples`/`Nota Projects` yang sudah ada
+  di-rename sekali saat start, dan daftar recent project ikut diperbarui; kalau rename gagal,
+  path lama dipertahankan. Log harian sekarang `syntetika-YYYYMMDD.log`.
 
 ## Perbaikan
 
@@ -73,7 +80,7 @@ Get-FileHash .\Syntetika-Engine-Setup-1.0.1-x64.exe -Algorithm SHA256
 ```
 
 ```text
-15654bcd6fc64ff1156fb2e6905b06da1c967cc99db2b02f0cc97e9042f4f97f  Syntetika-Engine-Setup-1.0.1-x64.exe
+e9c4a3035ac6d599252ba0a97ee40626c5c34b490657627343cdb35c8bd3689d  Syntetika-Engine-Setup-1.0.1-x64.exe
 ```
 
 Persyaratan: Windows 10/11 x64. Tanpa .NET/VC++/FFmpeg terpasang pun jalan.

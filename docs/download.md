@@ -12,7 +12,7 @@ The latest installers are on GitHub. **Syntetika Engine 1.0.1 is the latest Wind
 
 macOS SHA-256: `18cb1f66094bf4d3d0e255329a492ec7bef0f5a77b3aad11b1086a269a7971df`
 
-Windows SHA-256: `15654bcd6fc64ff1156fb2e6905b06da1c967cc99db2b02f0cc97e9042f4f97f`
+Windows SHA-256: `e9c4a3035ac6d599252ba0a97ee40626c5c34b490657627343cdb35c8bd3689d`
 
 These hashes are optional: only the installer/DMG needs to be downloaded. The `.sha256` files are not separate assets.
 
@@ -41,9 +41,10 @@ over an old one keeps projects and settings.
 
 ### Open a project
 
-Nota projects are folders ending in `.nota`. Windows always opens a folder in Explorer, so
-right-click the project folder and choose **Open with Syntetika Engine** (added by the
-installer), or use **File → Open** in the app.
+`.syntetika` projects are single files: double-click one, or use **File → Open** in the app.
+An older `.nota` project folder opens from **File → Open** too and migrates on **Save As**;
+Windows opens a folder in Explorer, so right-click it and choose **Open with Syntetika Engine**
+(added by the installer).
 
 ### Uninstall
 

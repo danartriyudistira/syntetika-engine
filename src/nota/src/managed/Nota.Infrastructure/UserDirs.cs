@@ -12,11 +12,11 @@ namespace Nota.Infrastructure;
 
 public static class UserDirs
 {
-    /// <summary>Base folder user projects live in (without "Nota Projects").</summary>
+    /// <summary>Base folder user projects live in (without "Syntetika Projects").</summary>
     public static string GetDocumentsDir()
         => GetKnownDir("DOCUMENTS", "Documents", Environment.SpecialFolder.MyDocuments);
 
-    /// <summary>Base folder the sample library lives in (without "Nota Samples").</summary>
+    /// <summary>Base folder the sample library lives in (without "Syntetika Samples").</summary>
     public static string GetMusicDir()
         => GetKnownDir("MUSIC", "Music", Environment.SpecialFolder.MyMusic);
 

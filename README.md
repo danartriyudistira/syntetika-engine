@@ -135,6 +135,11 @@ This build keeps its profile in `~/Library/Application Support/Syntetika Engine`
 `%APPDATA%\Syntetika Engine` on Windows. On first launch it copies an existing `NotAopenVJ`
 profile once (macOS) and leaves the old folder untouched.
 
+The library and projects defaults are `~/Music/Syntetika Samples` and
+`~/Documents/Syntetika Projects`. A folder still named `Nota Samples` or `Nota Projects` is
+renamed on disk once at startup, and the saved paths and recent-project list follow it (a
+folder that cannot be renamed keeps its old path). Logs are `syntetika-YYYYMMDD.log`.
+
 ## Credits & licences
 
 - Nota — Ac Egor Khindikaynen, AGPL-3.0-only. The Nota part of this repository remains AGPL.

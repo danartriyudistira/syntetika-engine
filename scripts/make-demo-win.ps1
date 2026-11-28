@@ -9,7 +9,7 @@
 #   powershell -File scripts/make-demo-win.ps1 ["C:\path\Syntetika Demo.nota"]
 
 param(
-    [string]$Destination = (Join-Path $env:USERPROFILE 'Documents\Nota Projects\Syntetika Demo.nota')
+    [string]$Destination = (Join-Path $env:USERPROFILE 'Documents\Syntetika Projects\Syntetika Demo.nota')
 )
 
 $ErrorActionPreference = 'Stop'
